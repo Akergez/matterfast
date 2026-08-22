@@ -1,0 +1,21 @@
+[package]
+name = "mattermost-calls"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+flate2 = "1.1.9"
+futures-util.workspace = true
+mattermost-api = { version = "0.1.0", path = "../mattermost-api" }
+rmp-serde = "1.3.1"
+serde = { workspace = true, features = ["derive"] }
+serde_bytes = "0.11.19"
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time"] }
+tracing.workspace = true
+webrtc = "0.17"

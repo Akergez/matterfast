@@ -1,0 +1,19 @@
+[workspace]
+resolver = "2"
+members = ["crates/mattermost-api", "crates/mattermost-calls", "crates/mm-adw", "crates/mm-testserver"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+authors = ["Anton Palgunov <toxblh@gmail.com>"]
+repository = "https://github.com/toxblh/mattermost-adw"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net"] }
+futures-util = "0.3"
