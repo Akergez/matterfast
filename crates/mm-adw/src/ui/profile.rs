@@ -22,7 +22,7 @@ pub fn popover(
     let st = state.borrow();
     let user = st.users.get(user_id)?.clone();
     let display = st.display_name(&user);
-    let presence = st.statuses.get(user_id).copied().unwrap_or_default();
+    let presence = st.presence(user_id);
     let is_me = user.id == st.me.id;
     drop(st);
 
@@ -185,9 +185,12 @@ fn local_time(user: &User) -> Option<String> {
 
 /// The avatar with Mattermost's presence badge pinned to its corner.
 pub fn with_presence(avatar: &adw::Avatar, presence: Presence) -> gtk::Overlay {
+    // Scaled off the avatar so the same helper works for a 40px message
+    // avatar and a 20px sidebar one.
+    let size = (avatar.size() / 3).clamp(8, 14);
     let dot = gtk::Box::builder()
-        .width_request(12)
-        .height_request(12)
+        .width_request(size)
+        .height_request(size)
         .halign(gtk::Align::End)
         .valign(gtk::Align::End)
         // Colour alone is not a label: the word has to be reachable somehow,

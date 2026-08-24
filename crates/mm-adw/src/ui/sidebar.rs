@@ -4,8 +4,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use adw::prelude::*;
-use mattermost_api::models::{Channel, ChannelType, Team, UnreadState};
+use mattermost_api::models::{Channel, ChannelType, Presence, Team, UnreadState};
 
+use crate::avatars::Avatars;
 use crate::state::SharedState;
 
 /// The narrow rail of teams, pane one.
@@ -166,7 +167,7 @@ impl ChannelSidebar {
         }
     }
 
-    pub fn refresh(&self, state: &SharedState) {
+    pub fn refresh(&self, state: &SharedState, avatars: &Avatars) {
         *self.updating.borrow_mut() = true;
         while let Some(child) = self.list.first_child() {
             self.list.remove(&child);
@@ -188,7 +189,12 @@ impl ChannelSidebar {
                 let unread = st.unread(&channel.id);
                 let in_call = st.active_calls.contains_key(&channel.id);
                 let title = st.channel_title(&channel);
-                let row = channel_row(&channel, &title, unread, in_call);
+                // A DM is a person, so it gets that person's face with the
+                // presence badge, exactly like a message row.
+                let icon = channel
+                    .dm_teammate_id(&st.me.id)
+                    .map(|user_id| dm_avatar(avatars, user_id, &title, st.presence(user_id)));
+                let row = channel_row(&channel, &title, unread, in_call, icon);
                 unsafe { row.set_data("channel-id", channel.id.clone()) };
                 self.list.append(&row);
 
@@ -222,17 +228,31 @@ fn category_header(name: &str) -> gtk::ListBoxRow {
     row
 }
 
+fn dm_avatar(
+    avatars: &Avatars,
+    user_id: &str,
+    display_name: &str,
+    presence: Presence,
+) -> gtk::Widget {
+    let avatar = adw::Avatar::builder().size(20).build();
+    avatars.apply(&avatar, user_id, display_name);
+    super::profile::with_presence(&avatar, presence).upcast()
+}
+
 fn channel_row(
     channel: &Channel,
     title: &str,
     unread: UnreadState,
     in_call: bool,
+    icon: Option<gtk::Widget>,
 ) -> gtk::ListBoxRow {
     // Public channels get a literal "#", the way Mattermost writes them; the
     // rest get an icon. A glyph also sidesteps icon-theme gaps on minimal
     // systems, where a missing SVG loader turns every symbolic icon into a
     // broken-image box.
-    let icon: gtk::Widget = match channel.r#type {
+    let icon: gtk::Widget = match icon {
+        Some(widget) => widget,
+        None => match channel.r#type {
         ChannelType::Open => {
             let hash = gtk::Label::new(Some("#"));
             hash.add_css_class("dim-label");
@@ -244,6 +264,7 @@ fn channel_row(
             image.add_css_class("dim-label");
             image.upcast()
         }
+        },
     };
 
     let label = gtk::Label::builder()

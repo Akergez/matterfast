@@ -214,6 +214,10 @@ impl AppState {
         }
     }
 
+    pub fn presence(&self, user_id: &str) -> Presence {
+        self.statuses.get(user_id).copied().unwrap_or_default()
+    }
+
     pub fn display_name(&self, user: &User) -> String {
         user.display_name(self.teammate_name_display())
     }

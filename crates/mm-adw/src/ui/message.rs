@@ -47,7 +47,7 @@ pub fn build(
     let st = state.borrow();
     let author_name = st.author_name(post);
     let author_id = post.user_id.clone();
-    let presence = st.statuses.get(&author_id).copied().unwrap_or_default();
+    let presence = st.presence(&author_id);
     drop(st);
 
     if post.is_system() {

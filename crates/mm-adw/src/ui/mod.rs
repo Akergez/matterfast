@@ -433,7 +433,13 @@ fn build_session_ui(
     // A picture arriving is a reason to redraw the messages, and nothing else.
     avatars.connect_loaded({
         let ui = ui.clone();
-        move || ui.refresh_messages()
+        // The sidebar draws faces too now, so a landed texture has to repaint
+        // it as well — otherwise DM rows keep their initials until the next
+        // unrelated refresh.
+        move || {
+            ui.refresh_messages();
+            ui.channels.refresh(&ui.state, &ui.avatars);
+        }
     });
 
     glib::spawn_future_local({
@@ -531,7 +537,7 @@ impl Ui {
             (st.teams.clone(), st.current_team.clone())
         };
         self.rail.refresh(&teams, current_team.as_deref());
-        self.channels.refresh(&self.state);
+        self.channels.refresh(&self.state, &self.avatars);
         self.refresh_messages();
         self.refresh_call_ui();
         self.refresh_title();
@@ -550,7 +556,9 @@ impl Ui {
                 .values()
                 .filter(|c| c.r#type == ChannelType::Direct)
                 .filter_map(|c| c.dm_teammate_id(&st.me.id))
-                .filter(|id| !st.users.contains_key(*id))
+                // Missing either half is a reason to ask: a teammate known
+                // from a message may still have no presence.
+                .filter(|id| !st.users.contains_key(*id) || !st.statuses.contains_key(*id))
                 .map(str::to_string)
                 .collect();
             (st.client.clone(), ids)
@@ -575,7 +583,7 @@ impl Ui {
                     }
                     st.apply_statuses(statuses);
                 }
-                ui.channels.refresh(&ui.state);
+                ui.channels.refresh(&ui.state, &ui.avatars);
                 ui.refresh_title();
             },
         );
@@ -816,7 +824,7 @@ impl Ui {
                 member.urgent_mention_count = 0;
             }
         }
-        self.channels.refresh(&self.state);
+        self.channels.refresh(&self.state, &self.avatars);
         self.refresh_title();
     }
 
@@ -832,7 +840,7 @@ impl Ui {
                 Ok(channel) => {
                     let id = channel.id.clone();
                     ui.state.borrow_mut().channels.insert(id.clone(), channel);
-                    ui.channels.refresh(&ui.state);
+                    ui.channels.refresh(&ui.state, &ui.avatars);
                     ui.dispatch(Action::SelectChannel(id));
                 }
                 Err(e) => ui.toast(&format!("Could not open that conversation: {e}")),
@@ -1590,7 +1598,7 @@ impl Ui {
             self.refresh_messages();
         }
         if redraw_sidebar {
-            self.channels.refresh(&self.state);
+            self.channels.refresh(&self.state, &self.avatars);
             self.refresh_title();
         }
     }
@@ -1635,7 +1643,7 @@ impl Ui {
             }
         }
         if touched {
-            self.channels.refresh(&self.state);
+            self.channels.refresh(&self.state, &self.avatars);
             self.refresh_call_ui();
         }
     }
