@@ -29,9 +29,12 @@ fn main() -> gtk::glib::ExitCode {
         )
         .init();
 
+    // HANDLES_OPEN is what makes the `mattermost-dev://` SSO callback work: the
+    // browser launches a second copy of this binary with the URI, GIO hands it
+    // to the already-running one over D-Bus, and it arrives in `connect_open`.
     let app = adw::Application::builder()
         .application_id(APP_ID)
-        .flags(gio::ApplicationFlags::empty())
+        .flags(gio::ApplicationFlags::HANDLES_OPEN)
         .build();
 
     app.connect_startup(|_| {
@@ -39,6 +42,18 @@ fn main() -> gtk::glib::ExitCode {
         load_icons();
     });
     app.connect_activate(ui::build_window);
+    app.connect_open(|app, files, _hint| {
+        // A cold start from the callback still needs a window to land in.
+        if app.active_window().is_none() {
+            ui::build_window(app);
+        }
+        if let Some(window) = app.active_window() {
+            window.present();
+        }
+        for file in files {
+            ui::sso::deliver(&file.uri());
+        }
+    });
     app.run()
 }
 

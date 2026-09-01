@@ -272,7 +272,31 @@ impl Client {
                     .json(&body),
             )
             .await?;
+        self.finish_login(resp).await
+    }
 
+    /// `POST /api/v4/users/login/desktop_token` — the tail of the SSO flow.
+    ///
+    /// `token` is the **server** token the browser handed back through the
+    /// `mattermost-dev://` deep link, not the one we generated. The server only
+    /// accepts it for an OAuth or SAML account, and burns it on use, so a
+    /// second attempt with the same token is a 401 rather than a fresh session.
+    pub async fn login_with_desktop_token(&self, token: &str) -> Result<User> {
+        let mut body = std::collections::HashMap::new();
+        body.insert("token", token);
+
+        let resp = self
+            .send(
+                self.request(Method::POST, &self.api("/users/login/desktop_token"))
+                    .json(&body),
+            )
+            .await?;
+        self.finish_login(resp).await
+    }
+
+    /// The half every login route shares: the session token rides in the
+    /// `Token` response header, and the body is the user.
+    async fn finish_login(&self, resp: reqwest::Response) -> Result<User> {
         let token = resp
             .headers()
             .get("Token")

@@ -2,6 +2,7 @@
 //!
 //! Authenticates with `POST /users/login` and keeps the session token that
 //! comes back in the `Token` **response header** — the body is just the user.
+//! Single sign-on takes a different route entirely; see [`super::sso`].
 
 use adw::prelude::*;
 use mattermost_api::{Client, Error, User};
@@ -46,6 +47,13 @@ pub fn build(on_success: impl Fn(LoginResult) + Clone + 'static) -> gtk::Widget 
     button.add_css_class("suggested-action");
     button.add_css_class("pill");
 
+    let sso_button = gtk::Button::builder()
+        .label("Sign in with GitLab")
+        .halign(gtk::Align::Center)
+        .margin_top(6)
+        .build();
+    sso_button.add_css_class("pill");
+
     let error = gtk::Label::builder()
         .wrap(true)
         .justify(gtk::Justification::Center)
@@ -74,6 +82,7 @@ pub fn build(on_success: impl Fn(LoginResult) + Clone + 'static) -> gtk::Widget 
     );
     content.append(&group);
     content.append(&button);
+    content.append(&sso_button);
     content.append(&spinner);
     content.append(&error);
 
@@ -166,6 +175,49 @@ pub fn build(on_success: impl Fn(LoginResult) + Clone + 'static) -> gtk::Widget 
         let submit = submit.clone();
         move |_| submit()
     });
+
+    // SSO needs nothing but the server: the browser collects the credentials
+    // and the answer comes back through the `mattermost-dev://` scheme.
+    sso_button.connect_clicked({
+        let server = server.clone();
+        let error = error.clone();
+        let sso_button = sso_button.clone();
+        let on_success = on_success.clone();
+        move |_| {
+            let url = server.text().trim().to_string();
+            if url.is_empty() || url == "https://" {
+                show_error(&error, "Fill in the server URL first.");
+                return;
+            }
+            let client = match Client::new(&url) {
+                Ok(c) => c,
+                Err(e) => {
+                    show_error(&error, &format!("That server URL is not valid: {e}"));
+                    return;
+                }
+            };
+
+            error.set_visible(false);
+            let started = super::sso::start(client, super::sso::GITLAB, on_success.clone(), {
+                let error = error.clone();
+                let sso_button = sso_button.clone();
+                move |message| {
+                    sso_button.set_label("Sign in with GitLab");
+                    sso_button.set_sensitive(true);
+                    show_error(&error, message);
+                }
+            });
+            match started {
+                // Nothing more happens here until the browser sends us back, so
+                // the button has to say so — otherwise the window looks stuck.
+                Ok(()) => {
+                    sso_button.set_label("Waiting for the browser…");
+                    sso_button.set_sensitive(false);
+                }
+                Err(message) => show_error(&error, &message),
+            }
+        }
+    });
     for row in [&server, &login_id, &mfa] {
         row.connect_entry_activated({
             let submit = submit.clone();
@@ -186,7 +238,7 @@ fn show_error(label: &gtk::Label, message: &str) {
 }
 
 /// Turns an API error into something worth showing a person.
-fn describe(error: &Error) -> String {
+pub fn describe(error: &Error) -> String {
     match error {
         Error::Api(app) if app.is_mfa_required() => {
             "This account needs a multi-factor code — fill in the MFA field.".to_string()

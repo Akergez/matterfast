@@ -14,6 +14,7 @@ mod message;
 mod profile;
 mod rhs;
 mod sidebar;
+pub mod sso;
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
