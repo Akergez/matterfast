@@ -427,11 +427,12 @@ impl ChatView {
     /// Redraws the whole feed for the current channel.
     pub fn refresh(&self, state: &SharedState, avatars: &Avatars, actions: &MessageActions) {
         let st = state.borrow();
-        let inbox_count = st
+        let inbox_count = (st
             .mentions
             .len()
             .min(99)
-            .max(st.unread_threads().max(0) as usize) as i64;
+            .max(st.unread_threads().max(0) as usize) as i64)
+            + st.reaction_unread;
         let Some(channel_id) = st.current_channel.clone() else {
             drop(st);
             self.set_inbox_count(inbox_count);

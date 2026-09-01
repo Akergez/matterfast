@@ -142,6 +142,10 @@ pub struct AppState {
     /// Unsent text, keyed by channel id. Mirrors what the server has, so the
     /// same half-written message is waiting on every device.
     pub drafts: HashMap<String, String>,
+    /// Unread reaction notices, from the reactions-notify plugin. Zero when
+    /// the plugin is not installed, which is indistinguishable from "nothing
+    /// new" and needs no special case.
+    pub reaction_unread: i64,
     /// False once the server has told us drafts are turned off, after which
     /// they are kept in this map and nowhere else.
     pub drafts_synced: bool,
@@ -201,6 +205,7 @@ impl AppState {
             call: None,
             drafts: HashMap::new(),
             drafts_synced: true,
+            reaction_unread: 0,
             typing: HashMap::new(),
         }
     }

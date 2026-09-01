@@ -12,6 +12,7 @@ mod call_dock;
 mod chat;
 mod login;
 mod message;
+mod notify;
 mod profile;
 mod rhs;
 mod sidebar;
@@ -39,6 +40,10 @@ use chat::ChatView;
 use message::MessageActions;
 use rhs::{PanelMode, RightPanel};
 use sidebar::ChannelSidebar;
+
+/// The websocket prefix of <https://github.com/Toxblh/mattermost-reactions-notify-plugin>,
+/// which notifies you about reactions to your own posts.
+const REACTION_NOTIFY_PREFIX: &str = "custom_ru.toxblh.reactions-notify_";
 
 /// How many messages to pull when a channel is first opened.
 const INITIAL_POSTS: u32 = 60;
@@ -475,6 +480,27 @@ fn build_session_ui(
         move |split| ui.place_dock(split.is_collapsed())
     });
 
+    // Clicking a notification lands here. The action is on the application so
+    // it stays valid while the app is running, which is what the notification
+    // holds a reference to.
+    if let Some(app) = window.application() {
+        let action = gtk::gio::SimpleAction::new(
+            "open-channel",
+            Some(&String::static_variant_type()),
+        );
+        action.connect_activate({
+            let ui = ui.clone();
+            move |_, target| {
+                let Some(channel_id) = target.and_then(|t| t.get::<String>()) else {
+                    return;
+                };
+                ui.window.present();
+                ui.dispatch(Action::SelectChannel(channel_id));
+            }
+        });
+        app.add_action(&action);
+    }
+
     // A picture arriving is a reason to redraw the messages, and nothing else.
     avatars.connect_loaded({
         let ui = ui.clone();
@@ -589,6 +615,64 @@ impl Ui {
         self.refresh_call_ui();
         self.refresh_title();
         self.hydrate_dm_teammates();
+    }
+
+    /// Handles the reactions-notify plugin, which tells you when somebody
+    /// reacts to something you wrote — something core Mattermost does not.
+    ///
+    /// The plugin creates no posts: the websocket and its own feed endpoint
+    /// are the whole client surface.
+    fn apply_reaction_notice(self: &Rc<Self>, kind: &str, data: &mattermost_api::ws::Data) {
+        let string = |key: &str| {
+            data.get(key)
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        };
+        match kind {
+            "reaction_item" => {
+                // The plugin has already applied the push-content policy and
+                // decided whether a toast is appropriate — it knows things we
+                // do not, like whether you are active in that channel.
+                let suppressed = data
+                    .get("suppress_desktop")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false);
+                self.state.borrow_mut().reaction_unread += 1;
+                self.refresh_messages();
+                if suppressed {
+                    return;
+                }
+                let channel_id = string("channel_id");
+                let title = match string("channel_name").as_str() {
+                    "" => format!(":{}: from {}", string("emoji_name"), string("reactor_username")),
+                    channel => format!("{channel} — :{}:", string("emoji_name")),
+                };
+                let body = match string("text").as_str() {
+                    "" => string("snippet"),
+                    text => text.to_string(),
+                };
+                if let Some(app) = self.window.application() {
+                    notify::show(&app, &channel_id, &title, &body);
+                }
+            }
+            // Authoritative count, so it replaces ours rather than adjusting it.
+            "unread" => {
+                let count = data
+                    .get("count")
+                    .and_then(serde_json::Value::as_i64)
+                    .unwrap_or(0);
+                self.state.borrow_mut().reaction_unread = count;
+                self.refresh_messages();
+            }
+            "item_removed" => {
+                let mut st = self.state.borrow_mut();
+                st.reaction_unread = (st.reaction_unread - 1).max(0);
+                drop(st);
+                self.refresh_messages();
+            }
+            other => tracing::debug!(event = other, "unhandled reactions-notify event"),
+        }
     }
 
     /// Saves the composer as a draft shortly after typing stops.
@@ -1844,6 +1928,12 @@ impl Ui {
             self.apply_calls_event(calls);
             return;
         }
+        if let Event::Other { event: name, data, .. } = &event {
+            if let Some(kind) = name.strip_prefix(REACTION_NOTIFY_PREFIX) {
+                self.apply_reaction_notice(kind, data);
+                return;
+            }
+        }
 
         let mut redraw_messages = false;
         let mut redraw_sidebar = false;
@@ -1852,6 +1942,14 @@ impl Ui {
         let mut reload_sidebar = false;
         let mut reload_teams = false;
         let mut forget_avatar: Option<String> = None;
+        let mut notify_about: Option<mattermost_api::ws::Posted> = None;
+        // Reading a message as it lands is not something to be told about, but
+        // only while the window is actually in front of the person.
+        let focused_channel = self
+            .window
+            .is_active()
+            .then(|| self.state.borrow().current_channel.clone())
+            .flatten();
 
         {
             let mut st = self.state.borrow_mut();
@@ -1860,7 +1958,7 @@ impl Ui {
 
             match event {
                 Event::Posted(posted) => {
-                    let post = posted.post;
+                    let post = posted.post.clone();
                     let channel_id = post.channel_id.clone();
                     let is_mine = post.user_id == me;
                     let mentions_me = posted.mentions.contains(&me);
@@ -1899,6 +1997,16 @@ impl Ui {
                     }
                     redraw_messages = true;
                     redraw_sidebar = true;
+                    // Decided here, raised below: the decision needs the state
+                    // borrow, the toast must not hold it.
+                    if notify::should_notify(
+                        &posted,
+                        &st.me,
+                        st.memberships.get(&channel_id),
+                        focused_channel.as_deref(),
+                    ) {
+                        notify_about = Some(posted);
+                    }
                 }
                 Event::PostEdited(post) => {
                     st.apply_post(post);
@@ -2038,6 +2146,21 @@ impl Ui {
             }
         }
 
+        if let Some(posted) = notify_about {
+            let title = if posted.channel_display_name.is_empty() {
+                posted.sender_name.clone()
+            } else {
+                format!("{} — {}", posted.sender_name, posted.channel_display_name)
+            };
+            if let Some(app) = self.window.application() {
+                notify::show(
+                    &app,
+                    &posted.post.channel_id,
+                    title.trim_start_matches(" — "),
+                    &notify::body(&posted),
+                );
+            }
+        }
         if reload_teams {
             self.reload_teams();
         }
