@@ -74,6 +74,8 @@ enum Action {
     OpenDirectMessage(String),
     /// Jump to the channel whose call we are in.
     OpenCallChannel,
+    /// A keystroke landed in the composer.
+    Typing,
 }
 
 pub fn build_window(app: &adw::Application) {
@@ -262,6 +264,12 @@ fn build_session_ui(
         {
             let tx = tx.clone();
             move || {
+                let _ = tx.send_blocking(Action::Typing);
+            }
+        },
+        {
+            let tx = tx.clone();
+            move || {
                 let _ = tx.send_blocking(Action::ToggleCall);
             }
         },
@@ -437,6 +445,9 @@ fn build_session_ui(
         avatars: avatars.clone(),
         toasts: toasts.clone(),
         narrow: narrow.clone(),
+        sidebar_reload_pending: std::cell::Cell::new(false),
+        typing_sweep_pending: std::cell::Cell::new(false),
+        typing_sent_recently: std::cell::Cell::new(false),
         dock_in_chat: std::cell::Cell::new(false),
         dock_visible: std::cell::Cell::new(false),
         tx: tx.clone(),
@@ -526,6 +537,9 @@ struct Ui {
     toasts: adw::ToastOverlay,
     /// Set while the window is too narrow for a static thread column.
     narrow: Rc<std::cell::Cell<bool>>,
+    sidebar_reload_pending: std::cell::Cell<bool>,
+    typing_sweep_pending: std::cell::Cell<bool>,
+    typing_sent_recently: std::cell::Cell<bool>,
     dock_in_chat: std::cell::Cell<bool>,
     dock_visible: std::cell::Cell<bool>,
     tx: async_channel::Sender<Action>,
@@ -573,6 +587,129 @@ impl Ui {
         self.refresh_call_ui();
         self.refresh_title();
         self.hydrate_dm_teammates();
+    }
+
+    /// Repaints the "someone is typing" line, and schedules the repaint that
+    /// will clear it. The server never says anyone stopped, so the line has to
+    /// expire on its own clock.
+    fn refresh_typing(self: &Rc<Self>) {
+        let names = {
+            let mut st = self.state.borrow_mut();
+            let Some(channel_id) = st.current_channel.clone() else {
+                drop(st);
+                self.chat.set_typing(&[]);
+                return;
+            };
+            let ids = st.typing_in(&channel_id);
+            let display = st.teammate_name_display().to_string();
+            ids.iter()
+                .filter_map(|id| st.users.get(id).map(|u| u.display_name(&display)))
+                .collect::<Vec<_>>()
+        };
+        let anyone = !names.is_empty();
+        self.chat.set_typing(&names);
+
+        // One pending sweep at a time, or every keystroke would add a timer.
+        if anyone && !self.typing_sweep_pending.replace(true) {
+            let ui = self.clone();
+            glib::timeout_add_local_once(AppState::TYPING_TTL, move || {
+                ui.typing_sweep_pending.set(false);
+                ui.refresh_typing();
+            });
+        }
+    }
+
+    /// Tells the server we are typing, at most once every few seconds. The
+    /// server repeats to other clients on its own schedule, so sending on every
+    /// keystroke would be pure noise.
+    fn notify_typing(self: &Rc<Self>) {
+        if self.typing_sent_recently.replace(true) {
+            return;
+        }
+        {
+            let st = self.state.borrow();
+            if let (Some(ws), Some(channel)) = (st.ws.as_ref(), st.current_channel.as_ref()) {
+                let _ = ws.typing(channel, "");
+            }
+        }
+        let ui = self.clone();
+        glib::timeout_add_local_once(std::time::Duration::from_secs(3), move || {
+            ui.typing_sent_recently.set(false);
+        });
+    }
+
+    /// Refetches the channel list, its memberships and the categories for the
+    /// current team.
+    ///
+    /// Debounced: joining a team, or an admin reorganising channels, produces a
+    /// burst of these events, and one reload after the burst is as correct as
+    /// nine during it.
+    fn schedule_sidebar_reload(self: &Rc<Self>) {
+        if self.sidebar_reload_pending.replace(true) {
+            return;
+        }
+        let ui = self.clone();
+        glib::timeout_add_local_once(std::time::Duration::from_millis(400), move || {
+            ui.sidebar_reload_pending.set(false);
+            ui.reload_sidebar();
+        });
+    }
+
+    fn reload_sidebar(self: &Rc<Self>) {
+        let (client, team) = {
+            let st = self.state.borrow();
+            (st.client.clone(), st.current_team.clone())
+        };
+        let Some(team_id) = team else { return };
+
+        let ui = self.clone();
+        runtime::spawn(
+            async move {
+                tokio::try_join!(
+                    client.my_channels(&team_id, false, 0),
+                    client.my_channel_members(&team_id),
+                    client.sidebar_categories(&team_id),
+                )
+            },
+            move |result| {
+                let Ok((channels, members, categories)) = result else {
+                    // A failed refresh is not worth interrupting anyone over:
+                    // the next event, or the next resync, tries again.
+                    return;
+                };
+                {
+                    let mut st = ui.state.borrow_mut();
+                    st.channels.clear();
+                    st.memberships.clear();
+                    for c in channels {
+                        st.channels.insert(c.id.clone(), c);
+                    }
+                    for m in members {
+                        st.memberships.insert(m.channel_id.clone(), m);
+                    }
+                    st.categories = categories;
+                }
+                ui.channels.refresh(&ui.state, &ui.avatars);
+                ui.refresh_title();
+                ui.hydrate_dm_teammates();
+            },
+        );
+    }
+
+    /// Being added to or removed from a team changes the switcher, not the
+    /// channel list.
+    fn reload_teams(self: &Rc<Self>) {
+        let client = self.state.borrow().client.clone();
+        let ui = self.clone();
+        runtime::spawn(
+            async move { client.my_teams().await },
+            move |result| {
+                if let Ok(teams) = result {
+                    ui.state.borrow_mut().teams = teams;
+                    ui.channels.refresh(&ui.state, &ui.avatars);
+                }
+            },
+        );
     }
 
     /// A DM channel carries no display name — just `"<idA>__<idB>"` — so until
@@ -738,6 +875,7 @@ impl Ui {
                 }
             }
             Action::OpenDirectMessage(user_id) => self.open_direct_message(user_id),
+            Action::Typing => self.notify_typing(),
             Action::OpenCallChannel => {
                 let channel = self.state.borrow().call.as_ref().map(|c| c.channel_id.clone());
                 if let Some(id) = channel {
@@ -813,6 +951,7 @@ impl Ui {
         }
         self.refresh_messages();
         self.refresh_call_ui();
+        self.refresh_typing();
 
         let (client, crt, have_feed) = {
             let st = self.state.borrow();
@@ -823,7 +962,12 @@ impl Ui {
             )
         };
 
+        self.chat.set_loading(!have_feed);
         if !have_feed {
+            // Repaint now that the pane knows it is waiting; the fetch below
+            // may take a while and the reader should not be looking at "this
+            // is the beginning of…" in the meantime.
+            self.refresh_messages();
             let id = channel_id.clone();
             let fetch_client = client.clone();
             runtime::spawn(
@@ -848,10 +992,15 @@ impl Ui {
                                 st.feeds
                                     .insert(channel_id.clone(), ChannelFeed::from_list(&posts));
                             }
+                            ui.chat.set_loading(false);
                             ui.refresh_messages();
                             ui.chat.focus_composer();
                         }
-                        Err(e) => ui.toast(&format!("Could not load messages: {e}")),
+                        Err(e) => {
+                            ui.chat.set_loading(false);
+                            ui.refresh_messages();
+                            ui.toast(&format!("Could not load messages: {e}"));
+                        }
                     }
                 },
             );
@@ -1566,6 +1715,9 @@ impl Ui {
 
         let mut redraw_messages = false;
         let mut redraw_sidebar = false;
+        let mut redraw_typing = false;
+        let mut reload_sidebar = false;
+        let mut reload_teams = false;
         let mut forget_avatar: Option<String> = None;
 
         {
@@ -1661,6 +1813,37 @@ impl Ui {
                         redraw_messages = true;
                     }
                 }
+                // Another session marked a channel unread; mirror the counters
+                // it reported rather than guessing them.
+                Event::PostUnread {
+                    channel_id,
+                    msg_count,
+                    mention_count,
+                    ..
+                } => {
+                    let total = st
+                        .channels
+                        .get(&channel_id)
+                        .map(|c| c.total_msg_count)
+                        .unwrap_or(msg_count);
+                    if let Some(member) = st.memberships.get_mut(&channel_id) {
+                        member.msg_count = total - msg_count;
+                        member.msg_count_root = member.msg_count;
+                        member.mention_count = mention_count;
+                        member.mention_count_root = mention_count;
+                    }
+                    redraw_sidebar = true;
+                }
+                Event::Typing {
+                    channel_id,
+                    user_id,
+                    ..
+                } => {
+                    if user_id != me {
+                        st.typing_started(channel_id, user_id);
+                        redraw_typing = true;
+                    }
+                }
                 Event::ChannelsViewed { channel_times } => {
                     // Another session read something; mirror it.
                     for (channel_id, at) in channel_times {
@@ -1680,8 +1863,42 @@ impl Ui {
                     }
                     redraw_sidebar = true;
                 }
+                // Everything that can reshape the channel list. Nine events,
+                // one answer: ask the server for the list again. A delta per
+                // event would be nine chances to drift out of sync with it,
+                // and these arrive rarely enough that three requests is
+                // cheaper than being wrong.
+                Event::ChannelCreated { .. }
+                | Event::ChannelUpdated { .. }
+                | Event::ChannelDeleted { .. }
+                | Event::ChannelMemberUpdated { .. }
+                | Event::DirectAdded { .. }
+                | Event::PreferencesChanged(_)
+                | Event::SidebarCategoriesInvalidated { .. } => reload_sidebar = true,
+                // Someone joining a channel only matters to the list when the
+                // someone is us.
+                Event::UserAdded { user_id, .. } | Event::UserRemoved { user_id, .. } => {
+                    if user_id == me {
+                        reload_sidebar = true;
+                    }
+                }
+                Event::AddedToTeam { user_id, .. } | Event::LeaveTeam { user_id, .. } => {
+                    if user_id == me {
+                        reload_teams = true;
+                    }
+                }
                 _ => {}
             }
+        }
+
+        if reload_teams {
+            self.reload_teams();
+        }
+        if reload_sidebar {
+            self.schedule_sidebar_reload();
+        }
+        if redraw_typing {
+            self.refresh_typing();
         }
 
         if let Some(user_id) = forget_avatar {
@@ -1892,13 +2109,20 @@ fn bootstrap(ui: Rc<Ui>) {
                         WsUpdate::MissedMessages => {
                             // The server could not replay its buffer, so
                             // anything could have changed while we were away.
-                            ui.toast("Reconnected — refreshing.");
+                            ui.chat.set_connection_problem(None);
                             resync(&ui);
                         }
-                        WsUpdate::Disconnected {
-                            will_retry: false,
-                            reason,
-                        } => ui.toast(&format!("Disconnected: {reason}")),
+                        WsUpdate::Connected { .. } => ui.chat.set_connection_problem(None),
+                        // Losing the socket is not an event that scrolls past:
+                        // it stays true until it stops being true, so it is a
+                        // banner, and it says whether it is being worked on.
+                        WsUpdate::Disconnected { will_retry, reason } => {
+                            ui.chat.set_connection_problem(Some(&if will_retry {
+                                "Reconnecting…".to_string()
+                            } else {
+                                format!("Disconnected: {reason}")
+                            }));
+                        }
                         _ => {}
                     }
                 },

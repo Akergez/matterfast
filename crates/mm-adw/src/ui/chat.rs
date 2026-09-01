@@ -25,6 +25,11 @@ pub struct ChatView {
     call_banner_label: gtk::Label,
     join_button: gtk::Button,
     stack: gtk::Stack,
+    /// Shown instead of an empty feed while the first page is in flight, so a
+    /// slow channel reads as loading rather than as empty.
+    loading: Rc<RefCell<bool>>,
+    connection: adw::Banner,
+    typing: gtk::Label,
     /// False while the reader is scrolled up in history, so live messages do
     /// not yank them back to the bottom.
     pinned_to_bottom: Rc<RefCell<bool>>,
@@ -33,6 +38,7 @@ pub struct ChatView {
 impl ChatView {
     pub fn new(
         on_send: impl Fn(String) + 'static,
+        on_typing: impl Fn() + 'static,
         on_call: impl Fn() + 'static,
         on_inbox: impl Fn() + 'static,
     ) -> Self {
@@ -211,11 +217,37 @@ impl ChatView {
         });
         entry.add_controller(keys);
 
+        entry.buffer().connect_changed(move |buffer| {
+            // Clearing the box after sending is a change too, and telling the
+            // server we are typing at that moment would be a lie.
+            if buffer.char_count() > 0 {
+                on_typing();
+            }
+        });
+
+        // Sits between the feed and the composer, reserving no space when
+        // empty: a line that appears and disappears must not shove the
+        // conversation up and down.
+        let typing = gtk::Label::builder()
+            .xalign(0.0)
+            .margin_start(14)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .visible(false)
+            .build();
+        typing.add_css_class("typing-line");
+        typing.add_css_class("dim-label");
+
+        // Losing the socket is a state of the whole window, not an event, so
+        // it gets a banner that stays up rather than a toast that scrolls by.
+        let connection = adw::Banner::builder().revealed(false).build();
+
         let conversation = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .build();
+        conversation.append(&connection);
         conversation.append(&call_banner);
         conversation.append(&scroller);
+        conversation.append(&typing);
         conversation.append(&composer);
 
         let placeholder = adw::StatusPage::builder()
@@ -224,8 +256,17 @@ impl ChatView {
             .description("Pick a channel from the sidebar to start reading.")
             .build();
 
+        let spinner = gtk::Spinner::builder()
+            .halign(gtk::Align::Center)
+            .valign(gtk::Align::Center)
+            .width_request(32)
+            .height_request(32)
+            .build();
+        spinner.start();
+
         let stack = gtk::Stack::new();
         stack.add_named(&placeholder, Some("empty"));
+        stack.add_named(&spinner, Some("loading"));
         stack.add_named(&conversation, Some("conversation"));
         stack.set_visible_child_name("empty");
 
@@ -253,7 +294,39 @@ impl ChatView {
             call_banner_label,
             join_button,
             stack,
+            typing,
+            loading: Rc::new(RefCell::new(false)),
+            connection,
             pinned_to_bottom,
+        }
+    }
+
+    /// Marks the first page of a channel as in flight. Only matters while
+    /// there is nothing to show: a reload over existing messages should leave
+    /// them on screen rather than blank the pane.
+    pub fn set_loading(&self, loading: bool) {
+        *self.loading.borrow_mut() = loading;
+    }
+
+    pub fn set_typing(&self, names: &[String]) {
+        let text = match names {
+            [] => String::new(),
+            [one] => format!("{one} is typing…"),
+            [one, two] => format!("{one} and {two} are typing…"),
+            [one, two, ..] => format!("{one}, {two} and others are typing…"),
+        };
+        self.typing.set_visible(!text.is_empty());
+        self.typing.set_text(&text);
+    }
+
+    /// `None` means connected. Anything else is shown until it is cleared.
+    pub fn set_connection_problem(&self, problem: Option<&str>) {
+        match problem {
+            Some(text) => {
+                self.connection.set_title(text);
+                self.connection.set_revealed(true);
+            }
+            None => self.connection.set_revealed(false),
         }
     }
 
@@ -340,7 +413,12 @@ impl ChatView {
             return;
         };
 
-        self.stack.set_visible_child_name("conversation");
+        // A channel with no posts *yet* and a fetch in flight is loading; one
+        // with no posts and nothing in flight is genuinely empty.
+        let waiting = *self.loading.borrow()
+            && st.feeds.get(&channel_id).is_none_or(|f| f.posts.is_empty());
+        self.stack
+            .set_visible_child_name(if waiting { "loading" } else { "conversation" });
         self.title.set_text(&st.channel_title(&channel));
         let header_line = channel.header.lines().next().unwrap_or("").to_string();
         self.subtitle.set_text(&header_line);

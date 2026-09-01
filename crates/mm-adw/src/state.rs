@@ -14,6 +14,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use mattermost_api::models::*;
 use mattermost_api::{Client, WebSocket};
@@ -137,6 +138,10 @@ pub struct AppState {
     pub active_calls: HashMap<String, Vec<String>>,
     /// The call we are in, if any.
     pub call: Option<ActiveCall>,
+
+    /// Who is typing where: channel id → user id → when we heard about it.
+    /// The server sends no "stopped typing", so entries are aged out instead.
+    pub typing: HashMap<String, HashMap<String, Instant>>,
 }
 
 /// A joined call and the audio devices serving it.
@@ -187,7 +192,32 @@ impl AppState {
             calls: None,
             active_calls: HashMap::new(),
             call: None,
+            typing: HashMap::new(),
         }
+    }
+
+    /// Mattermost repeats `user_typing` about every five seconds while someone
+    /// keeps typing, and never says they stopped, so this is the window an
+    /// entry stays live for.
+    pub const TYPING_TTL: Duration = Duration::from_secs(6);
+
+    pub fn typing_started(&mut self, channel_id: String, user_id: String) {
+        self.typing
+            .entry(channel_id)
+            .or_default()
+            .insert(user_id, Instant::now());
+    }
+
+    /// Who is currently typing in a channel, oldest first, dropping anyone
+    /// whose last keystroke has aged out.
+    pub fn typing_in(&mut self, channel_id: &str) -> Vec<String> {
+        let Some(people) = self.typing.get_mut(channel_id) else {
+            return Vec::new();
+        };
+        people.retain(|_, at| at.elapsed() < Self::TYPING_TTL);
+        let mut live: Vec<(&String, &Instant)> = people.iter().collect();
+        live.sort_by_key(|(_, at)| **at);
+        live.into_iter().map(|(id, _)| id.clone()).collect()
     }
 
     pub fn channel(&self, id: &str) -> Option<&Channel> {
