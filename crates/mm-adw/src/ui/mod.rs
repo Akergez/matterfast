@@ -8,6 +8,7 @@
 //! The one exception is the profile popover, which needs the widget it anchors
 //! to; it is built inline from an `Rc<Ui>` capture instead.
 
+mod call_dock;
 mod chat;
 mod login;
 mod message;
@@ -33,10 +34,11 @@ use crate::avatars::Avatars;
 use crate::runtime;
 use crate::state::{ActiveCall, AppState, ChannelFeed, SharedState};
 use crate::video;
+use call_dock::CallDock;
 use chat::ChatView;
 use message::MessageActions;
 use rhs::{PanelMode, RightPanel};
-use sidebar::{ChannelSidebar, TeamRail};
+use sidebar::ChannelSidebar;
 
 /// How many messages to pull when a channel is first opened.
 const INITIAL_POSTS: u32 = 60;
@@ -70,14 +72,26 @@ enum Action {
     OpenPost(String, String),
     /// Open (or create) the direct-message channel with a user.
     OpenDirectMessage(String),
+    /// Jump to the channel whose call we are in.
+    OpenCallChannel,
 }
 
 pub fn build_window(app: &adw::Application) {
+    // `MM_ADW_SIZE=400x800` opens at a phone-sized window, which is the only
+    // practical way to look at the collapsed layout without a phone.
+    let (width, height) = std::env::var("MM_ADW_SIZE")
+        .ok()
+        .and_then(|s| {
+            let (w, h) = s.split_once('x')?;
+            Some((w.trim().parse().ok()?, h.trim().parse().ok()?))
+        })
+        .unwrap_or((1320, 840));
+
     let window = adw::ApplicationWindow::builder()
         .application(app)
         .title("Mattermost")
-        .default_width(1320)
-        .default_height(840)
+        .default_width(width)
+        .default_height(height)
         .width_request(360)
         .height_request(400)
         .build();
@@ -89,6 +103,7 @@ pub fn build_window(app: &adw::Application) {
     if std::env::var_os("MM_ADW_DEMO").is_some() {
         start_demo(&window, &toast_overlay);
         window.present();
+        screenshot_and_quit(&window);
         return;
     }
 
@@ -253,30 +268,6 @@ fn build_session_ui(
         {
             let tx = tx.clone();
             move || {
-                let _ = tx.send_blocking(Action::ToggleMute);
-            }
-        },
-        {
-            let tx = tx.clone();
-            move || {
-                let _ = tx.send_blocking(Action::ToggleRecording);
-            }
-        },
-        {
-            let tx = tx.clone();
-            move || {
-                let _ = tx.send_blocking(Action::ToggleScreen);
-            }
-        },
-        {
-            let tx = tx.clone();
-            move || {
-                let _ = tx.send_blocking(Action::ToggleCamera);
-            }
-        },
-        {
-            let tx = tx.clone();
-            move || {
                 let _ = tx.send_blocking(Action::OpenInbox);
             }
         },
@@ -322,21 +313,62 @@ fn build_session_ui(
         .build();
     overlay.set_sidebar_position(gtk::PackType::End);
 
-    // --- pane 2: channels
-    let channels = Rc::new(ChannelSidebar::new({
-        let tx = tx.clone();
-        move |id| {
-            let _ = tx.send_blocking(Action::SelectChannel(id));
-        }
-    }));
+    // --- the call dock, pinned under the channel list
+    let dock = Rc::new(CallDock::new(
+        {
+            let tx = tx.clone();
+            move || {
+                let _ = tx.send_blocking(Action::OpenCallChannel);
+            }
+        },
+        {
+            let tx = tx.clone();
+            move || {
+                let _ = tx.send_blocking(Action::ToggleMute);
+            }
+        },
+        {
+            let tx = tx.clone();
+            move || {
+                let _ = tx.send_blocking(Action::ToggleScreen);
+            }
+        },
+        {
+            let tx = tx.clone();
+            move || {
+                let _ = tx.send_blocking(Action::ToggleCamera);
+            }
+        },
+        {
+            let tx = tx.clone();
+            move || {
+                let _ = tx.send_blocking(Action::ToggleRecording);
+            }
+        },
+        {
+            let tx = tx.clone();
+            move || {
+                let _ = tx.send_blocking(Action::ToggleCall);
+            }
+        },
+    ));
 
-    // --- pane 1: teams
-    let rail = Rc::new(TeamRail::new({
-        let tx = tx.clone();
-        move |id| {
-            let _ = tx.send_blocking(Action::SelectTeam(id));
-        }
-    }));
+    // --- pane 1: channels, with the team switcher in its header
+    let channels = Rc::new(ChannelSidebar::new(
+        {
+            let tx = tx.clone();
+            move |id| {
+                let _ = tx.send_blocking(Action::SelectChannel(id));
+            }
+        },
+        {
+            let tx = tx.clone();
+            move |id| {
+                let _ = tx.send_blocking(Action::SelectTeam(id));
+            }
+        },
+        dock.widget.upcast_ref(),
+    ));
 
     let chat_page = adw::NavigationPage::builder()
         .title("Conversation")
@@ -347,7 +379,7 @@ fn build_session_ui(
         .child(&channels.widget)
         .build();
 
-    let inner = adw::NavigationSplitView::builder()
+    let split = adw::NavigationSplitView::builder()
         .sidebar(&channels_page)
         .content(&chat_page)
         .min_sidebar_width(220.0)
@@ -358,42 +390,19 @@ fn build_session_ui(
         .show_content(true)
         .build();
 
-    let inner_page = adw::NavigationPage::builder()
-        .title("Mattermost")
-        .child(&inner)
-        .build();
-    let rail_page = adw::NavigationPage::builder()
-        .title("Teams")
-        .child(&rail.widget)
-        .build();
-
-    let outer = adw::NavigationSplitView::builder()
-        .sidebar(&rail_page)
-        .content(&inner_page)
-        .min_sidebar_width(68.0)
-        .max_sidebar_width(68.0)
-        .sidebar_width_fraction(0.06)
-        .show_content(true)
-        .build();
-
-    // The rail is a 68px strip when expanded, where a header bar would only be
-    // an empty band; it becomes a full-width page when collapsed, where one is
-    // needed for the back button.
-    outer
-        .bind_property("collapsed", &rail.header, "visible")
-        .sync_create()
-        .build();
-
-    // Collapse in three steps: the thread panel overlays first, then the
-    // conversation takes the sidebars' space, then the rail folds away.
-    add_breakpoint(window, 1200.0, &[], &[(&overlay, true)]);
-    add_breakpoint(window, 1000.0, &[(&inner, true)], &[(&overlay, true)]);
-    add_breakpoint(
-        window,
-        640.0,
-        &[(&inner, true), (&outer, true)],
-        &[(&overlay, true)],
-    );
+    // Collapse in two steps: the thread panel overlays the conversation first,
+    // then the channel list folds into a navigation stack.
+    //
+    // Only the channel list is breakpoint-driven. The right panel's `collapsed`
+    // is computed in `refresh_panel_mode`, because what it should do depends on
+    // *what* is in it as well as the width — and a breakpoint setter fighting
+    // our own writes over one property is a bug Planify actually shipped.
+    //
+    // The width for that decision is read off the window rather than taken from
+    // a second breakpoint: only the last matching breakpoint is applied, so an
+    // overlapping one would silently cancel this one's setter.
+    let narrow = Rc::new(std::cell::Cell::new(false));
+    add_breakpoint(window, 700.0, &[(&split, true)], &[]);
 
     // Remote video floats over the panes rather than in them: a share is
     // something you glance at while carrying on reading.
@@ -407,7 +416,7 @@ fn build_session_ui(
         .visible(false)
         .build();
     let video_overlay = gtk::Overlay::new();
-    video_overlay.set_child(Some(&outer));
+    video_overlay.set_child(Some(&split));
     video_overlay.add_overlay(&videos);
 
     toasts.set_child(Some(&video_overlay));
@@ -417,18 +426,41 @@ fn build_session_ui(
     let ui = Rc::new(Ui {
         window: window.clone(),
         state: state.clone(),
-        rail: rail.clone(),
         channels: channels.clone(),
+        dock: dock.clone(),
         chat: chat.clone(),
         right: right.clone(),
         overlay: overlay.clone(),
         videos: videos.clone(),
         video_views: RefCell::new(HashMap::new()),
-        outer: outer.clone(),
-        inner: inner.clone(),
+        split: split.clone(),
         avatars: avatars.clone(),
         toasts: toasts.clone(),
+        narrow: narrow.clone(),
+        dock_in_chat: std::cell::Cell::new(false),
+        dock_visible: std::cell::Cell::new(false),
         tx: tx.clone(),
+    });
+
+    // Below this the thread panel has to overlay rather than take a column.
+    const STATIC_PANEL_MIN_WIDTH: i32 = 1200;
+    window.connect_default_width_notify({
+        let ui = ui.clone();
+        let narrow = narrow.clone();
+        move |window| {
+            let is_narrow = window.default_width() < STATIC_PANEL_MIN_WIDTH;
+            if narrow.replace(is_narrow) != is_narrow {
+                ui.refresh_panel_mode();
+            }
+        }
+    });
+    narrow.set(window.default_width() < STATIC_PANEL_MIN_WIDTH);
+
+    // The dock lives in the sidebar, except when the sidebar is a page you have
+    // navigated away from — then it belongs under the conversation.
+    split.connect_collapsed_notify({
+        let ui = ui.clone();
+        move |split| ui.place_dock(split.is_collapsed())
     });
 
     // A picture arriving is a reason to redraw the messages, and nothing else.
@@ -480,8 +512,8 @@ fn add_breakpoint(
 struct Ui {
     window: adw::ApplicationWindow,
     state: SharedState,
-    rail: Rc<TeamRail>,
     channels: Rc<ChannelSidebar>,
+    dock: Rc<CallDock>,
     chat: Rc<ChatView>,
     right: Rc<RightPanel>,
     overlay: adw::OverlaySplitView,
@@ -489,10 +521,13 @@ struct Ui {
     /// they belong to.
     videos: gtk::Box,
     video_views: RefCell<HashMap<String, video::RemoteView>>,
-    outer: adw::NavigationSplitView,
-    inner: adw::NavigationSplitView,
+    split: adw::NavigationSplitView,
     avatars: Avatars,
     toasts: adw::ToastOverlay,
+    /// Set while the window is too narrow for a static thread column.
+    narrow: Rc<std::cell::Cell<bool>>,
+    dock_in_chat: std::cell::Cell<bool>,
+    dock_visible: std::cell::Cell<bool>,
     tx: async_channel::Sender<Action>,
 }
 
@@ -533,11 +568,6 @@ impl Ui {
     }
 
     fn refresh_all(self: &Rc<Self>) {
-        let (teams, current_team) = {
-            let st = self.state.borrow();
-            (st.teams.clone(), st.current_team.clone())
-        };
-        self.rail.refresh(&teams, current_team.as_deref());
         self.channels.refresh(&self.state, &self.avatars);
         self.refresh_messages();
         self.refresh_call_ui();
@@ -609,33 +639,59 @@ impl Ui {
         } else {
             None
         };
-        // The call we are in only shows on its own channel; switching away
-        // leaves it running, exactly as the web client does.
-        let ours = st
+        // The call we are in only shows as "ours" on its own channel; switching
+        // away leaves it running, exactly as the web client does — which is why
+        // the dock, not the header, carries the controls.
+        let in_call = st
             .call
             .as_ref()
-            .filter(|c| Some(&c.channel_id) == st.current_channel.as_ref());
-        let in_call = ours.is_some();
-        let muted = ours.is_none_or(|c| c.muted);
-        let recording = ours.is_some_and(|c| c.recording);
-        let sharing = ours.is_some_and(|c| c.screen.is_some());
-        let on_camera = ours.is_some_and(|c| c.camera.is_some());
+            .is_some_and(|c| Some(&c.channel_id) == st.current_channel.as_ref());
         let in_progress = st
             .current_channel
             .as_ref()
             .and_then(|id| st.active_calls.get(id))
-            .copied();
+            .map(Vec::len);
         drop(st);
+
         self.chat.set_calls_available(available, reason);
         self.chat.set_call_in_progress(in_progress);
-        self.chat.set_in_call(
-            in_call,
-            in_progress.is_some(),
-            muted,
-            recording,
-            sharing,
-            on_camera,
-        );
+        self.chat.set_in_call(in_call, in_progress.is_some());
+        let visible = self.dock.refresh(&self.state, &self.avatars);
+        self.dock_visible.set(visible);
+        self.host_toolbar().set_reveal_bottom_bars(visible);
+    }
+
+    /// Whichever toolbar view currently holds the call dock.
+    fn host_toolbar(&self) -> &adw::ToolbarView {
+        if self.dock_in_chat.get() {
+            &self.chat.widget
+        } else {
+            &self.channels.widget
+        }
+    }
+
+    /// Moves the dock between the sidebar and the conversation. Reparenting is
+    /// the only option: a widget cannot be in two places, and duplicating it
+    /// would duplicate its state along with it.
+    fn place_dock(&self, into_chat: bool) {
+        if self.dock_in_chat.get() == into_chat {
+            return;
+        }
+        self.host_toolbar().remove(&self.dock.widget);
+        self.host_toolbar().set_reveal_bottom_bars(false);
+        self.dock_in_chat.set(into_chat);
+        self.host_toolbar().add_bottom_bar(&self.dock.widget);
+        self.host_toolbar()
+            .set_reveal_bottom_bars(self.dock_visible.get());
+    }
+
+    /// A thread is a place you read alongside the conversation, so it earns a
+    /// static column when there is room. The inbox is a stack you glance at and
+    /// dismiss, so it always overlays — pushing the conversation aside for it
+    /// would be a heavier gesture than the content deserves.
+    fn refresh_panel_mode(&self) {
+        let overlays = self.narrow.get() || matches!(self.right.mode(), PanelMode::Inbox);
+        self.overlay.set_collapsed(overlays);
     }
 
     fn show_profile(self: &Rc<Self>, user_id: &str, anchor: &gtk::Widget) {
@@ -682,16 +738,21 @@ impl Ui {
                 }
             }
             Action::OpenDirectMessage(user_id) => self.open_direct_message(user_id),
+            Action::OpenCallChannel => {
+                let channel = self.state.borrow().call.as_ref().map(|c| c.channel_id.clone());
+                if let Some(id) = channel {
+                    self.select_channel(id);
+                }
+            }
         }
     }
 
     // ------------------------------------------------------------- navigation
 
     fn select_team(self: &Rc<Self>, team_id: String) {
-        // On a collapsed window, picking a team should walk forward to that
-        // team's channel list rather than straight into a conversation.
-        self.outer.set_show_content(true);
-        self.inner.set_show_content(false);
+        // On a collapsed window, picking a team should land on that team's
+        // channel list rather than straight into a conversation.
+        self.split.set_show_content(false);
         {
             let mut st = self.state.borrow_mut();
             if st.current_team.as_deref() == Some(team_id.as_str()) {
@@ -742,8 +803,7 @@ impl Ui {
     }
 
     fn select_channel(self: &Rc<Self>, channel_id: String) {
-        self.outer.set_show_content(true);
-        self.inner.set_show_content(true);
+        self.split.set_show_content(true);
         {
             let mut st = self.state.borrow_mut();
             if st.current_channel.as_deref() == Some(channel_id.as_str()) {
@@ -853,6 +913,7 @@ impl Ui {
 
     fn open_thread(self: &Rc<Self>, root_id: String) {
         self.right.set_mode(PanelMode::Thread(root_id.clone()));
+        self.refresh_panel_mode();
         self.overlay.set_show_sidebar(true);
         self.refresh_messages();
 
@@ -906,6 +967,7 @@ impl Ui {
 
     fn open_inbox(self: &Rc<Self>) {
         self.right.set_mode(PanelMode::Inbox);
+        self.refresh_panel_mode();
         self.overlay.set_show_sidebar(true);
 
         // Land on whichever tab has something to show: unread threads with no
@@ -1166,6 +1228,8 @@ impl Ui {
             channel_id: session.channel_id().to_string(),
             recording: false,
             roster: HashMap::new(),
+            speaking: Vec::new(),
+            sharing: Vec::new(),
             screen: None,
             camera: None,
             audio,
@@ -1404,6 +1468,39 @@ impl Ui {
                     other => tracing::debug!(track = other, "ignoring a remote track"),
                 }
             }
+            // Voice activity and screen shares are what the dock reports, and
+            // both arrive per session; the roster turns those into people.
+            CallUpdate::Participant(mattermost_calls::CallsEvent::UserSpeaking {
+                user_id,
+                speaking,
+                ..
+            }) => {
+                if let Some(call) = self.state.borrow_mut().call.as_mut() {
+                    call.speaking.retain(|id| id != &user_id);
+                    if speaking {
+                        call.speaking.insert(0, user_id);
+                    }
+                }
+                self.refresh_call_ui();
+            }
+            CallUpdate::Participant(mattermost_calls::CallsEvent::UserScreenShare {
+                user_id,
+                session_id,
+                sharing,
+            }) => {
+                if let Some(call) = self.state.borrow_mut().call.as_mut() {
+                    call.sharing.retain(|id| id != &user_id);
+                    if sharing {
+                        call.sharing.push(user_id);
+                    }
+                }
+                // A share ending is also the cue to tear its picture down; the
+                // track itself may never close.
+                if !sharing {
+                    self.drop_video(&session_id, mattermost_calls::protocol::track_type::SCREEN);
+                }
+                self.refresh_call_ui();
+            }
             CallUpdate::MuteChanged { muted } => {
                 if let Some(call) = self.state.borrow_mut().call.as_mut() {
                     call.muted = muted;
@@ -1419,17 +1516,12 @@ impl Ui {
                         .iter()
                         .map(|s| (s.session_id.clone(), s.user_id.clone()))
                         .collect();
-                    let (channel, count) = (call.channel_id.clone(), state.participant_count());
-                    st.active_calls.insert(channel, count);
+                    let channel = call.channel_id.clone();
+                    st.active_calls.insert(channel, participants(&state));
                 }
                 drop(st);
                 self.refresh_call_ui();
             }
-            CallUpdate::Participant(mattermost_calls::CallsEvent::UserScreenShare {
-                session_id,
-                sharing: false,
-                ..
-            }) => self.drop_video(&session_id, mattermost_calls::protocol::track_type::SCREEN),
             CallUpdate::Participant(mattermost_calls::CallsEvent::UserVideo {
                 session_id,
                 on: false,
@@ -1613,31 +1705,44 @@ impl Ui {
             let mut st = self.state.borrow_mut();
             match event {
                 Ev::CallStarted { channel_id, .. } => {
-                    st.active_calls.entry(channel_id).or_insert(0);
+                    st.active_calls.entry(channel_id).or_default();
                 }
                 Ev::CallEnded { channel_id } => {
                     st.active_calls.remove(&channel_id);
                 }
                 // The server only sends a full roster to the joiner, so the
-                // count has to follow the individual comings and goings too —
+                // list has to follow the individual comings and goings too —
                 // otherwise the banner keeps claiming a call we have left.
-                Ev::UserJoined { channel_id, .. } => {
-                    *st.active_calls.entry(channel_id).or_insert(0) += 1;
+                Ev::UserJoined {
+                    channel_id,
+                    user_id,
+                    ..
+                } => {
+                    let people = st.active_calls.entry(channel_id).or_default();
+                    // One person can be in a call from two devices, which is
+                    // two sessions but still one face.
+                    if !people.contains(&user_id) {
+                        people.push(user_id);
+                    }
                 }
-                Ev::UserLeft { channel_id, .. } => {
-                    if let Some(count) = st.active_calls.get_mut(&channel_id) {
-                        *count = count.saturating_sub(1);
-                        if *count == 0 {
+                Ev::UserLeft {
+                    channel_id,
+                    user_id,
+                    ..
+                } => {
+                    if let Some(people) = st.active_calls.get_mut(&channel_id) {
+                        people.retain(|id| id != &user_id);
+                        if people.is_empty() {
                             st.active_calls.remove(&channel_id);
                         }
                     }
                 }
                 Ev::CallState { channel_id, state } => {
-                    let count = state.participant_count();
-                    if count > 0 {
-                        st.active_calls.insert(channel_id, count);
-                    } else {
+                    let people = participants(&state);
+                    if people.is_empty() {
                         st.active_calls.remove(&channel_id);
+                    } else {
+                        st.active_calls.insert(channel_id, people);
                     }
                 }
                 _ => touched = false,
@@ -1648,6 +1753,18 @@ impl Ui {
             self.refresh_call_ui();
         }
     }
+}
+
+/// The distinct people in a call. A roster is keyed by *session*, and one
+/// person joining from two devices holds two of them.
+fn participants(state: &mattermost_calls::protocol::CallState) -> Vec<String> {
+    let mut people: Vec<String> = Vec::with_capacity(state.sessions.len());
+    for session in &state.sessions {
+        if !people.contains(&session.user_id) {
+            people.push(session.user_id.clone());
+        }
+    }
+    people
 }
 
 /// Whether a recording/transcription job is actually running right now.
@@ -1730,7 +1847,7 @@ fn bootstrap(ui: Rc<Ui>) {
                     .into_iter()
                     .filter_map(|c| {
                         let call = c.call?;
-                        Some((c.channel_id, call.participant_count()))
+                        Some((c.channel_id, participants(&call)))
                     })
                     .collect();
 
@@ -1848,4 +1965,41 @@ fn resync(ui: &Rc<Ui>) {
             ui.load_inbox();
         },
     );
+}
+
+/// `MM_ADW_SCREENSHOT=out.png` renders the window to a file and exits.
+///
+/// Wayland will not let anything screenshot another process's window, but a
+/// window can always paint itself. Used for the README shots and to eyeball a
+/// layout change without a human clicking through demo mode.
+fn screenshot_and_quit(window: &adw::ApplicationWindow) {
+    let Some(path) = std::env::var_os("MM_ADW_SCREENSHOT") else {
+        return;
+    };
+    let window = window.clone();
+    // Before the first frame `to_node` yields nothing, so give the compositor
+    // a beat rather than racing it.
+    glib::timeout_add_local_once(std::time::Duration::from_millis(800), move || {
+        let paintable = gtk::WidgetPaintable::new(Some(&window));
+        let snapshot = gtk::Snapshot::new();
+        paintable.snapshot(
+            &snapshot,
+            window.width() as f64,
+            window.height() as f64,
+        );
+        match snapshot.to_node().and_then(|node| {
+            window
+                .native()
+                .and_then(|n| n.renderer())
+                .map(|r| r.render_texture(&node, None))
+        }) {
+            Some(texture) => {
+                if let Err(e) = texture.save_to_png(&path) {
+                    tracing::error!("screenshot failed: {e}");
+                }
+            }
+            None => tracing::error!("screenshot failed: nothing rendered yet"),
+        }
+        window.close();
+    });
 }

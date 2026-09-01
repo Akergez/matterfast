@@ -21,10 +21,21 @@ for a bot, a CLI, or a different front end.
 **Working**
 
 - Sign in (password + MFA), session token handling, `X-Requested-With`, no cookie jar
+- **Single sign-on** through the browser, using Mattermost's desktop-token
+  flow — see below
 - Startup sequence in the order the official clients use it (config → teams → channels → categories)
-- Adaptive layout: team rail, channel sidebar, conversation, and a right-hand
-  panel that holds either a thread or the inbox
-- Sidebar categories with the real ordering rules, unread/mention/muted styling, "call in progress" markers
+- Adaptive layout: channel sidebar, conversation, and a right-hand panel that
+  holds either a thread or the inbox; teams and the signed-in account live in a
+  switcher popover in the sidebar header
+- A thread earns a static third column when there is room; the inbox always
+  overlays, because a stack you glance at should not shove the conversation
+  aside
+- **Call dock** pinned under the channel list: who is talking, how many are in
+  it, the way back to its channel, and every in-call control. A call outlives
+  the channel it started in, so its controls cannot live in that channel's
+  header. On a phone-sized window the dock moves under the conversation
+- Sidebar rows carry the faces of whoever is in a channel's call
+- Sidebar categories with the real ordering rules, unread/mention/muted styling
 - Message list: author grouping, day separators, edits, attachments, message
   priority, system messages, webhook name overrides
 - **Profile pictures**, cached and shared across the message list, sidebar and
@@ -49,6 +60,32 @@ for a bot, a CLI, or a different front end.
   "you can talk". PipeWire via GStreamer is the intended route.
 - Search, file uploads from the UI, desktop notifications, local persistence,
   screen-share capture, multi-server, message editing and deletion.
+
+## Single sign-on
+
+The GitLab button sends the browser to `/oauth/gitlab/login?desktop_token=…`.
+The server cannot redirect an OAuth callback to a loopback port — it insists the
+redirect matches the site's own scheme and host — so the answer comes back
+through a URL scheme instead: Mattermost bounces the browser to a page that
+deep-links to `mattermost-dev://…`, which launches this app, and the token in
+that URI is traded for a session.
+
+That only works once the desktop file is installed, so the browser knows what
+handles the scheme. A packaged build gets this for free. From a source tree:
+
+```sh
+cargo build
+sed "s|^Exec=mm-adw|Exec=$PWD/target/debug/mm-adw|" \
+  data/ru.toxblh.MattermostAdw.desktop \
+  > ~/.local/share/applications/ru.toxblh.MattermostAdw.desktop
+update-desktop-database ~/.local/share/applications
+xdg-mime default ru.toxblh.MattermostAdw.desktop x-scheme-handler/mattermost-dev
+```
+
+The scheme is `mattermost-dev`, not `mattermost`, so nothing collides with the
+official desktop app; the server picks it because the token starts with `dev-`.
+The app must already be running when the callback arrives — the browser hands
+the URI to the live instance over D-Bus.
 
 ## Building
 

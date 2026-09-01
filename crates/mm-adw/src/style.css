@@ -6,15 +6,72 @@
    properties. The `var(--name)` spelling only works from libadwaita 1.6, and
    this app targets 1.5. */
 
-.team-rail {
-  background-color: @sidebar_backdrop_color;
-  min-width: 64px;
+/* ── channel list ──────────────────────────────────────────────────────
+   Adwaita paints a sidebar row edge to edge, which reads as a stack of cards
+   once every row has an avatar in it. Fractal's answer, copied here: strip the
+   row itself and draw on its child instead, so the highlight is an inset pill.
+   The row still owns the selection *state* — only the paint moves. */
+.channel-list > row {
+  margin: 0;
+  padding: 0;
+  border-radius: 0;
+  min-height: 0;
 }
 
-.team-avatar {
-  min-width: 44px;
-  min-height: 44px;
-  border-radius: 12px;
+.channel-list > row:hover,
+.channel-list > row:selected,
+.channel-list > row:selected:hover {
+  background: none;
+}
+
+.channel-list > row > box {
+  margin: 1px 6px;
+  padding: 5px 8px;
+  border-radius: 9px;
+}
+
+/* Mixed against the foreground rather than fixed greys, so the pill follows
+   the light/dark theme and the contrast setting on its own. */
+.channel-list > row:hover > box {
+  background-color: color-mix(in srgb, currentColor 7%, transparent);
+}
+
+.channel-list > row:selected > box {
+  background-color: color-mix(in srgb, currentColor 10%, transparent);
+}
+
+.channel-list > row:selected:hover > box {
+  background-color: color-mix(in srgb, currentColor 13%, transparent);
+}
+
+/* Category headers are labels, not rows: no pill, ever. */
+.channel-category {
+  margin: 10px 6px 0;
+  padding: 0 9px;
+  font-size: 0.8em;
+  font-weight: bold;
+}
+
+.channel-list > row:first-child > box.channel-category {
+  margin-top: 2px;
+}
+
+/* Unread with no mention: a dot, not a number. */
+.unread-dot {
+  min-width: 8px;
+  min-height: 8px;
+  border-radius: 999px;
+  background-color: currentColor;
+  opacity: 0.55;
+}
+
+/* Who is in a call, in the channel row. */
+.call-badge {
+  color: @success_color;
+}
+
+.call-badge label {
+  font-size: 0.8em;
   font-weight: bold;
 }
 
@@ -75,6 +132,17 @@
   font-size: 0.8rem;
   opacity: 0.7;
   margin: 12px 0 4px 0;
+}
+
+/* ── call dock ─────────────────────────────────────────────────────────
+   Pinned under the channel list for as long as a call runs. */
+.call-dock-summary {
+  padding: 4px 6px;
+  border-radius: 9px;
+}
+
+.call-dock .caption {
+  font-size: 0.8em;
 }
 
 /* The "call in progress" strip above the message list. */
@@ -209,9 +277,8 @@
 
 /* The dot over an avatar. Its ring has to be painted in whatever is actually
    behind the avatar, and that differs per pane: the conversation sits on the
-   window background, while the channel list is a sidebar pane nested inside a
-   content pane, which Adwaita paints in the *secondary* sidebar colour
-   (#f3f3f5 / #28282c) rather than the plain sidebar one. */
+   window background, while the channel list is a sidebar pane which Adwaita
+   paints in @sidebar_bg_color. */
 .presence-badge {
   border-radius: 50%;
   border: 2px solid @window_bg_color;
@@ -237,11 +304,11 @@
 /* Only the ring and the hollow offline fill need the pane colour — a coloured
    dot keeps its own fill, so it is left alone. */
 .navigation-sidebar .presence-badge {
-  border: 1px solid @secondary_sidebar_bg_color;
+  border: 1px solid @sidebar_bg_color;
 }
 
 .navigation-sidebar .presence-badge.presence-offline {
-  background-color: @secondary_sidebar_bg_color;
+  background-color: @sidebar_bg_color;
   /* The ring is 1px here, so the hollow moves in with it. */
   outline-offset: -2px;
 }
@@ -261,19 +328,19 @@
    Only the ring and the hollow offline fill — a coloured dot stays its colour.
    Hover first: on a hovered selected row the selected tint should win. */
 .navigation-sidebar row:hover .presence-badge {
-  border-color: color-mix(in srgb, @secondary_sidebar_fg_color 5%, @secondary_sidebar_bg_color);
+  border-color: color-mix(in srgb, @sidebar_fg_color 5%, @sidebar_bg_color);
 }
 
 .navigation-sidebar row:hover .presence-badge.presence-offline {
-  background-color: color-mix(in srgb, @secondary_sidebar_fg_color 5%, @secondary_sidebar_bg_color);
+  background-color: color-mix(in srgb, @sidebar_fg_color 5%, @sidebar_bg_color);
 }
 
 .navigation-sidebar row:selected .presence-badge {
-  border-color: color-mix(in srgb, @secondary_sidebar_fg_color 10%, @secondary_sidebar_bg_color);
+  border-color: color-mix(in srgb, @sidebar_fg_color 10%, @sidebar_bg_color);
 }
 
 .navigation-sidebar row:selected .presence-badge.presence-offline {
-  background-color: color-mix(in srgb, @secondary_sidebar_fg_color 10%, @secondary_sidebar_bg_color);
+  background-color: color-mix(in srgb, @sidebar_fg_color 10%, @sidebar_bg_color);
 }
 
 /* Remote screens and cameras, floating over the panes. Rounded and shadowed so

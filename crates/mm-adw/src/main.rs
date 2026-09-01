@@ -1,9 +1,11 @@
 //! A native Mattermost client for GNOME.
 //!
-//! The window is a genuine three-pane layout — team rail, channel sidebar,
-//! conversation — built from two nested [`adw::NavigationSplitView`]s so that
-//! it collapses the way GNOME expects: the conversation takes over first, then
-//! the rail folds away on a phone-sized window.
+//! The window is a three-pane layout — channel sidebar, conversation, and a
+//! thread/inbox panel — built from an [`adw::NavigationSplitView`] wrapping an
+//! [`adw::OverlaySplitView`], so it collapses the way GNOME expects: the
+//! thread panel overlays first, then the sidebar folds away on a phone.
+//! Under the sidebar sits the call dock, which is pinned there for as long as
+//! a call runs and moves under the conversation once the sidebar folds away.
 
 mod audio;
 mod avatars;

@@ -1,122 +1,34 @@
-//! Pane 1 (team rail) and pane 2 (channel list).
+//! The channel sidebar: an account/team switcher in the header, the list below.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use adw::prelude::*;
-use mattermost_api::models::{Channel, ChannelType, Presence, Team, UnreadState};
+use mattermost_api::models::{Channel, ChannelType, Presence, UnreadState, User};
 
 use crate::avatars::Avatars;
 use crate::state::SharedState;
 
-/// The narrow rail of teams, pane one.
-pub struct TeamRail {
-    pub widget: gtk::Box,
-    /// Only shown when the window is collapsed and the rail becomes a
-    /// full-width page that needs somewhere to put a back button.
-    pub header: adw::HeaderBar,
-    list: gtk::ListBox,
-    /// Guards against re-entering the selection handler while we rebuild.
-    updating: Rc<RefCell<bool>>,
-}
-
-impl TeamRail {
-    pub fn new(on_select: impl Fn(String) + 'static) -> Self {
-        let list = gtk::ListBox::builder()
-            .selection_mode(gtk::SelectionMode::Single)
-            .build();
-        list.add_css_class("navigation-sidebar");
-
-        let scroller = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Never)
-            .vexpand(true)
-            .child(&list)
-            .build();
-
-        let header = adw::HeaderBar::builder()
-            .title_widget(
-                &gtk::Label::builder()
-                    .label("Teams")
-                    .css_classes(["heading"])
-                    .build(),
-            )
-            .show_end_title_buttons(false)
-            .visible(false)
-            .build();
-
-        let widget = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .build();
-        widget.add_css_class("team-rail");
-        widget.append(&header);
-        widget.append(&scroller);
-
-        let updating = Rc::new(RefCell::new(false));
-        list.connect_row_selected({
-            let updating = updating.clone();
-            move |_, row| {
-                if *updating.borrow() {
-                    return;
-                }
-                if let Some(row) = row {
-                    if let Some(id) = unsafe { row.data::<String>("team-id") } {
-                        on_select(unsafe { id.as_ref() }.clone());
-                    }
-                }
-            }
-        });
-
-        TeamRail {
-            widget,
-            header,
-            list,
-            updating,
-        }
-    }
-
-    pub fn refresh(&self, teams: &[Team], current: Option<&str>) {
-        *self.updating.borrow_mut() = true;
-        while let Some(child) = self.list.first_child() {
-            self.list.remove(&child);
-        }
-
-        for team in teams.iter().filter(|t| t.delete_at == 0) {
-            let avatar = adw::Avatar::builder()
-                .size(40)
-                .text(&team.display_name)
-                .show_initials(true)
-                .build();
-            avatar.add_css_class("team-avatar");
-
-            let row = gtk::ListBoxRow::builder()
-                .child(&avatar)
-                .tooltip_text(&team.display_name)
-                .build();
-            unsafe { row.set_data("team-id", team.id.clone()) };
-            self.list.append(&row);
-
-            if Some(team.id.as_str()) == current {
-                self.list.select_row(Some(&row));
-            }
-        }
-        *self.updating.borrow_mut() = false;
-    }
-}
-
-/// The channel list, pane two.
+/// The channel list, pane one.
 pub struct ChannelSidebar {
-    pub widget: gtk::Box,
+    pub widget: adw::ToolbarView,
     list: gtk::ListBox,
     title: gtk::Label,
+    switcher: Switcher,
     updating: Rc<RefCell<bool>>,
 }
 
 impl ChannelSidebar {
-    pub fn new(on_select: impl Fn(String) + 'static) -> Self {
+    pub fn new(
+        on_select: impl Fn(String) + 'static,
+        on_select_team: impl Fn(String) + 'static,
+        dock: &gtk::Widget,
+    ) -> Self {
         let list = gtk::ListBox::builder()
             .selection_mode(gtk::SelectionMode::Single)
             .build();
         list.add_css_class("navigation-sidebar");
+        list.add_css_class("channel-list");
 
         // Category headers are non-selectable rows, so skip them when the user
         // arrows through the list.
@@ -133,16 +45,24 @@ impl ChannelSidebar {
             .build();
         title.add_css_class("heading");
 
+        let switcher = Switcher::new(on_select_team);
+
         let header = adw::HeaderBar::builder()
             .title_widget(&title)
             .show_end_title_buttons(false)
             .build();
+        header.pack_start(&switcher.button);
 
-        let widget = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
+        // The call dock is the toolbar view's bottom bar rather than another
+        // child of a box: that reserves its space, draws the separator, and
+        // animates the reveal, none of which a plain box would do.
+        let widget = adw::ToolbarView::builder()
+            .bottom_bar_style(adw::ToolbarStyle::RaisedBorder)
+            .reveal_bottom_bars(false)
             .build();
-        widget.append(&header);
-        widget.append(&scroller);
+        widget.add_top_bar(&header);
+        widget.set_content(Some(&scroller));
+        widget.add_bottom_bar(dock);
 
         let updating = Rc::new(RefCell::new(false));
         list.connect_row_selected({
@@ -163,11 +83,13 @@ impl ChannelSidebar {
             widget,
             list,
             title,
+            switcher,
             updating,
         }
     }
 
     pub fn refresh(&self, state: &SharedState, avatars: &Avatars) {
+        self.switcher.refresh(state, avatars);
         *self.updating.borrow_mut() = true;
         while let Some(child) = self.list.first_child() {
             self.list.remove(&child);
@@ -187,14 +109,14 @@ impl ChannelSidebar {
 
             for channel in channels {
                 let unread = st.unread(&channel.id);
-                let in_call = st.active_calls.contains_key(&channel.id);
+                let in_call = st.active_calls.get(&channel.id);
                 let title = st.channel_title(&channel);
                 // A DM is a person, so it gets that person's face with the
                 // presence badge, exactly like a message row.
                 let icon = channel
                     .dm_teammate_id(&st.me.id)
                     .map(|user_id| dm_avatar(avatars, user_id, &title, st.presence(user_id)));
-                let row = channel_row(&channel, &title, unread, in_call, icon);
+                let row = channel_row(&channel, &title, unread, in_call, icon, avatars, &st);
                 unsafe { row.set_data("channel-id", channel.id.clone()) };
                 self.list.append(&row);
 
@@ -210,22 +132,25 @@ impl ChannelSidebar {
 
 fn category_header(name: &str) -> gtk::ListBoxRow {
     let label = gtk::Label::builder()
-        .label(name.to_uppercase())
+        .label(name)
         .xalign(0.0)
-        .margin_top(12)
-        .margin_bottom(2)
-        .margin_start(6)
+        .hexpand(true)
         .build();
     label.add_css_class("dim-label");
-    label.add_css_class("caption-heading");
 
-    let row = gtk::ListBoxRow::builder()
-        .child(&label)
+    // A box, not a bare label: every row in this list is styled through its
+    // child, so a header without one would miss the shared indentation.
+    let row_box = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .build();
+    row_box.add_css_class("channel-category");
+    row_box.append(&label);
+
+    gtk::ListBoxRow::builder()
+        .child(&row_box)
         .selectable(false)
         .activatable(false)
-        .build();
-    row.add_css_class("background");
-    row
+        .build()
 }
 
 fn dm_avatar(
@@ -243,8 +168,10 @@ fn channel_row(
     channel: &Channel,
     title: &str,
     unread: UnreadState,
-    in_call: bool,
+    in_call: Option<&Vec<String>>,
     icon: Option<gtk::Widget>,
+    avatars: &Avatars,
+    state: &crate::state::AppState,
 ) -> gtk::ListBoxRow {
     // Public channels get a literal "#", the way Mattermost writes them; the
     // rest get an icon. A glyph also sidesteps icon-theme gaps on minimal
@@ -285,11 +212,8 @@ fn channel_row(
 
     // A call in this channel matters more than an unread badge, so it goes
     // first and is always shown.
-    if in_call {
-        let call = gtk::Image::from_icon_name("call-start-symbolic");
-        call.add_css_class("success");
-        call.set_tooltip_text(Some("Call in progress"));
-        row_box.append(&call);
+    if let Some(people) = in_call {
+        row_box.append(&call_badge(people, avatars, state));
     }
 
     if unread.mentions > 0 {
@@ -299,6 +223,12 @@ fn channel_row(
             badge.add_css_class("urgent");
         }
         row_box.append(&badge);
+    } else if unread.is_unread() && !unread.muted {
+        // Unread without a mention is a dot, the way Fractal marks a room:
+        // enough to notice, not enough to demand a number be read.
+        let dot = gtk::Box::builder().valign(gtk::Align::Center).build();
+        dot.add_css_class("unread-dot");
+        row_box.append(&dot);
     }
 
     // Muted channels still show mentions, but not bold-for-messages: that is
@@ -313,6 +243,51 @@ fn channel_row(
     gtk::ListBoxRow::builder().child(&row_box).build()
 }
 
+/// Who is in the call, the way Slack marks a channel: a few faces and the
+/// count. Faces beat an icon here — the reason to join is usually who is there.
+fn call_badge(
+    people: &[String],
+    avatars: &Avatars,
+    state: &crate::state::AppState,
+) -> gtk::Widget {
+    /// Beyond this the faces are unreadable at 16px and the count carries it.
+    const FACES: usize = 3;
+
+    let badge = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(2)
+        .valign(gtk::Align::Center)
+        .build();
+    badge.add_css_class("call-badge");
+
+    let headset = gtk::Image::from_icon_name("audio-headphones-symbolic");
+    headset.set_pixel_size(12);
+    badge.append(&headset);
+
+    for user_id in people.iter().take(FACES) {
+        let name = state
+            .users
+            .get(user_id)
+            .map(|u| u.display_name(state.teammate_name_display()))
+            .unwrap_or_default();
+        let avatar = adw::Avatar::builder().size(16).build();
+        avatars.apply(&avatar, user_id, &name);
+        badge.append(&avatar);
+    }
+
+    // The count is only news once it exceeds the faces already shown.
+    if people.len() > FACES {
+        badge.append(&gtk::Label::new(Some(&format!("+{}", people.len() - FACES))));
+    }
+
+    badge.set_tooltip_text(Some(&match people.len() {
+        0 => "A call is starting".to_string(),
+        1 => "1 person is in a call".to_string(),
+        n => format!("{n} people are in a call"),
+    }));
+    badge.upcast()
+}
+
 fn channel_icon(kind: &ChannelType) -> &'static str {
     match kind {
         // Open is handled with a "#" glyph by the caller.
@@ -321,5 +296,150 @@ fn channel_icon(kind: &ChannelType) -> &'static str {
         ChannelType::Direct => "avatar-default-symbolic",
         ChannelType::Group => "system-users-symbolic",
         _ => "user-available-symbolic",
+    }
+}
+
+/// The round avatar in the sidebar header and what drops out of it: who you
+/// are signed in as, and the teams to switch between. This is where the old
+/// 68px team rail went — Fractal puts its account switcher in exactly this
+/// spot, and a rail costs a permanent column to say what a popover says on
+/// demand.
+struct Switcher {
+    button: gtk::MenuButton,
+    avatar: adw::Avatar,
+    account_avatar: adw::Avatar,
+    name: gtk::Label,
+    username: gtk::Label,
+    teams: gtk::ListBox,
+}
+
+impl Switcher {
+    fn new(on_select_team: impl Fn(String) + 'static) -> Self {
+        let avatar = adw::Avatar::builder().size(24).build();
+        let button = gtk::MenuButton::builder()
+            .child(&avatar)
+            .tooltip_text("Account and teams")
+            .build();
+        button.add_css_class("image-button");
+        button.add_css_class("circular");
+        button.add_css_class("flat");
+
+        let account_avatar = adw::Avatar::builder().size(40).build();
+        let name = gtk::Label::builder().xalign(0.0).build();
+        name.add_css_class("heading");
+        let username = gtk::Label::builder().xalign(0.0).build();
+        username.add_css_class("caption");
+        username.add_css_class("dim-label");
+
+        let labels = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .valign(gtk::Align::Center)
+            .build();
+        labels.append(&name);
+        labels.append(&username);
+
+        let account = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(12)
+            .margin_start(6)
+            .margin_end(6)
+            .margin_top(6)
+            .build();
+        account.append(&account_avatar);
+        account.append(&labels);
+
+        let teams = gtk::ListBox::builder()
+            .selection_mode(gtk::SelectionMode::Single)
+            .build();
+        teams.add_css_class("navigation-sidebar");
+
+        // Row *activation*, not selection: selection also fires while we
+        // rebuild the list, and re-selecting the current team would reload it.
+        teams.connect_row_activated({
+            let button = button.clone();
+            move |_, row| {
+                if let Some(id) = unsafe { row.data::<String>("team-id") } {
+                    button.popdown();
+                    on_select_team(unsafe { id.as_ref() }.clone());
+                }
+            }
+        });
+
+        let teams_scroller = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .propagate_natural_height(true)
+            .max_content_height(320)
+            .child(&teams)
+            .build();
+
+        let heading = gtk::Label::builder()
+            .label("TEAMS")
+            .xalign(0.0)
+            .margin_start(12)
+            .build();
+        heading.add_css_class("caption-heading");
+        heading.add_css_class("dim-label");
+
+        let content = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(6)
+            .width_request(260)
+            .build();
+        content.append(&account);
+        content.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+        content.append(&heading);
+        content.append(&teams_scroller);
+
+        button.set_popover(Some(&gtk::Popover::builder().child(&content).build()));
+
+        Switcher {
+            button,
+            avatar,
+            account_avatar,
+            name,
+            username,
+            teams,
+        }
+    }
+
+    fn refresh(&self, state: &SharedState, avatars: &Avatars) {
+        let st = state.borrow();
+        let me: &User = &st.me;
+        let display = me.display_name(st.teammate_name_display());
+        avatars.apply(&self.avatar, &me.id, &display);
+        avatars.apply(&self.account_avatar, &me.id, &display);
+        self.name.set_text(&display);
+        self.username.set_text(&format!("@{}", me.username));
+
+        while let Some(child) = self.teams.first_child() {
+            self.teams.remove(&child);
+        }
+        for team in st.teams.iter().filter(|t| t.delete_at == 0) {
+            let avatar = adw::Avatar::builder()
+                .size(24)
+                .text(&team.display_name)
+                .show_initials(true)
+                .build();
+            let label = gtk::Label::builder()
+                .label(&team.display_name)
+                .xalign(0.0)
+                .hexpand(true)
+                .ellipsize(gtk::pango::EllipsizeMode::End)
+                .build();
+            let row_box = gtk::Box::builder()
+                .orientation(gtk::Orientation::Horizontal)
+                .spacing(12)
+                .build();
+            row_box.append(&avatar);
+            row_box.append(&label);
+
+            let row = gtk::ListBoxRow::builder().child(&row_box).build();
+            unsafe { row.set_data("team-id", team.id.clone()) };
+            self.teams.append(&row);
+
+            if st.current_team.as_deref() == Some(team.id.as_str()) {
+                self.teams.select_row(Some(&row));
+            }
+        }
     }
 }

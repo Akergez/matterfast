@@ -12,17 +12,13 @@ use crate::state::SharedState;
 use crate::ui::message::{self, MessageActions, RowOptions};
 
 pub struct ChatView {
-    pub widget: gtk::Box,
+    pub widget: adw::ToolbarView,
     title: gtk::Label,
     subtitle: gtk::Label,
     messages: gtk::Box,
     scroller: gtk::ScrolledWindow,
     entry: gtk::TextView,
     call_button: gtk::Button,
-    mute_button: gtk::Button,
-    record_button: gtk::Button,
-    screen_button: gtk::Button,
-    camera_button: gtk::Button,
     inbox_button: gtk::Button,
     inbox_badge: gtk::Label,
     call_banner: gtk::Box,
@@ -38,10 +34,6 @@ impl ChatView {
     pub fn new(
         on_send: impl Fn(String) + 'static,
         on_call: impl Fn() + 'static,
-        on_mute: impl Fn() + 'static,
-        on_record: impl Fn() + 'static,
-        on_screen: impl Fn() + 'static,
-        on_camera: impl Fn() + 'static,
         on_inbox: impl Fn() + 'static,
     ) -> Self {
         let title = gtk::Label::builder()
@@ -74,39 +66,6 @@ impl ChatView {
             move |_| on_call()
         });
 
-        // Only meaningful inside a call, so it is not there outside one.
-        let mute_button = gtk::Button::builder()
-            .icon_name("microphone-disabled-symbolic")
-            .tooltip_text("Unmute")
-            .visible(false)
-            .build();
-        mute_button.add_css_class("flat");
-        mute_button.connect_clicked(move |_| on_mute());
-
-        let record_button = gtk::Button::builder()
-            .icon_name("media-record-symbolic")
-            .tooltip_text("Record the call")
-            .visible(false)
-            .build();
-        record_button.add_css_class("flat");
-        record_button.connect_clicked(move |_| on_record());
-
-        let screen_button = gtk::Button::builder()
-            .icon_name("video-display-symbolic")
-            .tooltip_text("Share your screen")
-            .visible(false)
-            .build();
-        screen_button.add_css_class("flat");
-        screen_button.connect_clicked(move |_| on_screen());
-
-        let camera_button = gtk::Button::builder()
-            .icon_name("camera-web-symbolic")
-            .tooltip_text("Turn the camera on")
-            .visible(false)
-            .build();
-        camera_button.add_css_class("flat");
-        camera_button.connect_clicked(move |_| on_camera());
-
         // The inbox button carries its own count, the way a mail client's does:
         // the number is the reason to click it.
         let inbox_badge = gtk::Label::builder().visible(false).build();
@@ -128,10 +87,6 @@ impl ChatView {
 
         let header = adw::HeaderBar::builder().title_widget(&title_box).build();
         header.pack_end(&call_button);
-        header.pack_end(&mute_button);
-        header.pack_end(&record_button);
-        header.pack_end(&screen_button);
-        header.pack_end(&camera_button);
         header.pack_end(&inbox_button);
 
         // --- call banner
@@ -274,14 +229,15 @@ impl ChatView {
         stack.add_named(&conversation, Some("conversation"));
         stack.set_visible_child_name("empty");
 
-        let toolbar = adw::ToolbarView::new();
-        toolbar.add_top_bar(&header);
-        toolbar.set_content(Some(&stack));
-
-        let widget = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
+        // A toolbar view rather than a plain box: on a narrow window the call
+        // dock moves in here as a bottom bar, since the sidebar it normally
+        // lives in is off-screen.
+        let widget = adw::ToolbarView::builder()
+            .bottom_bar_style(adw::ToolbarStyle::RaisedBorder)
+            .reveal_bottom_bars(false)
             .build();
-        widget.append(&toolbar);
+        widget.add_top_bar(&header);
+        widget.set_content(Some(&stack));
 
         ChatView {
             widget,
@@ -291,10 +247,6 @@ impl ChatView {
             scroller,
             entry,
             call_button,
-            mute_button,
-            record_button,
-            screen_button,
-            camera_button,
             inbox_button,
             inbox_badge,
             call_banner,
@@ -316,17 +268,9 @@ impl ChatView {
         }
     }
 
-    /// Reflects our own membership: the call button turns into hang-up and the
-    /// microphone toggle appears next to it.
-    pub fn set_in_call(
-        &self,
-        in_call: bool,
-        ongoing: bool,
-        muted: bool,
-        recording: bool,
-        sharing: bool,
-        on_camera: bool,
-    ) {
+    /// Reflects our own membership. Everything you can *do* inside a call is
+    /// in the dock now; the header only starts, joins or ends one.
+    pub fn set_in_call(&self, in_call: bool, ongoing: bool) {
         self.call_button.set_icon_name(if in_call {
             "call-stop-symbolic"
         } else {
@@ -348,43 +292,7 @@ impl ChatView {
             // with the banner instead of looking idle.
             set_active(&self.call_button, ongoing, "suggested-action");
         }
-        self.mute_button.set_visible(in_call);
-        self.mute_button.set_icon_name(if muted {
-            "microphone-disabled-symbolic"
-        } else {
-            "audio-input-microphone-symbolic"
-        });
-        self.mute_button
-            .set_tooltip_text(Some(if muted { "Unmute" } else { "Mute" }));
-        set_active(&self.mute_button, !muted, "suggested-action");
         self.join_button.set_visible(!in_call);
-
-        self.record_button.set_visible(in_call);
-        self.record_button.set_tooltip_text(Some(if recording {
-            "Stop recording"
-        } else {
-            "Record the call"
-        }));
-        set_active(&self.record_button, recording, "destructive-action");
-
-        for (button, on, off, active) in [
-            (
-                &self.screen_button,
-                "Stop sharing your screen",
-                "Share your screen",
-                sharing,
-            ),
-            (
-                &self.camera_button,
-                "Turn the camera off",
-                "Turn the camera on",
-                on_camera,
-            ),
-        ] {
-            button.set_visible(in_call);
-            button.set_tooltip_text(Some(if active { on } else { off }));
-            set_active(button, active, "suggested-action");
-        }
     }
 
     pub fn set_call_in_progress(&self, participants: Option<usize>) {

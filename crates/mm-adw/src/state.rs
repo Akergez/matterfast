@@ -131,8 +131,10 @@ pub struct AppState {
 
     /// Calls discovery, when the plugin is installed and reachable.
     pub calls: Option<Discovery>,
-    /// Channels with a call in progress, mapped to how many people are in it.
-    pub active_calls: HashMap<String, usize>,
+    /// Channels with a call in progress, mapped to who is in it. User ids, in
+    /// the order they joined — the sidebar draws the first few faces, and the
+    /// length is the participant count.
+    pub active_calls: HashMap<String, Vec<String>>,
     /// The call we are in, if any.
     pub call: Option<ActiveCall>,
 }
@@ -151,6 +153,11 @@ pub struct ActiveCall {
     pub screen: Option<crate::video::VideoSender>,
     pub camera: Option<crate::video::VideoSender>,
     pub muted: bool,
+    /// Who the SFU last reported as speaking, newest first. Server-side voice
+    /// activity, so it only ever names other people — we are never in here.
+    pub speaking: Vec<String>,
+    /// Who is sharing a screen right now, by user id.
+    pub sharing: Vec<String>,
 }
 
 pub type SharedState = Rc<RefCell<AppState>>;
@@ -202,7 +209,7 @@ impl AppState {
         }
     }
 
-    fn teammate_name_display(&self) -> &str {
+    pub fn teammate_name_display(&self) -> &str {
         self.config.get("TeammateNameDisplay").unwrap_or("username")
     }
 

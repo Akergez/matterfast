@@ -177,7 +177,10 @@ pub fn state() -> SharedState {
     }];
 
     // A call is happening in Development.
-    st.active_calls.insert("c-dev".into(), 3);
+    st.active_calls.insert(
+        "c-dev".into(),
+        vec!["u-lena".into(), "u-mikk".into(), "u-sara".into()],
+    );
 
     Rc::new(RefCell::new(st))
 }
