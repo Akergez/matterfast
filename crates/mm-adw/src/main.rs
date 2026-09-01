@@ -34,9 +34,24 @@ fn main() -> gtk::glib::ExitCode {
         .flags(gio::ApplicationFlags::empty())
         .build();
 
-    app.connect_startup(|_| load_css());
+    app.connect_startup(|_| {
+        load_css();
+        load_icons();
+    });
     app.connect_activate(ui::build_window);
     app.run()
+}
+
+/// Makes the application icon findable.
+///
+/// An installed build picks it up from the XDG icon directories; a `cargo run`
+/// from the source tree needs the tree's own `data/icons` on the search path.
+fn load_icons() {
+    gtk::Window::set_default_icon_name(APP_ID);
+    if let Some(display) = gtk::gdk::Display::default() {
+        gtk::IconTheme::for_display(&display)
+            .add_search_path(concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/icons"));
+    }
 }
 
 fn load_css() {

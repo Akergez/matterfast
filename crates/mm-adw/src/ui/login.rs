@@ -65,6 +65,13 @@ pub fn build(on_success: impl Fn(LoginResult) + Clone + 'static) -> gtk::Widget 
         .spacing(6)
         .valign(gtk::Align::Center)
         .build();
+    content.append(
+        &gtk::Image::builder()
+            .icon_name(crate::APP_ID)
+            .pixel_size(128)
+            .margin_bottom(12)
+            .build(),
+    );
     content.append(&group);
     content.append(&button);
     content.append(&spinner);

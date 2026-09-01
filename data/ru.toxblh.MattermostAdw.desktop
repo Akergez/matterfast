@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Mattermost
+GenericName=Team Chat
+Comment=Chat, threads and calls on a Mattermost server
+Exec=mm-adw
+Icon=ru.toxblh.MattermostAdw
+Terminal=false
+Categories=Network;InstantMessaging;Chat;
+Keywords=Mattermost;chat;team;messaging;
+StartupNotify=true
