@@ -30,6 +30,9 @@ pub struct ChatView {
     loading: Rc<RefCell<bool>>,
     connection: adw::Banner,
     typing: gtk::Label,
+    /// Set while a draft is being put back, so the change it causes is not
+    /// mistaken for the user typing.
+    restoring: Rc<RefCell<bool>>,
     /// False while the reader is scrolled up in history, so live messages do
     /// not yank them back to the bottom.
     pinned_to_bottom: Rc<RefCell<bool>>,
@@ -38,7 +41,7 @@ pub struct ChatView {
 impl ChatView {
     pub fn new(
         on_send: impl Fn(String) + 'static,
-        on_typing: impl Fn() + 'static,
+        on_typing: impl Fn(bool) + 'static,
         on_call: impl Fn() + 'static,
         on_inbox: impl Fn() + 'static,
     ) -> Self {
@@ -217,11 +220,16 @@ impl ChatView {
         });
         entry.add_controller(keys);
 
-        entry.buffer().connect_changed(move |buffer| {
-            // Clearing the box after sending is a change too, and telling the
-            // server we are typing at that moment would be a lie.
-            if buffer.char_count() > 0 {
-                on_typing();
+        let restoring = Rc::new(RefCell::new(false));
+        entry.buffer().connect_changed({
+            let restoring = restoring.clone();
+            move |buffer| {
+                // Restoring a draft is not typing, and must not be reported as
+                // either a keystroke or a fresh draft.
+                if *restoring.borrow() {
+                    return;
+                }
+                on_typing(buffer.char_count() > 0);
             }
         });
 
@@ -295,6 +303,7 @@ impl ChatView {
             join_button,
             stack,
             typing,
+            restoring,
             loading: Rc::new(RefCell::new(false)),
             connection,
             pinned_to_bottom,
@@ -328,6 +337,29 @@ impl ChatView {
             }
             None => self.connection.set_revealed(false),
         }
+    }
+
+    /// What is in the composer right now.
+    pub fn composer_text(&self) -> String {
+        let buffer = self.entry.buffer();
+        buffer
+            .text(&buffer.start_iter(), &buffer.end_iter(), false)
+            .to_string()
+    }
+
+    /// Puts a draft back. Setting the buffer fires `changed`, which would
+    /// otherwise be read as the user typing and save the draft straight back —
+    /// hence the guard.
+    pub fn set_composer_text(&self, text: &str) {
+        if self.composer_text() == text {
+            return;
+        }
+        *self.restoring.borrow_mut() = true;
+        self.entry.buffer().set_text(text);
+        // Put the cursor where they left off, not at the front.
+        let buffer = self.entry.buffer();
+        buffer.place_cursor(&buffer.end_iter());
+        *self.restoring.borrow_mut() = false;
     }
 
     pub fn focus_composer(&self) {

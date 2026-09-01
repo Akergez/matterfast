@@ -10,6 +10,7 @@
 //!   `map[string]string` or `map[string]any` and is modelled as such.
 
 pub mod channel;
+pub mod draft;
 pub mod file;
 pub mod post;
 pub mod team;
@@ -24,6 +25,7 @@ pub type Millis = i64;
 
 pub type StringMap = HashMap<String, String>;
 
+pub use draft::Draft;
 pub use channel::{
     CategoryType, Channel, ChannelMember, ChannelStats, ChannelType, ChannelUnread, ChannelView,
     ChannelViewResponse, OrderedSidebarCategories, SidebarCategory, UnreadState,

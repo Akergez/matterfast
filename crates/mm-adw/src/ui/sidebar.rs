@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use adw::prelude::*;
-use mattermost_api::models::{Channel, ChannelType, Presence, UnreadState, User};
+use mattermost_api::models::{Channel, ChannelType, Presence, User};
 
 use crate::avatars::Avatars;
 use crate::state::SharedState;
@@ -108,15 +108,13 @@ impl ChannelSidebar {
             self.list.append(&category_header(&category.display_name));
 
             for channel in channels {
-                let unread = st.unread(&channel.id);
-                let in_call = st.active_calls.get(&channel.id);
                 let title = st.channel_title(&channel);
                 // A DM is a person, so it gets that person's face with the
                 // presence badge, exactly like a message row.
                 let icon = channel
                     .dm_teammate_id(&st.me.id)
                     .map(|user_id| dm_avatar(avatars, user_id, &title, st.presence(user_id)));
-                let row = channel_row(&channel, &title, unread, in_call, icon, avatars, &st);
+                let row = channel_row(&channel, &title, icon, avatars, &st);
                 unsafe { row.set_data("channel-id", channel.id.clone()) };
                 self.list.append(&row);
 
@@ -167,12 +165,14 @@ fn dm_avatar(
 fn channel_row(
     channel: &Channel,
     title: &str,
-    unread: UnreadState,
-    in_call: Option<&Vec<String>>,
     icon: Option<gtk::Widget>,
     avatars: &Avatars,
     state: &crate::state::AppState,
 ) -> gtk::ListBoxRow {
+    let unread = state.unread(&channel.id);
+    let in_call = state.active_calls.get(&channel.id);
+    let has_draft = state.drafts.contains_key(&channel.id);
+
     // Public channels get a literal "#", the way Mattermost writes them; the
     // rest get an icon. A glyph also sidesteps icon-theme gaps on minimal
     // systems, where a missing SVG loader turns every symbolic icon into a
@@ -214,6 +214,16 @@ fn channel_row(
     // first and is always shown.
     if let Some(people) = in_call {
         row_box.append(&call_badge(people, avatars, state));
+    }
+
+    // Something unsent here. Shown even on a muted channel: it is your own
+    // text waiting, not someone else's noise.
+    if has_draft {
+        let pencil = gtk::Image::from_icon_name("document-edit-symbolic");
+        pencil.set_pixel_size(12);
+        pencil.add_css_class("dim-label");
+        pencil.set_tooltip_text(Some("You have an unsent message here"));
+        row_box.append(&pencil);
     }
 
     if unread.mentions > 0 {

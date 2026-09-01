@@ -17,7 +17,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::models::{Post, Preference, Reaction, User};
+use crate::models::{Draft, Post, Preference, Reaction, User};
 
 pub type Data = Map<String, Value>;
 
@@ -202,6 +202,11 @@ pub enum Event {
         team_id: String,
         user_id: String,
     },
+    /// A draft you wrote on another device. Both create and update arrive as
+    /// `draft_created` — `draft_updated` exists in the server's enum but is
+    /// never published.
+    DraftCreated(Box<Draft>),
+    DraftDeleted(Box<Draft>),
     /// Anything we do not model, including every `custom_<plugin>_<name>`
     /// event — this is how Calls signalling reaches the calls crate.
     Other {
@@ -222,6 +227,14 @@ impl Event {
             },
             "posted" => match Posted::parse(d) {
                 Some(p) => Event::Posted(p),
+                None => Event::other(frame),
+            },
+            "draft_created" | "draft_updated" => match extract(d, "draft") {
+                Some(draft) => Event::DraftCreated(Box::new(draft)),
+                None => Event::other(frame),
+            },
+            "draft_deleted" => match extract(d, "draft") {
+                Some(draft) => Event::DraftDeleted(Box::new(draft)),
                 None => Event::other(frame),
             },
             "post_edited" => match extract(d, "post") {

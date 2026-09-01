@@ -139,6 +139,13 @@ pub struct AppState {
     /// The call we are in, if any.
     pub call: Option<ActiveCall>,
 
+    /// Unsent text, keyed by channel id. Mirrors what the server has, so the
+    /// same half-written message is waiting on every device.
+    pub drafts: HashMap<String, String>,
+    /// False once the server has told us drafts are turned off, after which
+    /// they are kept in this map and nowhere else.
+    pub drafts_synced: bool,
+
     /// Who is typing where: channel id → user id → when we heard about it.
     /// The server sends no "stopped typing", so entries are aged out instead.
     pub typing: HashMap<String, HashMap<String, Instant>>,
@@ -192,6 +199,8 @@ impl AppState {
             calls: None,
             active_calls: HashMap::new(),
             call: None,
+            drafts: HashMap::new(),
+            drafts_synced: true,
             typing: HashMap::new(),
         }
     }

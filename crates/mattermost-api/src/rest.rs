@@ -39,6 +39,9 @@ pub struct Client {
     token: Arc<RwLock<Option<String>>>,
     /// Populated from the `X-Version-Id` response header.
     server_version: Arc<RwLock<Option<String>>>,
+    /// The live websocket's connection id, sent on writes so the server can
+    /// leave this connection out of the echo.
+    connection_id: Arc<RwLock<Option<String>>>,
 }
 
 impl std::fmt::Debug for Client {
@@ -92,6 +95,7 @@ impl Client {
             base: base.into(),
             token: Arc::new(RwLock::new(None)),
             server_version: Arc::new(RwLock::new(None)),
+            connection_id: Arc::new(RwLock::new(None)),
         })
     }
 
@@ -110,6 +114,15 @@ impl Client {
 
     pub fn clear_token(&self) {
         *self.token.write().unwrap() = None;
+    }
+
+    /// The websocket's connection id, once it has one.
+    ///
+    /// Sent as `Connection-Id` on writes so the server leaves *this* socket
+    /// out of the resulting broadcast: we already know what we just did, and
+    /// applying our own echo would fight whatever the user typed next.
+    pub fn set_connection_id(&self, id: impl Into<String>) {
+        *self.connection_id.write().unwrap() = Some(id.into());
     }
 
     /// `{version}.{build}.{config_hash}.{enterprise}` from `X-Version-Id`.
@@ -146,6 +159,9 @@ impl Client {
         let mut req = self.http.request(method, url);
         if let Some(token) = self.token() {
             req = req.bearer_auth(token);
+        }
+        if let Some(id) = self.connection_id.read().unwrap().as_deref() {
+            req = req.header("Connection-Id", id);
         }
         req
     }
@@ -886,6 +902,41 @@ impl Client {
     pub async fn emoji_by_name(&self, name: &str) -> Result<Emoji> {
         self.get(&format!("/emoji/name/{name}"), "emoji by name")
             .await
+    }
+
+    // ------------------------------------------------------------------ drafts
+
+    /// `GET /api/v4/users/me/teams/{team}/drafts`.
+    ///
+    /// Gated on `ServiceSettings.AllowSyncedDrafts`: with it off the server
+    /// answers 501 rather than an empty list, so treat that as "the feature is
+    /// not here" rather than as "you have no drafts".
+    pub async fn my_drafts(&self, team_id: &str) -> Result<Vec<Draft>> {
+        self.get(&format!("/users/me/teams/{team_id}/drafts"), "drafts")
+            .await
+    }
+
+    /// `POST /api/v4/drafts`.
+    ///
+    /// An empty message **deletes** the draft server-side rather than storing a
+    /// blank one — exactly what should happen when a composer is cleared, so
+    /// there is no separate case for it.
+    pub async fn upsert_draft(&self, draft: &Draft) -> Result<Draft> {
+        self.post_json("/drafts", draft, "upsert draft").await
+    }
+
+    /// `DELETE /api/v4/users/me/channels/{channel}/drafts[/{root}]`.
+    ///
+    /// Deleting a draft that is not there is a 200, not a 404.
+    pub async fn delete_draft(&self, channel_id: &str, root_id: &str) -> Result<()> {
+        let mut path = format!("/users/me/channels/{channel_id}/drafts");
+        if !root_id.is_empty() {
+            path.push('/');
+            path.push_str(root_id);
+        }
+        self.send(self.request(Method::DELETE, &self.api(&path)))
+            .await
+            .map(|_| ())
     }
 
     // ------------------------------------------------------------- preferences

@@ -74,8 +74,8 @@ enum Action {
     OpenDirectMessage(String),
     /// Jump to the channel whose call we are in.
     OpenCallChannel,
-    /// A keystroke landed in the composer.
-    Typing,
+    /// The composer's contents changed; the flag says whether it is non-empty.
+    ComposerChanged(bool),
 }
 
 pub fn build_window(app: &adw::Application) {
@@ -263,8 +263,8 @@ fn build_session_ui(
         },
         {
             let tx = tx.clone();
-            move || {
-                let _ = tx.send_blocking(Action::Typing);
+            move |has_text| {
+                let _ = tx.send_blocking(Action::ComposerChanged(has_text));
             }
         },
         {
@@ -447,6 +447,7 @@ fn build_session_ui(
         narrow: narrow.clone(),
         sidebar_reload_pending: std::cell::Cell::new(false),
         typing_sweep_pending: std::cell::Cell::new(false),
+        draft_save_pending: std::cell::Cell::new(false),
         typing_sent_recently: std::cell::Cell::new(false),
         dock_in_chat: std::cell::Cell::new(false),
         dock_visible: std::cell::Cell::new(false),
@@ -539,6 +540,7 @@ struct Ui {
     narrow: Rc<std::cell::Cell<bool>>,
     sidebar_reload_pending: std::cell::Cell<bool>,
     typing_sweep_pending: std::cell::Cell<bool>,
+    draft_save_pending: std::cell::Cell<bool>,
     typing_sent_recently: std::cell::Cell<bool>,
     dock_in_chat: std::cell::Cell<bool>,
     dock_visible: std::cell::Cell<bool>,
@@ -587,6 +589,119 @@ impl Ui {
         self.refresh_call_ui();
         self.refresh_title();
         self.hydrate_dm_teammates();
+    }
+
+    /// Saves the composer as a draft shortly after typing stops.
+    ///
+    /// Debounced rather than per-keystroke: a draft is worth one request when
+    /// someone pauses, not one per character.
+    fn schedule_draft_save(self: &Rc<Self>) {
+        if self.draft_save_pending.replace(true) {
+            return;
+        }
+        let ui = self.clone();
+        glib::timeout_add_local_once(std::time::Duration::from_millis(900), move || {
+            ui.draft_save_pending.set(false);
+            ui.save_draft();
+        });
+    }
+
+    /// Stores the current composer text for the channel it belongs to, locally
+    /// and — when the server keeps drafts — there too.
+    fn save_draft(self: &Rc<Self>) {
+        let text = self.chat.composer_text();
+        let (client, channel_id, synced, changed) = {
+            let mut st = self.state.borrow_mut();
+            let Some(channel_id) = st.current_channel.clone() else {
+                return;
+            };
+            let trimmed = text.trim().to_string();
+            let changed = if trimmed.is_empty() {
+                st.drafts.remove(&channel_id).is_some()
+            } else {
+                st.drafts.insert(channel_id.clone(), trimmed.clone()) != Some(trimmed)
+            };
+            (st.client.clone(), channel_id, st.drafts_synced, changed)
+        };
+        if !changed {
+            return;
+        }
+        // The pencil in the sidebar has to follow.
+        self.channels.refresh(&self.state, &self.avatars);
+        if !synced {
+            return;
+        }
+
+        let ui = self.clone();
+        let draft = mattermost_api::models::Draft::new(&channel_id, "", text.trim());
+        runtime::spawn(
+            async move {
+                // An empty message is the server's own delete, so one call
+                // covers both saving and clearing.
+                client.upsert_draft(&draft).await.map(|_| ())
+            },
+            move |result| {
+                if let Err(e) = result {
+                    // 501 means the admin turned synced drafts off. Stop
+                    // asking; the local copy still works.
+                    if matches!(&e, mattermost_api::Error::Api(a) if a.status_code == 501) {
+                        tracing::info!("synced drafts are disabled on this server");
+                        ui.state.borrow_mut().drafts_synced = false;
+                    } else {
+                        tracing::warn!(error = %e, "could not save the draft");
+                    }
+                }
+            },
+        );
+    }
+
+    /// Pulls this team's drafts and puts the current channel's back.
+    fn load_drafts(self: &Rc<Self>) {
+        let (client, team) = {
+            let st = self.state.borrow();
+            (st.client.clone(), st.current_team.clone())
+        };
+        let Some(team_id) = team else { return };
+
+        let ui = self.clone();
+        runtime::spawn(
+            async move { client.my_drafts(&team_id).await },
+            move |result| match result {
+                Ok(drafts) => {
+                    {
+                        let mut st = ui.state.borrow_mut();
+                        for draft in drafts {
+                            // Thread drafts have their own composer, which does
+                            // not exist yet; ignore them rather than showing a
+                            // thread reply in the channel box.
+                            if draft.root_id.is_empty() && !draft.message.is_empty() {
+                                st.drafts.insert(draft.channel_id, draft.message);
+                            }
+                        }
+                    }
+                    ui.restore_draft();
+                    ui.channels.refresh(&ui.state, &ui.avatars);
+                }
+                Err(e) => {
+                    if matches!(&e, mattermost_api::Error::Api(a) if a.status_code == 501) {
+                        ui.state.borrow_mut().drafts_synced = false;
+                    }
+                }
+            },
+        );
+    }
+
+    /// Puts the current channel's draft into the composer.
+    fn restore_draft(&self) {
+        let text = {
+            let st = self.state.borrow();
+            st.current_channel
+                .as_ref()
+                .and_then(|id| st.drafts.get(id))
+                .cloned()
+                .unwrap_or_default()
+        };
+        self.chat.set_composer_text(&text);
     }
 
     /// Repaints the "someone is typing" line, and schedules the repaint that
@@ -850,7 +965,12 @@ impl Ui {
         match action {
             Action::SelectTeam(team_id) => self.select_team(team_id),
             Action::SelectChannel(channel_id) => self.select_channel(channel_id),
-            Action::Send(text) => self.send_message(text, None),
+            Action::Send(text) => {
+                self.send_message(text, None);
+                // The composer is empty now, so the draft has to go with it —
+                // and immediately, not on the debounce.
+                self.save_draft();
+            }
             Action::ToggleCall => self.toggle_call(),
             Action::ToggleMute => self.toggle_mute(),
             Action::ToggleRecording => self.toggle_recording(),
@@ -875,7 +995,14 @@ impl Ui {
                 }
             }
             Action::OpenDirectMessage(user_id) => self.open_direct_message(user_id),
-            Action::Typing => self.notify_typing(),
+            Action::ComposerChanged(has_text) => {
+                if has_text {
+                    self.notify_typing();
+                }
+                // Emptying the composer is a draft change too — that is how a
+                // draft gets deleted.
+                self.schedule_draft_save();
+            }
             Action::OpenCallChannel => {
                 let channel = self.state.borrow().call.as_ref().map(|c| c.channel_id.clone());
                 if let Some(id) = channel {
@@ -931,6 +1058,7 @@ impl Ui {
                     };
                     ui.refresh_all();
                     ui.load_inbox();
+                    ui.load_drafts();
                     if let Some(id) = first {
                         ui.dispatch(Action::SelectChannel(id));
                     }
@@ -942,6 +1070,9 @@ impl Ui {
 
     fn select_channel(self: &Rc<Self>, channel_id: String) {
         self.split.set_show_content(true);
+        // Flush the outgoing channel's draft *before* the composer is pointed
+        // at a new one, or the text would be filed under the wrong channel.
+        self.save_draft();
         {
             let mut st = self.state.borrow_mut();
             if st.current_channel.as_deref() == Some(channel_id.as_str()) {
@@ -952,6 +1083,7 @@ impl Ui {
         self.refresh_messages();
         self.refresh_call_ui();
         self.refresh_typing();
+        self.restore_draft();
 
         let (client, crt, have_feed) = {
             let st = self.state.borrow();
@@ -1716,6 +1848,7 @@ impl Ui {
         let mut redraw_messages = false;
         let mut redraw_sidebar = false;
         let mut redraw_typing = false;
+        let mut redraw_draft = false;
         let mut reload_sidebar = false;
         let mut reload_teams = false;
         let mut forget_avatar: Option<String> = None;
@@ -1868,6 +2001,20 @@ impl Ui {
                 // event would be nine chances to drift out of sync with it,
                 // and these arrive rarely enough that three requests is
                 // cheaper than being wrong.
+                // A draft written on another device. Our own writes carry a
+                // Connection-Id, so the server never echoes these back to us.
+                Event::DraftCreated(draft) => {
+                    if draft.root_id.is_empty() {
+                        st.drafts.insert(draft.channel_id, draft.message);
+                        redraw_draft = true;
+                    }
+                }
+                Event::DraftDeleted(draft) => {
+                    if draft.root_id.is_empty() {
+                        st.drafts.remove(&draft.channel_id);
+                        redraw_draft = true;
+                    }
+                }
                 Event::ChannelCreated { .. }
                 | Event::ChannelUpdated { .. }
                 | Event::ChannelDeleted { .. }
@@ -1877,15 +2024,15 @@ impl Ui {
                 | Event::SidebarCategoriesInvalidated { .. } => reload_sidebar = true,
                 // Someone joining a channel only matters to the list when the
                 // someone is us.
-                Event::UserAdded { user_id, .. } | Event::UserRemoved { user_id, .. } => {
-                    if user_id == me {
-                        reload_sidebar = true;
-                    }
+                Event::UserAdded { user_id, .. } | Event::UserRemoved { user_id, .. }
+                    if user_id == me =>
+                {
+                    reload_sidebar = true
                 }
-                Event::AddedToTeam { user_id, .. } | Event::LeaveTeam { user_id, .. } => {
-                    if user_id == me {
-                        reload_teams = true;
-                    }
+                Event::AddedToTeam { user_id, .. } | Event::LeaveTeam { user_id, .. }
+                    if user_id == me =>
+                {
+                    reload_teams = true
                 }
                 _ => {}
             }
@@ -1899,6 +2046,10 @@ impl Ui {
         }
         if redraw_typing {
             self.refresh_typing();
+        }
+        if redraw_draft {
+            self.restore_draft();
+            redraw_sidebar = true;
         }
 
         if let Some(user_id) = forget_avatar {
@@ -2075,6 +2226,7 @@ fn bootstrap(ui: Rc<Ui>) {
 
             ui.refresh_all();
             ui.load_inbox();
+            ui.load_drafts();
 
             if let Some(id) = initial_channel {
                 ui.dispatch(Action::SelectChannel(id));
@@ -2112,7 +2264,12 @@ fn bootstrap(ui: Rc<Ui>) {
                             ui.chat.set_connection_problem(None);
                             resync(&ui);
                         }
-                        WsUpdate::Connected { .. } => ui.chat.set_connection_problem(None),
+                        WsUpdate::Connected { connection_id, .. } => {
+                            // Writes carry this from now on, so the server
+                            // leaves us out of their echo.
+                            ui.state.borrow().client.set_connection_id(connection_id);
+                            ui.chat.set_connection_problem(None);
+                        }
                         // Losing the socket is not an event that scrolls past:
                         // it stays true until it stops being true, so it is a
                         // banner, and it says whether it is being worked on.
