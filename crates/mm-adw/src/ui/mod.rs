@@ -87,6 +87,8 @@ enum Action {
     Search(String),
     /// Open the file chooser to attach something.
     PickAttachment,
+    /// Ask the LLM agent to summarise what is unread here.
+    SummariseUnreads,
     /// Drop an uploaded file before it is sent.
     DropAttachment(String),
 }
@@ -284,6 +286,12 @@ fn build_session_ui(
             let tx = tx.clone();
             move || {
                 let _ = tx.send_blocking(Action::PickAttachment);
+            }
+        },
+        {
+            let tx = tx.clone();
+            move || {
+                let _ = tx.send_blocking(Action::SummariseUnreads);
             }
         },
         {
@@ -641,6 +649,107 @@ impl Ui {
         self.hydrate_dm_teammates();
     }
 
+    /// Applies a streamed LLM answer.
+    ///
+    /// `next` carries the whole message so far rather than the new part, so
+    /// this replaces the text instead of appending — appending would double
+    /// every character.
+    fn apply_stream_update(self: &Rc<Self>, data: &mattermost_api::ws::Data) {
+        use crate::agents::StreamUpdate;
+        match crate::agents::parse_stream(data) {
+            StreamUpdate::Text { post_id, message } => {
+                let mut st = self.state.borrow_mut();
+                let Some(mut post) = st.post(&post_id) else {
+                    // The post itself arrives over the ordinary `posted`
+                    // event; a stream frame that beats it has nothing to
+                    // write into yet, and the next frame will.
+                    return;
+                };
+                post.message = message;
+                st.apply_post(post);
+                drop(st);
+                self.refresh_messages();
+            }
+            // The final text already arrived as a Text frame, and the post is
+            // updated server-side too; nothing left to do.
+            StreamUpdate::Done { .. } | StreamUpdate::Ignored => {}
+        }
+    }
+
+    /// Asks the Agents plugin what bots exist. A server without the plugin
+    /// 404s, which is indistinguishable from having no bots.
+    fn load_bots(self: &Rc<Self>) {
+        let client = self.state.borrow().client.clone();
+        let ui = self.clone();
+        runtime::spawn(
+            async move { crate::agents::bots(&client).await },
+            move |result| match result {
+                Ok(bots) => {
+                    ui.state.borrow_mut().bots = bots.bots;
+                    ui.refresh_agent_actions();
+                }
+                Err(e) => tracing::debug!(error = %e, "no agents plugin on this server"),
+            },
+        );
+    }
+
+    /// Shows or hides the agent entries, which only make sense when there is
+    /// a bot to answer them.
+    fn refresh_agent_actions(self: &Rc<Self>) {
+        let bots: Vec<(String, String)> = self
+            .state
+            .borrow()
+            .bots
+            .iter()
+            .map(|bot| {
+                let name = if bot.display_name.is_empty() {
+                    format!("@{}", bot.username)
+                } else {
+                    bot.display_name.clone()
+                };
+                // The DM channel may not exist yet; the bot's user id is
+                // enough to make one.
+                let target = if bot.dm_channel_id.is_empty() {
+                    format!("user:{}", bot.id)
+                } else {
+                    format!("channel:{}", bot.dm_channel_id)
+                };
+                (target, format!("Chat with {name}"))
+            })
+            .collect();
+
+        let ui = self.clone();
+        self.chat.set_agents(&bots, move |target| {
+            match target.split_once(':') {
+                Some(("channel", id)) => ui.dispatch(Action::SelectChannel(id.to_string())),
+                Some(("user", id)) => ui.dispatch(Action::OpenDirectMessage(id.to_string())),
+                _ => {}
+            }
+        });
+    }
+
+    /// "Catch me up": asks the default bot to summarise what you have not read
+    /// in this channel. The answer is written into a DM post, so this only
+    /// starts it — the text arrives over the socket.
+    fn summarise_unreads(self: &Rc<Self>) {
+        let (client, channel) = {
+            let st = self.state.borrow();
+            (st.client.clone(), st.current_channel.clone())
+        };
+        let Some(channel_id) = channel else { return };
+
+        let ui = self.clone();
+        self.toast("Asking the agent…");
+        runtime::spawn(
+            async move { crate::agents::summarise_unreads(&client, &channel_id).await },
+            move |result| match result {
+                // The summary is a DM from the bot, so go and read it there.
+                Ok(target) => ui.dispatch(Action::OpenPost(target.channel_id, target.post_id)),
+                Err(e) => ui.toast(&format!("The agent could not answer: {e}")),
+            },
+        );
+    }
+
     /// Handles the reactions-notify plugin, which tells you when somebody
     /// reacts to something you wrote — something core Mattermost does not.
     ///
@@ -875,6 +984,23 @@ impl Ui {
                 let link = format!("{}/{team}/pl/{post_id}", client.site_url());
                 self.window.clipboard().set_text(&link);
                 self.toast("Link copied.");
+            }
+            PostAction::Summarise => {
+                if self.state.borrow().bots.is_empty() {
+                    self.toast("This server has no agent to ask.");
+                    return;
+                }
+                let ui = self.clone();
+                self.toast("Asking the agent…");
+                runtime::spawn(
+                    async move { crate::agents::summarise_thread(&client, &post_id).await },
+                    move |result| match result {
+                        Ok(target) => {
+                            ui.dispatch(Action::OpenPost(target.channel_id, target.post_id))
+                        }
+                        Err(e) => ui.toast(&format!("The agent could not answer: {e}")),
+                    },
+                );
             }
             PostAction::Edit => self.chat.begin_edit(&post_id, post.source_text()),
             PostAction::Delete => self.confirm_delete(post_id),
@@ -1418,6 +1544,7 @@ impl Ui {
             Action::Post(post_id, what) => self.post_action(post_id, what),
             Action::Search(terms) => self.search(terms),
             Action::PickAttachment => self.pick_attachment(),
+            Action::SummariseUnreads => self.summarise_unreads(),
             Action::DropAttachment(file_id) => {
                 self.state
                     .borrow_mut()
@@ -1489,6 +1616,7 @@ impl Ui {
                     ui.refresh_all();
                     ui.load_inbox();
                     ui.load_drafts();
+            ui.load_bots();
                     if let Some(id) = first {
                         ui.dispatch(Action::SelectChannel(id));
                     }
@@ -2286,6 +2414,11 @@ impl Ui {
                 self.apply_reaction_notice(kind, data);
                 return;
             }
+            // An LLM answer being written a token at a time.
+            if name.strip_prefix(crate::agents::WS_PREFIX) == Some("postupdate") {
+                self.apply_stream_update(data);
+                return;
+            }
         }
 
         let mut redraw_messages = false;
@@ -2712,6 +2845,7 @@ fn bootstrap(ui: Rc<Ui>) {
             ui.refresh_all();
             ui.load_inbox();
             ui.load_drafts();
+            ui.load_bots();
 
             if let Some(id) = initial_channel {
                 ui.dispatch(Action::SelectChannel(id));

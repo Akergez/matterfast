@@ -20,6 +20,9 @@ pub struct ChatView {
     entry: gtk::TextView,
     call_button: gtk::Button,
     inbox_button: gtk::Button,
+    agent_button: gtk::MenuButton,
+    /// Kept so the menu can be rebuilt without losing the fixed entries.
+    agent_actions: Rc<RefCell<Vec<gtk::gio::SimpleAction>>>,
     inbox_badge: gtk::Label,
     call_banner: gtk::Box,
     call_banner_label: gtk::Label,
@@ -47,6 +50,7 @@ impl ChatView {
         on_send: impl Fn(String) + 'static,
         on_typing: impl Fn(bool) + 'static,
         on_attach: impl Fn() + 'static,
+        on_agent: impl Fn() + 'static,
         on_call: impl Fn() + 'static,
         on_inbox: impl Fn() + 'static,
     ) -> Self {
@@ -100,7 +104,23 @@ impl ChatView {
         inbox_button.connect_clicked(move |_| on_inbox());
 
         let header = adw::HeaderBar::builder().title_widget(&title_box).build();
+        // Only there when a server actually has an agent to ask. A menu
+        // rather than a button because there are two different things to want
+        // from an agent: a summary of here, or a conversation with it.
+        let agent_button = gtk::MenuButton::builder()
+            .icon_name("bot-symbolic")
+            .tooltip_text("Agents")
+            .visible(false)
+            .build();
+        agent_button.add_css_class("flat");
+        let agent_actions = gtk::gio::SimpleActionGroup::new();
+        let catch_up = gtk::gio::SimpleAction::new("catch-up", None);
+        catch_up.connect_activate(move |_, _| on_agent());
+        agent_actions.add_action(&catch_up);
+        agent_button.insert_action_group("agent", Some(&agent_actions));
+
         header.pack_end(&call_button);
+        header.pack_end(&agent_button);
         header.pack_end(&inbox_button);
 
         // --- call banner
@@ -348,6 +368,8 @@ impl ChatView {
             call_banner_label,
             join_button,
             stack,
+            agent_button,
+            agent_actions: Rc::new(RefCell::new(vec![catch_up.clone()])),
             typing,
             attachments,
             edit_banner,
@@ -386,6 +408,43 @@ impl ChatView {
             }
             None => self.connection.set_revealed(false),
         }
+    }
+
+    /// Rebuilds the agent menu: one entry to summarise this channel, and one
+    /// per bot to go and talk to it.
+    pub fn set_agents(&self, bots: &[(String, String)], on_open: impl Fn(String) + 'static) {
+        self.agent_button.set_visible(!bots.is_empty());
+        if bots.is_empty() {
+            return;
+        }
+
+        let menu = gtk::gio::Menu::new();
+        menu.append(Some("Catch me up"), Some("agent.catch-up"));
+
+        let chats = gtk::gio::Menu::new();
+        let on_open = Rc::new(on_open);
+        let group = gtk::gio::SimpleActionGroup::new();
+        for (index, (id, name)) in bots.iter().enumerate() {
+            let action_name = format!("chat-{index}");
+            let action = gtk::gio::SimpleAction::new(&action_name, None);
+            action.connect_activate({
+                let on_open = on_open.clone();
+                let id = id.clone();
+                move |_, _| on_open(id.clone())
+            });
+            group.add_action(&action);
+            chats.append(Some(name), Some(&format!("agent.{action_name}")));
+        }
+        menu.append_section(None, &chats);
+
+        // Rebuilding replaces the action group, so the fixed entries have to
+        // be carried over or "Catch me up" stops working after the first
+        // refresh.
+        for action in self.agent_actions.borrow().iter() {
+            group.add_action(action);
+        }
+        self.agent_button.set_menu_model(Some(&menu));
+        self.agent_button.insert_action_group("agent", Some(&group));
     }
 
     /// Redraws the row of files waiting to go out with the next message.

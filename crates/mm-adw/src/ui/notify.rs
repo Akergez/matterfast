@@ -48,8 +48,9 @@ pub fn should_notify(
         return false;
     }
     // Joins, leaves and the rest are noise; the server does not notify for
-    // them either.
-    if !posted.post.r#type.is_empty() {
+    // them either. Only *system* types, though — a bot's answer carries a type
+    // of its own and is still worth being told about.
+    if posted.post.is_system() {
         return false;
     }
     if focused_channel == Some(posted.post.channel_id.as_str()) {

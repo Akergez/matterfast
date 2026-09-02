@@ -45,6 +45,8 @@ pub enum PostAction {
     MarkUnread,
     CopyLink,
     CopyText,
+    /// Ask the LLM agent to summarise this thread.
+    Summarise,
 }
 
 pub struct RowOptions {
@@ -319,6 +321,9 @@ fn overflow_menu(post: &Post, actions: &MessageActions, mine: bool) -> gtk::Widg
         entries.push(("Unpin from channel", "unpin", PostAction::Unpin));
     } else {
         entries.push(("Pin to channel", "pin", PostAction::Pin));
+    }
+    if post.reply_count > 0 {
+        entries.push(("Summarise thread", "summarise", PostAction::Summarise));
     }
     if mine {
         entries.push(("Edit", "edit", PostAction::Edit));

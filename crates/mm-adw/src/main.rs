@@ -7,6 +7,7 @@
 //! Under the sidebar sits the call dock, which is pinned there for as long as
 //! a call runs and moves under the conversation once the sidebar folds away.
 
+mod agents;
 mod audio;
 mod avatars;
 mod demo;

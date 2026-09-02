@@ -142,6 +142,10 @@ pub struct AppState {
     /// Unsent text, keyed by channel id. Mirrors what the server has, so the
     /// same half-written message is waiting on every device.
     pub drafts: HashMap<String, String>,
+    /// The LLM bots this server offers, empty when the Agents plugin is not
+    /// installed — which is the same as having nothing to offer, so it needs
+    /// no separate flag.
+    pub bots: Vec<crate::agents::Bot>,
     /// Files uploaded and waiting to be attached to the next message: the
     /// server's file id and the name to show on the chip.
     pub pending_files: Vec<(String, String)>,
@@ -214,6 +218,7 @@ impl AppState {
             call: None,
             drafts: HashMap::new(),
             drafts_synced: true,
+            bots: Vec::new(),
             pending_files: Vec::new(),
             search_results: Vec::new(),
             searching: false,
