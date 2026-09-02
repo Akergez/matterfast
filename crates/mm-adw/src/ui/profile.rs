@@ -24,6 +24,8 @@ pub fn popover(
     let display = st.display_name(&user);
     let presence = st.presence(user_id);
     let is_me = user.id == st.me.id;
+    // Read before the borrow closes; the card is built afterwards.
+    let last_seen = st.last_seen.get(user_id).copied().filter(|at| *at > 0);
     drop(st);
 
     let column = gtk::Box::builder()
@@ -74,6 +76,20 @@ pub fn popover(
     presence_row.append(&dot);
     presence_row.append(&gtk::Label::new(Some(presence_label(presence))));
     column.append(&presence_row);
+
+    // When somebody was last seen. Only for people who are not online now —
+    // "last seen 26 August" under a green dot would be nonsense.
+    if presence != Presence::Online {
+        if let Some(seen) = last_seen {
+            let label = gtk::Label::builder()
+                .label(format!("Last seen {}", super::message::format_day(seen)))
+                .halign(gtk::Align::Center)
+                .build();
+            label.add_css_class("caption");
+            label.add_css_class("dim-label");
+            column.append(&label);
+        }
+    }
 
     if let Some(status) = user.custom_status() {
         if !status.text.is_empty() || !status.emoji.is_empty() {

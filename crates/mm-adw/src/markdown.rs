@@ -11,6 +11,10 @@
 
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 
+/// The URL scheme mentions are rendered with. Not a real scheme — it exists so
+/// a link handler can tell "open this person" from "open this web page".
+pub const MENTION_SCHEME: &str = "mm-mention:";
+
 /// A message split into things a widget can be built from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Block {
@@ -211,9 +215,12 @@ fn inline(text: &str, known: &dyn Fn(&str) -> Option<String>) -> String {
                 // clickable would promise a profile card this does not open.
                 let handle = &after[..end];
                 let shown = known(handle).unwrap_or_else(|| handle.to_string());
-                out.push_str("<span foreground=\"#3584e4\">@");
+                // A link rather than a coloured span, so clicking it opens the
+                // person. The scheme is ours; the label's activate-link
+                // handler recognises it and never lets it reach a browser.
+                out.push_str(&format!("<a href=\"{MENTION_SCHEME}{}\">@", escape(handle)));
                 out.push_str(&escape(&shown));
-                out.push_str("</span>");
+                out.push_str("</a>");
                 rest = &after[end..];
             }
             _ => {
@@ -329,18 +336,20 @@ mod tests {
             panic!("expected text");
         };
         assert!(rendered.contains("@nobody"), "got {rendered:?}");
-        assert!(!rendered.contains("#3584e4\">@nobody"), "got {rendered:?}");
-        // Shown by name, not by handle.
+        assert!(!rendered.contains("mm-mention:nobody"), "got {rendered:?}");
+        // Shown by name, linked by handle: the label shows who was
+        // addressed, the target says which account to open.
         assert!(
-            rendered.contains("#3584e4\">@Anna Petrova</span>"),
+            rendered.contains("<a href=\"mm-mention:anna\">@Anna Petrova</a>"),
             "got {rendered:?}"
         );
     }
 
     #[test]
-    fn shortcodes_become_emoji_and_mentions_are_tinted() {
+    fn shortcodes_become_emoji_and_mentions_are_linked() {
         assert_eq!(text_of("nice :tada:"), "nice 🎉");
-        assert!(text_of("hi @anna").contains("<span foreground=\"#3584e4\">@anna</span>"));
+        // Linked, not merely coloured: clicking a mention opens the person.
+        assert!(text_of("hi @anna").contains("<a href=\"mm-mention:anna\">@anna</a>"));
     }
 
     #[test]

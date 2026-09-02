@@ -158,6 +158,9 @@ pub struct AppState {
     /// Unsent text, keyed by channel id. Mirrors what the server has, so the
     /// same half-written message is waiting on every device.
     pub drafts: HashMap<String, String>,
+    /// When each person was last seen, from the status route. Only meaningful
+    /// for people who are not online now.
+    pub last_seen: HashMap<String, Millis>,
     /// The account's preferences, as the server holds them. Kept whole rather
     /// than picked apart: several features read one key each, and the list is
     /// small.
@@ -264,6 +267,7 @@ impl AppState {
             drafts: HashMap::new(),
             thread_drafts: HashMap::new(),
             drafts_synced: true,
+            last_seen: HashMap::new(),
             preferences: Vec::new(),
             users_fetched_at: 0,
             ringing: Vec::new(),
@@ -346,6 +350,12 @@ impl AppState {
     /// How a user should be named in this server's configured style.
     pub fn apply_statuses(&mut self, statuses: Vec<Status>) {
         for status in statuses {
+            // The last-activity stamp comes along with presence and is the
+            // only thing that can answer "when were they last here".
+            if status.last_activity_at > 0 {
+                self.last_seen
+                    .insert(status.user_id.clone(), status.last_activity_at);
+            }
             self.statuses
                 .insert(status.user_id.clone(), status.presence());
         }

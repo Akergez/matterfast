@@ -33,6 +33,9 @@ pub struct MessageActions {
     /// A link to another message on this server: go there rather than to a
     /// browser.
     pub open_permalink: Rc<dyn Fn(String)>,
+    /// A clicked mention. By handle rather than by id, because that is all the
+    /// text carries.
+    pub show_profile_by_handle: Rc<dyn Fn(String, gtk::Widget)>,
 }
 
 /// The overflow menu's entries. One enum rather than one callback each: they
@@ -88,7 +91,7 @@ pub fn build(
     drop(st);
 
     if post.is_system() {
-        return system_row(post, state);
+        return system_row(post, state, actions);
     }
 
     let row = gtk::Box::builder()
@@ -264,21 +267,27 @@ pub fn build(
         {
             let st = state.borrow();
             let display = st.teammate_name_display().to_string();
-            let repliers: Vec<String> = st
-                .threads
-                .get(post.thread_root())
-                .map(|thread| {
-                    // Oldest first, skipping the root's own author — they are
-                    // already named above the message.
-                    let mut seen: Vec<String> = Vec::new();
+            // The post itself carries who replied — the server fills it in on
+            // the way out under collapsed threads, so the faces are there
+            // before the thread has been opened, let alone fetched. Falling
+            // back to a loaded thread covers servers that leave it empty.
+            let mut repliers: Vec<String> = post
+                .participants
+                .iter()
+                .map(|p| p.id.clone())
+                .filter(|id| !id.is_empty())
+                .collect();
+            if repliers.is_empty() {
+                if let Some(thread) = st.threads.get(post.thread_root()) {
                     for reply in &thread.posts {
-                        if reply.id != post.id && !seen.contains(&reply.user_id) {
-                            seen.push(reply.user_id.clone());
+                        if reply.id != post.id && !repliers.contains(&reply.user_id) {
+                            repliers.push(reply.user_id.clone());
                         }
                     }
-                    seen
-                })
-                .unwrap_or_default();
+                }
+            }
+            // The root's author is named above the message already.
+            repliers.retain(|id| id != &post.user_id);
 
             for user_id in repliers.iter().take(THREAD_FACES) {
                 let name = st
@@ -330,6 +339,11 @@ pub fn build(
     {
         let click = gtk::GestureClick::new();
         click.set_button(gtk::gdk::BUTTON_PRIMARY);
+        // Bubble phase would never see the click at all on a message whose
+        // text is selectable: the label claims the sequence for its own
+        // selection handling and the gesture below it never fires. That is
+        // why this worked only on the gaps between words.
+        click.set_propagation_phase(gtk::PropagationPhase::Capture);
         click.connect_released({
             let actions = actions.clone();
             let root = post.thread_root().to_string();
@@ -340,13 +354,19 @@ pub fn build(
                     return;
                 }
                 // Not while text is selected: the click that ends a selection
-                // must not also navigate.
-                if let Some(widget) = gesture.widget() {
-                    if has_selection(&widget) {
+                // must not also navigate. Checked on the *next* idle rather
+                // than now, because in the capture phase the label has not
+                // updated its selection yet — asking here would always say
+                // "nothing selected" and swallow every drag.
+                let actions = actions.clone();
+                let root = root.clone();
+                let widget = gesture.widget();
+                glib::idle_add_local_once(move || {
+                    if widget.is_some_and(|w| has_selection(&w)) {
                         return;
                     }
-                }
-                (actions.open_thread)(root.clone());
+                    (actions.open_thread)(root.clone());
+                });
             }
         });
         row.add_controller(click);
@@ -923,13 +943,7 @@ fn render_block(
             // already on screen. Anything else goes to the browser as usual.
             label.connect_activate_link({
                 let actions = actions.clone();
-                move |_, url| match permalink(url) {
-                    Some(post_id) => {
-                        (actions.open_permalink)(post_id);
-                        glib::Propagation::Stop
-                    }
-                    None => glib::Propagation::Proceed,
-                }
+                move |label, url| follow_link(label, url, &actions)
             });
             label.upcast()
         }
@@ -1469,7 +1483,7 @@ fn reaction_strip(
 /// gets swapped, rather than scanning the sentence for anything that looks
 /// like a name: the wording is localised, so pattern-matching it would work in
 /// English and nowhere else.
-fn system_row(post: &Post, state: &SharedState) -> gtk::Widget {
+fn system_row(post: &Post, state: &SharedState, actions: &MessageActions) -> gtk::Widget {
     let text = {
         let st = state.borrow();
         let display = st.teammate_name_display().to_string();
@@ -1524,6 +1538,10 @@ fn system_row(post: &Post, state: &SharedState) -> gtk::Widget {
         Some(crate::markdown::Block::Text(markup)) => label.set_markup(markup),
         _ => label.set_text(&text),
     }
+    label.connect_activate_link({
+        let actions = actions.clone();
+        move |label, url| follow_link(label, url, &actions)
+    });
     label.add_css_class("message-system");
     label.add_css_class("dim-label");
     label.upcast()
@@ -1704,6 +1722,20 @@ fn scaled_size(width: i32, height: i32) -> (i32, i32) {
         ((width as f64 * scale).round() as i32).max(1),
         ((height as f64 * scale).round() as i32).max(1),
     )
+}
+
+/// Decides what a clicked link means: a person, a message on this server, or
+/// an ordinary web page that the browser should have.
+fn follow_link(label: &gtk::Label, url: &str, actions: &MessageActions) -> glib::Propagation {
+    if let Some(handle) = url.strip_prefix(crate::markdown::MENTION_SCHEME) {
+        (actions.show_profile_by_handle)(handle.to_string(), label.clone().upcast());
+        return glib::Propagation::Stop;
+    }
+    if let Some(post_id) = permalink(url) {
+        (actions.open_permalink)(post_id);
+        return glib::Propagation::Stop;
+    }
+    glib::Propagation::Proceed
 }
 
 /// The post id in a Mattermost permalink, if that is what this is.

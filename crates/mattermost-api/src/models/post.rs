@@ -54,6 +54,11 @@ pub struct Post {
     pub has_reactions: bool,
     #[serde(default)]
     pub reply_count: i64,
+    /// Who has replied, sent with the root post itself under collapsed reply
+    /// threads. Transient — the server fills it in on the way out and it is
+    /// never stored — which is why it arrives before the thread is fetched.
+    #[serde(default)]
+    pub participants: Vec<Participant>,
     #[serde(default)]
     pub last_reply_at: Millis,
     #[serde(default)]
@@ -408,7 +413,7 @@ impl UserThread {
 
 /// Thread participants come back as full users on some servers and as bare
 /// `{id}` stubs on others, so accept either.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Participant {
     #[serde(default)]
     pub id: String,

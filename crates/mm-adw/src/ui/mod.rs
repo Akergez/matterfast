@@ -1138,6 +1138,10 @@ impl Ui {
                 let ui = self.clone();
                 Rc::new(move |post_id| ui.open_permalink(post_id))
             },
+            show_profile_by_handle: {
+                let ui = self.clone();
+                Rc::new(move |handle, anchor| ui.show_profile_by_handle(&handle, &anchor))
+            },
             show_profile: {
                 let ui = self.clone();
                 Rc::new(move |user_id, anchor| ui.show_profile(&user_id, &anchor))
@@ -4731,6 +4735,46 @@ impl Ui {
         self.overlay.set_collapsed(overlays);
     }
 
+    /// Opens the card for a mention, which names a handle rather than an id.
+    ///
+    /// The special ones — here, channel, all — address everybody and have no
+    /// account behind them, so there is nothing to open.
+    fn show_profile_by_handle(self: &Rc<Self>, handle: &str, anchor: &gtk::Widget) {
+        if matches!(handle, "here" | "channel" | "all") {
+            return;
+        }
+        let known = self
+            .state
+            .borrow()
+            .users
+            .values()
+            .find(|u| u.username == handle)
+            .map(|u| u.id.clone());
+        if let Some(user_id) = known {
+            self.show_profile(&user_id, anchor);
+            return;
+        }
+
+        // Somebody mentioned in a message we are reading but who has never
+        // posted here — worth one lookup rather than a dead link.
+        let client = self.state.borrow().client.clone();
+        let handles = vec![handle.to_string()];
+        let ui = self.clone();
+        let anchor = anchor.clone();
+        runtime::spawn(
+            async move { client.users_by_usernames(&handles).await },
+            move |result| {
+                let Ok(users) = result else { return };
+                let Some(user) = users.into_iter().next() else {
+                    return;
+                };
+                let id = user.id.clone();
+                ui.state.borrow_mut().users.insert(id.clone(), user);
+                ui.show_profile(&id, &anchor);
+            },
+        );
+    }
+
     fn show_profile(self: &Rc<Self>, user_id: &str, anchor: &gtk::Widget) {
         let popover = profile::popover(user_id, &self.state, &self.avatars, anchor, {
             let ui = self.clone();
@@ -5140,6 +5184,21 @@ impl Ui {
                 );
             }
         }
+
+        // Seed the panel from the root we already hold, so it draws the
+        // message immediately and fills in the replies when they arrive.
+        // Waiting for the round trip is what made opening a thread feel slow
+        // and, on a slow link, look like nothing had happened.
+        {
+            let mut st = self.state.borrow_mut();
+            if !st.threads.contains_key(&root_id) {
+                if let Some(root) = st.post(&root_id) {
+                    st.threads
+                        .insert(root_id.clone(), ChannelFeed::from_posts(vec![root]));
+                }
+            }
+        }
+        self.refresh_messages();
 
         // Always refetch. A thread we opened earlier may have grown, and the
         // root's reply count is not enough to tell which replies we hold.
