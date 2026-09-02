@@ -1578,6 +1578,19 @@ impl Client {
         .await
     }
 
+    /// `POST /api/v4/actions/dialogs/submit` — answers an interactive dialog.
+    ///
+    /// The `url` in the request is the integration's own callback, taken from
+    /// the `open_dialog` event: the server forwards the submission there
+    /// rather than interpreting it, which is why it has to be echoed back.
+    pub async fn submit_dialog(
+        &self,
+        request: &crate::models::dialog::SubmitDialogRequest,
+    ) -> Result<serde_json::Value> {
+        self.post_json("/actions/dialogs/submit", request, "submit dialog")
+            .await
+    }
+
     /// `POST /api/v4/commands/execute` — runs a slash command.
     ///
     /// The command's own output comes back as a post or an ephemeral message,

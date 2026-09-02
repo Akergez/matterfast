@@ -216,6 +216,8 @@ pub enum Event {
     AcknowledgementChanged {
         post_id: String,
     },
+    /// An integration wants a form filled in.
+    OpenDialog(Box<crate::models::dialog::OpenDialogRequest>),
     /// A message shown only to you and never stored — how slash commands and
     /// plugins answer.
     EphemeralMessage(Box<Post>),
@@ -274,6 +276,12 @@ impl Event {
             },
             "draft_deleted" => match extract(d, "draft") {
                 Some(draft) => Event::DraftDeleted(Box::new(draft)),
+                None => Event::other(frame),
+            },
+            // A plugin or slash command asking for a form. The dialog arrives
+            // as a JSON *string* inside the payload, not as an object.
+            "open_dialog" => match extract(d, "dialog") {
+                Some(request) => Event::OpenDialog(Box::new(request)),
                 None => Event::other(frame),
             },
             // A slash command's answer to you alone. It is a post, but one

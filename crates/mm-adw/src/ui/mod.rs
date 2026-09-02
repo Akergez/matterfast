@@ -13,6 +13,7 @@ mod autocomplete;
 mod call_dock;
 mod chat;
 mod dialogs;
+mod interactive;
 mod login;
 mod message;
 mod notify;
@@ -674,6 +675,7 @@ fn build_session_ui(
         thread_draft_pending: std::cell::Cell::new(false),
         loading_older: std::cell::Cell::new(false),
         snapshot_pending: std::cell::Cell::new(false),
+        store: RefCell::new(None),
         typing_sent_recently: std::cell::Cell::new(false),
         dock_in_chat: std::cell::Cell::new(false),
         dock_visible: std::cell::Cell::new(false),
@@ -904,6 +906,8 @@ struct Ui {
     thread_draft_pending: std::cell::Cell<bool>,
     loading_older: std::cell::Cell<bool>,
     snapshot_pending: std::cell::Cell<bool>,
+    /// The local message store, once it has opened.
+    store: RefCell<Option<crate::store::Store>>,
     typing_sent_recently: std::cell::Cell<bool>,
     dock_in_chat: std::cell::Cell<bool>,
     dock_visible: std::cell::Cell<bool>,
@@ -1099,42 +1103,48 @@ impl Ui {
 
     fn save_snapshot(&self) {
         let st = self.state.borrow();
-        let feeds = crate::cache::trim_feeds(
-            st.feeds
-                .iter()
-                .map(|(id, feed)| (id, feed.posts.as_slice())),
-            st.current_channel.as_deref(),
-        );
-        // Only the people who appear in what we kept — the whole user map is
-        // most of the file otherwise, and the rest is one request to refill.
-        let wanted: std::collections::HashSet<&str> = feeds
-            .values()
-            .flatten()
-            .map(|p| p.user_id.as_str())
-            .chain(
-                st.channels
-                    .values()
-                    .filter_map(|c| c.dm_teammate_id(&st.me.id)),
-            )
-            .collect();
-
         crate::cache::save(&crate::cache::Snapshot {
             server: st.client.site_url().to_string(),
-            me: Some(st.me.clone()),
-            teams: st.teams.clone(),
             current_team: st.current_team.clone(),
             current_channel: st.current_channel.clone(),
-            channels: st.channels.values().cloned().collect(),
-            memberships: st.memberships.values().cloned().collect(),
-            categories: st.categories.clone(),
-            users: st
-                .users
-                .values()
-                .filter(|u| wanted.contains(u.id.as_str()))
-                .cloned()
-                .collect(),
-            feeds,
         });
+        drop(st);
+
+        // The content goes to the store, which keeps every channel rather than
+        // the handful a single file could hold.
+        let Some(store) = self.store.borrow().clone() else {
+            return;
+        };
+        let (channels, members, users, posts) = {
+            let st = self.state.borrow();
+            let posts: Vec<Post> = st
+                .feeds
+                .values()
+                .flat_map(|feed| feed.posts.iter().cloned())
+                .collect();
+            (
+                st.channels.values().cloned().collect::<Vec<_>>(),
+                st.memberships.values().cloned().collect::<Vec<_>>(),
+                st.users.values().cloned().collect::<Vec<_>>(),
+                posts,
+            )
+        };
+        runtime::spawn(
+            async move {
+                // Failures here cost a slower next launch and nothing else, so
+                // they are logged rather than surfaced.
+                if let Err(e) = store.save_channels(channels, members).await {
+                    tracing::warn!(error = %e, "could not store the channel list");
+                }
+                if let Err(e) = store.save_users(users).await {
+                    tracing::warn!(error = %e, "could not store the users");
+                }
+                if let Err(e) = store.save_posts(posts).await {
+                    tracing::warn!(error = %e, "could not store the messages");
+                }
+            },
+            |_| {},
+        );
     }
 
     /// Sets your own presence, showing it immediately: the server echoes it
@@ -1972,9 +1982,13 @@ impl Ui {
         let fill_client = self.state.borrow().client.clone();
         runtime::spawn(
             async move {
-                let members = fill_client.channel_members(&channel_id, 0, 200).await?;
-                let ids: Vec<String> = members.iter().map(|m| m.user_id.clone()).collect();
-                let users = fill_client.users_by_ids(&ids).await?;
+                // Two requests rather than three: the users route can filter
+                // by channel directly, and the memberships are only needed to
+                // find out who the channel admins are.
+                let (members, users) = tokio::try_join!(
+                    fill_client.channel_members(&channel_id, 0, 200),
+                    fill_client.users_in_channel(&channel_id, 0, 200),
+                )?;
                 Ok::<_, mattermost_api::Error>((members, users))
             },
             move |result| {
@@ -2322,6 +2336,15 @@ impl Ui {
             let client = ui.state.borrow().client.clone();
             let server = client.site_url().to_string();
             crate::cache::clear();
+            let stored = server.clone();
+            runtime::spawn(
+                async move {
+                    if let Err(e) = crate::store::Store::clear(&stored).await {
+                        tracing::warn!(error = %e, "could not delete the local messages");
+                    }
+                },
+                |_| {},
+            );
             runtime::spawn(
                 async move {
                     // Revoke it server-side too, so a copy that leaked with
@@ -3536,6 +3559,102 @@ impl Ui {
             move |result| match result {
                 Ok(()) => ui.load_inbox(),
                 Err(e) => ui.toast(&format!("Could not change that: {e}")),
+            },
+        );
+    }
+
+    /// Shows an integration's form and posts the answers back.
+    ///
+    /// The server does not interpret the submission — it forwards it to the
+    /// integration's own URL, which is why that URL has to be echoed back
+    /// exactly as it arrived.
+    fn open_dialog(self: &Rc<Self>, request: mattermost_api::models::dialog::OpenDialogRequest) {
+        let (client, me, channel_id, team_id) = {
+            let st = self.state.borrow();
+            (
+                st.client.clone(),
+                st.me.id.clone(),
+                st.current_channel.clone().unwrap_or_default(),
+                st.current_team.clone().unwrap_or_default(),
+            )
+        };
+
+        let dialog = request.dialog.clone();
+        let submit_ctx = (
+            client.clone(),
+            request.url.clone(),
+            dialog.callback_id.clone(),
+            dialog.state.clone(),
+            me.clone(),
+            channel_id.clone(),
+            team_id.clone(),
+        );
+        let cancel_ctx = submit_ctx.clone();
+        let notify_on_cancel = dialog.notify_on_cancel;
+        let ui = self.clone();
+        let cancel_ui = self.clone();
+
+        interactive::present(
+            &self.window,
+            &dialog,
+            move |submission| {
+                let (client, url, callback_id, state, user_id, channel_id, team_id) =
+                    submit_ctx.clone();
+                let ui = ui.clone();
+                runtime::spawn(
+                    async move {
+                        let request = mattermost_api::models::dialog::SubmitDialogRequest {
+                            url,
+                            callback_id,
+                            state,
+                            user_id,
+                            channel_id,
+                            team_id,
+                            submission,
+                            cancelled: false,
+                        };
+                        client.submit_dialog(&request).await
+                    },
+                    move |result| match result {
+                        // Errors come back inside a 200 as well, since the
+                        // integration is what validated the form.
+                        Ok(response) => {
+                            if let Some(error) = response
+                                .get("error")
+                                .and_then(|v| v.as_str())
+                                .filter(|e| !e.is_empty())
+                            {
+                                ui.toast(error);
+                            }
+                        }
+                        Err(e) => ui.toast(&format!("That form was not accepted: {e}")),
+                    },
+                );
+            },
+            move || {
+                // Only when the dialog asked to be told; most do not care.
+                if !notify_on_cancel {
+                    return;
+                }
+                let (client, url, callback_id, state, user_id, channel_id, team_id) =
+                    cancel_ctx.clone();
+                let _ = &cancel_ui;
+                runtime::spawn(
+                    async move {
+                        let request = mattermost_api::models::dialog::SubmitDialogRequest {
+                            url,
+                            callback_id,
+                            state,
+                            user_id,
+                            channel_id,
+                            team_id,
+                            submission: Default::default(),
+                            cancelled: true,
+                        };
+                        client.submit_dialog(&request).await
+                    },
+                    |_| {},
+                );
             },
         );
     }
@@ -5355,6 +5474,7 @@ impl Ui {
         let mut reload_sidebar = false;
         let mut reload_teams = false;
         let mut reload_inbox = false;
+        let mut open_dialog: Option<mattermost_api::models::dialog::OpenDialogRequest> = None;
         let mut refetch_post: Option<String> = None;
         let mut forget_avatar: Option<String> = None;
         let mut notify_about: Option<mattermost_api::ws::Posted> = None;
@@ -5426,6 +5546,9 @@ impl Ui {
                 // Ephemeral posts are shown like any other, but the server
                 // will never mention them again — no edit, no delete, and
                 // they are gone on the next fetch. That is the intent.
+                // A plugin or slash command asking for a form. Shown outside
+                // the state borrow, since it needs the window.
+                Event::OpenDialog(request) => open_dialog = Some(*request),
                 Event::ThreadsChanged => reload_inbox = true,
                 // Nothing on screen depends on these continuously; they matter
                 // when one of those windows is open, and it refills on open.
@@ -5598,6 +5721,9 @@ impl Ui {
         if reload_inbox {
             self.load_inbox();
         }
+        if let Some(request) = open_dialog {
+            self.open_dialog(request);
+        }
         if let Some(post_id) = refetch_post {
             // The event says which post changed but not to what, and
             // acknowledgements live in the post's metadata.
@@ -5765,30 +5891,76 @@ fn bootstrap(ui: Rc<Ui>) {
     // Draw last time's picture first. Everything here is replaced the moment
     // the real data lands; it is on screen so that launching the app shows
     // your channels instead of an empty window for the length of a round trip.
-    if let Some(snapshot) = crate::cache::load(client.site_url()) {
-        {
-            let mut st = ui.state.borrow_mut();
-            if let Some(me) = snapshot.me {
-                st.me = me;
-            }
-            st.teams = snapshot.teams;
-            st.current_team = snapshot.current_team;
-            st.current_channel = snapshot.current_channel;
-            for channel in snapshot.channels {
-                st.channels.insert(channel.id.clone(), channel);
-            }
-            for member in snapshot.memberships {
-                st.memberships.insert(member.channel_id.clone(), member);
-            }
-            st.categories = snapshot.categories;
-            for user in snapshot.users {
-                st.users.insert(user.id.clone(), user);
-            }
-            for (channel_id, posts) in snapshot.feeds {
-                st.feeds.insert(channel_id, ChannelFeed::from_posts(posts));
-            }
-        }
-        ui.refresh_all();
+    {
+        let pointer = crate::cache::load(client.site_url());
+        let server = client.site_url().to_string();
+        let ui = ui.clone();
+        runtime::spawn(
+            async move {
+                let store = crate::store::Store::open(&server).await.ok()?;
+                let (channels, members) = store.channels().await.ok()?;
+                let users = store.users().await.ok()?;
+                Some((store, channels, members, users))
+            },
+            move |loaded| {
+                let Some((store, channels, members, users)) = loaded else {
+                    return;
+                };
+                *ui.store.borrow_mut() = Some(store.clone());
+                {
+                    let mut st = ui.state.borrow_mut();
+                    for channel in channels {
+                        st.channels.entry(channel.id.clone()).or_insert(channel);
+                    }
+                    for member in members {
+                        st.memberships
+                            .entry(member.channel_id.clone())
+                            .or_insert(member);
+                    }
+                    for user in users {
+                        st.users.entry(user.id.clone()).or_insert(user);
+                    }
+                    if let Some(pointer) = &pointer {
+                        // Only if the live data has not already answered.
+                        if st.current_team.is_none() {
+                            st.current_team = pointer.current_team.clone();
+                        }
+                    }
+                }
+                ui.refresh_all();
+
+                // And the messages for wherever we were, so the conversation
+                // is there too rather than just the list around it.
+                if let Some(channel_id) = pointer
+                    .and_then(|p| p.current_channel)
+                    .filter(|id| ui.state.borrow().current_channel.as_deref() != Some(id.as_str()))
+                {
+                    let ui = ui.clone();
+                    runtime::spawn(
+                        async move {
+                            let posts = store.posts(&channel_id, INITIAL_POSTS as usize).await;
+                            (channel_id, posts)
+                        },
+                        move |(channel_id, posts)| {
+                            let Ok(posts) = posts else { return };
+                            if posts.is_empty() {
+                                return;
+                            }
+                            {
+                                let mut st = ui.state.borrow_mut();
+                                st.feeds
+                                    .entry(channel_id.clone())
+                                    .or_insert_with(|| ChannelFeed::from_posts(posts));
+                                if st.current_channel.is_none() {
+                                    st.current_channel = Some(channel_id);
+                                }
+                            }
+                            ui.refresh_messages();
+                        },
+                    );
+                }
+            },
+        );
     }
 
     runtime::spawn(

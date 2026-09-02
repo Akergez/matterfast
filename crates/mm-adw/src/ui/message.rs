@@ -4,6 +4,7 @@
 //! a "N replies" footer, because you are already in the thread), so the
 //! rendering lives here and the differences are parameters.
 
+use std::ops::Range;
 use std::rc::Rc;
 
 use adw::prelude::*;
@@ -170,7 +171,7 @@ pub fn build(
     }
 
     for block in crate::markdown::parse(&post.message) {
-        body.append(&render_block(block));
+        body.append(&render_block(block, avatars));
     }
 
     if post.is_edited() {
@@ -182,7 +183,7 @@ pub fn build(
     // A webhook or plugin card. These usually come with an empty message, so
     // ignoring them renders nothing at all for the message.
     for card in post.attachments() {
-        body.append(&attachment_card(&card));
+        body.append(&attachment_card(&card, avatars));
     }
 
     for file in post.files() {
@@ -320,7 +321,10 @@ fn acknowledgement(post: &Post, state: &SharedState, actions: &MessageActions) -
 
 /// One rich card: a coloured stripe, a title that may be a link, some text,
 /// and its fields laid out as label-and-value rows.
-fn attachment_card(card: &mattermost_api::models::MessageAttachment) -> gtk::Widget {
+fn attachment_card(
+    card: &mattermost_api::models::MessageAttachment,
+    avatars: &Avatars,
+) -> gtk::Widget {
     let content = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(2)
@@ -362,7 +366,7 @@ fn attachment_card(card: &mattermost_api::models::MessageAttachment) -> gtk::Wid
     }
     if !card.text.is_empty() {
         for block in crate::markdown::parse(&card.text) {
-            content.append(&render_block(block));
+            content.append(&render_block(block, avatars));
         }
     }
 
@@ -496,17 +500,21 @@ fn emoji_widget(name: &str, avatars: &Avatars) -> gtk::Widget {
     match emoji::resolve(name) {
         emoji::Rendered::Unicode(glyph) => gtk::Label::new(Some(glyph)).upcast(),
         emoji::Rendered::Custom => match avatars.custom_emoji(name) {
-            Some(texture) => {
-                let picture = gtk::Picture::for_paintable(&texture);
-                picture.set_content_fit(gtk::ContentFit::Contain);
-                picture.set_width_request(18);
-                picture.set_height_request(18);
-                picture.set_tooltip_text(Some(&format!(":{name}:")));
-                picture.upcast()
-            }
+            Some(texture) => custom_emoji_image(&texture, name).upcast(),
             None => gtk::Label::new(Some(&format!(":{name}:"))).upcast(),
         },
     }
+}
+
+/// A custom emoji's image at text size, for a chip or for the middle of a
+/// sentence. A `GtkImage` rather than a `GtkPicture` because `pixel-size` is a
+/// real size and not merely a minimum: the uploads are up to 128px square, and
+/// a picture would ask for all of it.
+fn custom_emoji_image(texture: &gtk::gdk::Texture, name: &str) -> gtk::Image {
+    let image = gtk::Image::from_paintable(Some(texture));
+    image.set_pixel_size(18);
+    image.set_tooltip_text(Some(&format!(":{name}:")));
+    image
 }
 
 /// The quoted message behind a permalink, as a compact card.
@@ -572,7 +580,7 @@ fn permalink_preview(
     card.add_css_class("permalink-card");
     card.append(&header);
     for block in crate::markdown::parse(&quoted.message) {
-        card.append(&render_block(block));
+        card.append(&render_block(block, avatars));
     }
 
     // Clicking it goes there, which is what the link would have done.
@@ -736,7 +744,10 @@ fn open_image(state: &SharedState, file: &mattermost_api::models::FileInfo, anch
 /// a monospaced label that must *not* be told to read markup — its text is
 /// literal, and code is exactly the content most likely to contain angle
 /// brackets.
-fn render_block(block: crate::markdown::Block) -> gtk::Widget {
+///
+/// The exception is prose with a custom emoji in it, which no label can draw:
+/// that one block goes through [`rich_text`] instead.
+fn render_block(block: crate::markdown::Block, avatars: &Avatars) -> gtk::Widget {
     let label = gtk::Label::builder()
         .xalign(0.0)
         .wrap(true)
@@ -749,6 +760,17 @@ fn render_block(block: crate::markdown::Block) -> gtk::Widget {
 
     match block {
         crate::markdown::Block::Text(markup) => {
+            // Asking for the picture also starts the fetch when it is missing,
+            // and `Avatars::connect_loaded` redraws the conversation once it
+            // lands — so an emoji that is not here yet simply stays a
+            // `:shortcode:` in the label until the next pass.
+            let emoji: Vec<(Range<usize>, gtk::gdk::Texture)> = custom_shortcodes(&markup)
+                .into_iter()
+                .filter_map(|(range, name)| Some((range, avatars.custom_emoji(name)?)))
+                .collect();
+            if !emoji.is_empty() {
+                return rich_text(&markup, &emoji);
+            }
             label.set_markup(&markup);
             label.add_css_class("message-body");
             label.upcast()
@@ -769,6 +791,223 @@ fn render_block(block: crate::markdown::Block) -> gtk::Widget {
             scroller.upcast()
         }
     }
+}
+
+/// Marks put into the text so the buffer can be found again after the markup
+/// has been parsed: where a picture goes, and where a link starts and ends.
+/// Byte offsets into the markup do not survive parsing — entities collapse and
+/// tags disappear — so the positions travel as characters instead.
+///
+/// All three are stripped out of the message first, so a mark in the buffer can
+/// only ever be one this put there.
+const EMOJI_MARK: char = '\u{FFFC}'; // OBJECT REPLACEMENT CHARACTER
+const LINK_OPEN: char = '\u{FFF9}';
+const LINK_CLOSE: char = '\u{FFFA}';
+
+/// Prose with a custom emoji in it, as a `GtkTextView` with the pictures
+/// anchored between the words.
+///
+/// A `GtkLabel` cannot hold a widget, so a block with a custom emoji has to be
+/// drawn by something that can, and `GtkTextView` is the only such thing that
+/// still wraps and still selects. It is *only* used for those blocks: the label
+/// keeps link activation, keyboard-free selection and a single Pango layout for
+/// free, and nearly every message is a block without a custom emoji in it, so
+/// making all of them pay for this would be a lot of widget for a rare case.
+///
+/// What it costs, and what is paid back here: a text view has no idea what a
+/// link is, so the `<a href>` the markup carries is turned into a styled span
+/// plus a tag, and a click on that tag opens the URL.
+fn rich_text(markup: &str, emoji: &[(Range<usize>, gtk::gdk::Texture)]) -> gtk::Widget {
+    // 1. Rewrite the markup: pictures and link ends become marks, and the links
+    //    keep their look through a span the text view *can* render.
+    let mut out = String::with_capacity(markup.len());
+    let mut links: Vec<String> = Vec::new();
+    let mut i = 0;
+    let mut next = 0;
+    while let Some(rest) = markup.get(i..).filter(|rest| !rest.is_empty()) {
+        if let Some((range, _)) = emoji.get(next).filter(|(r, _)| r.start == i) {
+            out.push(EMOJI_MARK);
+            i = range.end;
+            next += 1;
+        } else if let Some((url, _)) = rest
+            .strip_prefix("<a href=\"")
+            .and_then(|after| after.split_once("\">"))
+        {
+            i += "<a href=\"".len() + url.len() + "\">".len();
+            links.push(unescape(url));
+            out.push_str("<span foreground=\"#3584e4\" underline=\"single\">");
+            out.push(LINK_OPEN);
+        } else if rest.starts_with("</a>") {
+            i += "</a>".len();
+            out.push(LINK_CLOSE);
+            out.push_str("</span>");
+        } else {
+            let ch = rest.chars().next().unwrap_or_default();
+            i += ch.len_utf8();
+            if !matches!(ch, EMOJI_MARK | LINK_OPEN | LINK_CLOSE) {
+                out.push(ch);
+            }
+        }
+    }
+
+    let view = gtk::TextView::builder()
+        .editable(false)
+        .cursor_visible(false)
+        // A selectable widget grabs the whole block when it takes focus, and a
+        // conversation full of tab stops is not navigation anyone wants.
+        .can_focus(false)
+        .wrap_mode(gtk::WrapMode::WordChar)
+        .build();
+    view.add_css_class("message-body");
+    // Transparent background and inherited colour: without it the block reads
+    // as a pale slab of "entry" in the middle of the conversation.
+    view.add_css_class("inline");
+
+    let buffer = view.buffer();
+    buffer.insert_markup(&mut buffer.start_iter(), &out);
+    // Markup the parser rejects is inserted as nothing at all, and a message
+    // that disappears is worse than one that lost its styling.
+    if buffer.char_count() == 0 && !out.is_empty() {
+        buffer.set_text(&out);
+    }
+
+    // 2. Swap each mark for its picture. Searching from the start every time is
+    //    fine because the mark just consumed is gone by the next pass.
+    for (range, texture) in emoji {
+        let Some((mut start, mut end)) = buffer.start_iter().forward_search(
+            &EMOJI_MARK.to_string(),
+            gtk::TextSearchFlags::empty(),
+            None,
+        ) else {
+            break;
+        };
+        buffer.delete(&mut start, &mut end);
+        let anchor = buffer.create_child_anchor(&mut start);
+        // Anchored children sit on the baseline, which is as close to the text
+        // as a text view will place a widget.
+        let name = markup[range.clone()].trim_matches(':');
+        view.add_child_at_anchor(&custom_emoji_image(texture, name), &anchor);
+    }
+
+    // 3. And each link's marks for a tag spanning what was between them.
+    let mut link_tags: Vec<(gtk::TextTag, String)> = Vec::new();
+    for url in links {
+        let find = |from: gtk::TextIter, mark: char| {
+            from.forward_search(&mark.to_string(), gtk::TextSearchFlags::empty(), None)
+        };
+        let Some((mut open, mut open_end)) = find(buffer.start_iter(), LINK_OPEN) else {
+            break;
+        };
+        buffer.delete(&mut open, &mut open_end);
+        let start = open.offset();
+        let Some((mut close, mut close_end)) = find(open, LINK_CLOSE) else {
+            break;
+        };
+        buffer.delete(&mut close, &mut close_end);
+        // Anonymous: the tag is only a way to ask "is this character a link?",
+        // and two identical URLs in one message must not collide over a name.
+        let Some(tag) = buffer.create_tag(None, &[]) else {
+            break;
+        };
+        buffer.apply_tag(&tag, &buffer.iter_at_offset(start), &close);
+        link_tags.push((tag, url));
+    }
+
+    if !link_tags.is_empty() {
+        let click = gtk::GestureClick::new();
+        // Ahead of the text view's own selection handling, which claims the
+        // sequence on a drag and would otherwise swallow the release.
+        click.set_propagation_phase(gtk::PropagationPhase::Capture);
+        click.connect_released(move |gesture, presses, x, y| {
+            let Some(view) = gesture.widget().and_downcast::<gtk::TextView>() else {
+                return;
+            };
+            // A release that leaves text selected was a drag over the link, not
+            // a press on it.
+            if presses != 1 || view.buffer().has_selection() {
+                return;
+            }
+            let (x, y) =
+                view.window_to_buffer_coords(gtk::TextWindowType::Widget, x as i32, y as i32);
+            let Some(iter) = view.iter_at_location(x, y) else {
+                return;
+            };
+            if let Some((_, url)) = link_tags.iter().find(|(tag, _)| iter.has_tag(tag)) {
+                let _ = gtk::gio::AppInfo::launch_default_for_uri(
+                    url,
+                    None::<&gtk::gio::AppLaunchContext>,
+                );
+            }
+        });
+        view.add_controller(click);
+    }
+
+    view.upcast()
+}
+
+/// Every `:shortcode:` in a block of Pango markup that has no Unicode glyph —
+/// the ones a label cannot draw — as a byte range and the name inside it.
+///
+/// The rules are `markdown::inline`'s, because it is that function's output
+/// being read back: a name is alphanumeric with `_+-`, so `10:30` and `4:3` are
+/// not shortcodes and an unclosed `:foo` is not one either. What is new is the
+/// markup itself — a `href` full of colons, and inline code, which is someone
+/// showing the shortcode rather than using it.
+fn custom_shortcodes(markup: &str) -> Vec<(Range<usize>, &str)> {
+    let bytes = markup.as_bytes();
+    let mut found = Vec::new();
+    let mut literal = 0usize;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'<' => {
+                let tag = &markup[i + 1..];
+                let end = tag.find('>').map_or(bytes.len(), |e| i + e + 2);
+                if tag.starts_with("tt>") {
+                    literal += 1;
+                } else if tag.starts_with("/tt>") {
+                    literal = literal.saturating_sub(1);
+                }
+                i = end;
+            }
+            b':' => {
+                let rest = &markup[i + 1..];
+                match rest
+                    .find(':')
+                    .filter(|end| is_shortcode_name(&rest[..*end]))
+                {
+                    Some(end) => {
+                        let name = &rest[..end];
+                        if literal == 0 && emoji::resolve(name) == emoji::Rendered::Custom {
+                            found.push((i..i + end + 2, name));
+                        }
+                        i += end + 2;
+                    }
+                    None => i += 1,
+                }
+            }
+            _ => i += 1,
+        }
+    }
+    found
+}
+
+fn is_shortcode_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '+' | '-'))
+}
+
+/// Undoes Pango escaping, so the browser is handed the URL that was written.
+/// `&amp;` last, or `&amp;lt;` would come back as `<`.
+fn unescape(markup: &str) -> String {
+    markup
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
 }
 
 fn hover_actions(
@@ -1178,5 +1417,44 @@ pub fn format_relative(millis: Millis) -> String {
             .format("%e %b")
             .map(|s| s.trim().to_string())
             .unwrap_or_default(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn names(markup: &str) -> Vec<&str> {
+        custom_shortcodes(markup)
+            .into_iter()
+            .map(|(_, name)| name)
+            .collect()
+    }
+
+    #[test]
+    fn a_custom_shortcode_is_found_where_it_stands() {
+        let markup = "ship it <b>:shipit:</b> now";
+        assert_eq!(names(markup), ["shipit"]);
+        let (range, _) = custom_shortcodes(markup).remove(0);
+        assert_eq!(&markup[range], ":shipit:");
+    }
+
+    #[test]
+    fn colons_that_are_not_shortcodes_are_not_pictures() {
+        assert!(names("at 10:30 sharp").is_empty());
+        assert!(names("ratio 4:3").is_empty());
+        // Already a glyph by the time this runs: Pango's job, not a picture.
+        assert!(names("nice :tada:").is_empty());
+        assert!(names("what :foo").is_empty());
+    }
+
+    #[test]
+    fn markup_is_read_as_markup_and_not_as_prose() {
+        // A URL is full of colons and none of them are emoji.
+        assert!(names("<a href=\"https://x.test/a:shipit:b\">link</a>").is_empty());
+        // Inline code is someone showing the shortcode, not using it.
+        assert!(names("<tt><span background=\"#00000018\"> :shipit: </span></tt>").is_empty());
+        // The visible text of a link still counts.
+        assert_eq!(names("<a href=\"https://x.test\">:shipit:</a>"), ["shipit"]);
     }
 }

@@ -11,7 +11,7 @@
 //! `message.Add("dialog", string(jsonRequest))`, so `data.dialog` is a *string*
 //! holding a JSON-encoded [`OpenDialogRequest`] — the whole envelope, trigger
 //! id and integration URL included, not just the [`Dialog`]. The webapp parses
-//! it the same way (`JSON.parse(msg.data.dialog)` in `websocket_actions.ts`).
+//! it the same way (`JSON.parse(msg.data.dialog)`).
 //! [`OpenDialogRequest::from_ws_data`] does that second decode.
 
 use std::collections::HashMap;
@@ -21,12 +21,12 @@ use serde::{Deserialize, Deserializer, Serialize};
 /// The `open_dialog` websocket payload, once the inner string is decoded.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct OpenDialogRequest {
-    /// Signed and re-issued by the server; echo it back nowhere — it is only
-    /// used to match the event to the command the user just ran.
+    /// Re-issued by the server for this client. Nothing needs to send it back;
+    /// it only ties the event to the command the user just ran.
     #[serde(default)]
     pub trigger_id: String,
     /// The integration's own endpoint. Send it back as
-    /// [`SubmitDialogRequest::url`]; the API refuses a submission without it.
+    /// [`SubmitDialogRequest::url`]; the API rejects a submission without it.
     #[serde(default)]
     pub url: String,
     #[serde(default)]
@@ -109,14 +109,14 @@ pub struct DialogElement {
     pub max_length: i64,
     /// `""` (use [`Self::options`]) | `users` | `channels` | `dynamic`.
     /// Anything but `""` means the options live on the server, not in the
-    /// payload.
+    /// payload, and the client has to search for them.
     #[serde(default)]
     pub data_source: String,
     /// Where a `dynamic` data source is looked up. Unused otherwise.
     #[serde(default)]
     pub data_source_url: String,
     #[serde(default, deserialize_with = "null_as_empty")]
-    pub options: Vec<DialogOption>,
+    pub options: Vec<PostActionOptions>,
     /// A `select` that takes several values; submitted comma-separated.
     #[serde(default)]
     pub multiselect: bool,
@@ -124,7 +124,7 @@ pub struct DialogElement {
 
 /// `model.PostActionOptions` — one entry of a `select` or `radio`.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
-pub struct DialogOption {
+pub struct PostActionOptions {
     /// What the user reads.
     pub text: String,
     /// What gets submitted.
@@ -132,26 +132,27 @@ pub struct DialogOption {
 }
 
 /// `POST /api/v4/actions/dialogs/submit`.
-///
-/// `user_id` and `team_id` are deliberately absent: the API handler overwrites
-/// both from the session and from the channel it loads, so sending them is at
-/// best noise.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct SubmitDialogRequest {
     /// [`OpenDialogRequest::url`]. Required; the API rejects an empty one.
     pub url: String,
     pub callback_id: String,
     pub state: String,
+    /// Overwritten by the API from the session before the integration sees it,
+    /// so it is informational at best. Sent because the Go struct has it.
+    pub user_id: String,
+    /// The only id the API actually reads: it loads the channel from this and
+    /// checks read permission on it.
     pub channel_id: String,
-    /// Values keyed by [`DialogElement::name`]. The server types this as
-    /// `map[string]any`, but every element serialises to a string (`"true"` /
-    /// `"false"` for `bool`, comma-joined for a multiselect).
-    pub submission: HashMap<String, String>,
+    /// Also overwritten — from the loaded channel, deliberately not trusted
+    /// from the client, and empty for a DM or group message.
+    pub team_id: String,
+    /// Values keyed by [`DialogElement::name`]. `map[string]any` on the Go
+    /// side, so a `bool` element submits a real JSON boolean while everything
+    /// else submits a string.
+    pub submission: HashMap<String, serde_json::Value>,
     /// Set when the user dismissed a dialog with `notify_on_cancel`.
     pub cancelled: bool,
-    /// Empty is fine — the server fills in `"dialog_submission"`.
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub r#type: String,
 }
 
 /// What the integration answers with, relayed verbatim by the API.
@@ -194,9 +195,8 @@ where
 mod tests {
     use super::*;
 
-    /// The example from `docs/develop/integrate/plugins/interactive-dialogs`,
-    /// trimmed to the element types we render, wrapped the way the websocket
-    /// actually delivers it: the dialog is a *string* inside `data`.
+    /// The dialog from the server's own integration tests, wrapped the way the
+    /// websocket actually delivers it: the request is a *string* inside `data`.
     const OPEN_DIALOG_EVENT: &str = r#"{
       "event": "open_dialog",
       "data": {
@@ -250,20 +250,25 @@ mod tests {
     }
 
     #[test]
-    fn submission_serialises_flat_strings() {
+    fn submission_keeps_the_json_types_the_server_expects() {
         let req = SubmitDialogRequest {
             url: "http://localhost:5000/dialog_submit".into(),
             callback_id: "somecallbackid".into(),
             state: "somestate".into(),
             channel_id: "channelid".into(),
-            submission: HashMap::from([("boolean_input".to_string(), "true".to_string())]),
+            submission: HashMap::from([
+                ("boolean_input".to_string(), serde_json::Value::Bool(true)),
+                ("realname".to_string(), "text".into()),
+            ]),
             ..Default::default()
         };
-        let json: serde_json::Value = serde_json::to_value(&req).unwrap();
-        assert_eq!(json["submission"]["boolean_input"], "true");
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["submission"]["boolean_input"], true);
+        assert_eq!(json["submission"]["realname"], "text");
         assert_eq!(json["cancelled"], false);
-        // Left out so the server applies "dialog_submission".
-        assert!(json.get("type").is_none());
+        // Sent even when empty; the API fills both in from the session.
+        assert_eq!(json["user_id"], "");
+        assert_eq!(json["team_id"], "");
     }
 
     #[test]

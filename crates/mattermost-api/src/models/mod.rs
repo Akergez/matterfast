@@ -10,6 +10,7 @@
 //!   `map[string]string` or `map[string]any` and is modelled as such.
 
 pub mod channel;
+pub mod dialog;
 pub mod draft;
 pub mod file;
 pub mod post;

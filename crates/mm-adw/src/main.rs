@@ -18,6 +18,7 @@ mod markdown;
 mod runtime;
 mod session;
 mod state;
+mod store;
 mod ui;
 mod video;
 
