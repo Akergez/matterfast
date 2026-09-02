@@ -30,6 +30,9 @@ pub struct ChatView {
     loading: Rc<RefCell<bool>>,
     connection: adw::Banner,
     typing: gtk::Label,
+    edit_banner: adw::Banner,
+    /// The post being edited, when the composer is in edit mode.
+    editing: Rc<RefCell<Option<String>>>,
     /// Set while a draft is being put back, so the change it causes is not
     /// mistaken for the user typing.
     restoring: Rc<RefCell<bool>>,
@@ -233,6 +236,25 @@ impl ChatView {
             }
         });
 
+        let editing: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+
+        // Editing is a mode, and a mode you cannot see is a trap: the banner
+        // says so and offers the way out.
+        let edit_banner = adw::Banner::builder()
+            .title("Editing a message")
+            .button_label("Cancel")
+            .revealed(false)
+            .build();
+        edit_banner.connect_button_clicked({
+            let editing = editing.clone();
+            let entry = entry.clone();
+            move |banner| {
+                *editing.borrow_mut() = None;
+                banner.set_revealed(false);
+                entry.buffer().set_text("");
+            }
+        });
+
         // Sits between the feed and the composer, reserving no space when
         // empty: a line that appears and disappears must not shove the
         // conversation up and down.
@@ -255,6 +277,7 @@ impl ChatView {
         conversation.append(&connection);
         conversation.append(&call_banner);
         conversation.append(&scroller);
+        conversation.append(&edit_banner);
         conversation.append(&typing);
         conversation.append(&composer);
 
@@ -303,6 +326,8 @@ impl ChatView {
             join_button,
             stack,
             typing,
+            edit_banner,
+            editing,
             restoring,
             loading: Rc::new(RefCell::new(false)),
             connection,
@@ -337,6 +362,30 @@ impl ChatView {
             }
             None => self.connection.set_revealed(false),
         }
+    }
+
+    /// Puts the composer into edit mode for an existing post.
+    ///
+    /// Editing reuses the composer rather than opening a second one: there is
+    /// only ever one message being written at a time, and a separate box would
+    /// be a second place to lose text in.
+    pub fn begin_edit(&self, post_id: &str, text: &str) {
+        *self.editing.borrow_mut() = Some(post_id.to_string());
+        self.set_composer_text(text);
+        self.edit_banner.set_revealed(true);
+        self.entry.grab_focus();
+    }
+
+    /// Leaves edit mode, clearing the composer.
+    pub fn end_edit(&self) {
+        *self.editing.borrow_mut() = None;
+        self.edit_banner.set_revealed(false);
+        self.set_composer_text("");
+    }
+
+    /// The post being edited, if any.
+    pub fn editing(&self) -> Option<String> {
+        self.editing.borrow().clone()
     }
 
     /// What is in the composer right now.

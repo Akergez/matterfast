@@ -709,6 +709,24 @@ impl Client {
         self.delete_ok(&format!("/posts/{post_id}")).await
     }
 
+    /// `POST /api/v4/users/{user}/posts/{post}/set_unread`.
+    ///
+    /// The body flag is not optional in practice: without it the server marks
+    /// threads by the old, pre-CRT rules and the unread counts come back wrong.
+    pub async fn set_post_unread(&self, user_id: &str, post_id: &str, crt: bool) -> Result<()> {
+        let mut body = std::collections::HashMap::new();
+        body.insert("collapsed_threads_supported", crt);
+        self.send(
+            self.request(
+                Method::POST,
+                &self.api(&format!("/users/{user_id}/posts/{post_id}/set_unread")),
+            )
+            .json(&body),
+        )
+        .await?;
+        Ok(())
+    }
+
     pub async fn pin_post(&self, post_id: &str, pinned: bool) -> Result<()> {
         let path = if pinned { "pin" } else { "unpin" };
         self.send(self.request(Method::POST, &self.api(&format!("/posts/{post_id}/{path}"))))
@@ -955,6 +973,32 @@ impl Client {
         )
         .await?;
         Ok(())
+    }
+
+    /// `POST /api/v4/users/{user}/preferences/delete`.
+    ///
+    /// Deleting is a POST with the preferences to remove, not a DELETE — only
+    /// `category` and `name` are read, so `value` can be anything.
+    pub async fn delete_preferences(&self, user_id: &str, prefs: &[Preference]) -> Result<()> {
+        self.send(
+            self.request(
+                Method::POST,
+                &self.api(&format!("/users/{user_id}/preferences/delete")),
+            )
+            .json(&prefs),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// `GET /api/v4/users/{user}/posts/flagged` — the posts you saved.
+    pub async fn flagged_posts(&self, user_id: &str, per_page: u32) -> Result<PostList> {
+        self.get_q(
+            &format!("/users/{user_id}/posts/flagged"),
+            &[("per_page", per_page.min(PER_PAGE_MAX).to_string())],
+            "flagged posts",
+        )
+        .await
     }
 
     // ------------------------------------------------------------------- emoji

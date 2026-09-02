@@ -11,7 +11,7 @@
 //!   webapp, `PostsInChannel` in mobile) — see the note on [`ChannelFeed`].
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -142,6 +142,9 @@ pub struct AppState {
     /// Unsent text, keyed by channel id. Mirrors what the server has, so the
     /// same half-written message is waiting on every device.
     pub drafts: HashMap<String, String>,
+    /// Posts you saved. Mattermost has no "saved" flag on a post — it is a
+    /// preference in the `flagged_post` category, one row per post id.
+    pub saved_posts: HashSet<String>,
     /// Unread reaction notices, from the reactions-notify plugin. Zero when
     /// the plugin is not installed, which is indistinguishable from "nothing
     /// new" and needs no special case.
@@ -205,6 +208,7 @@ impl AppState {
             call: None,
             drafts: HashMap::new(),
             drafts_synced: true,
+            saved_posts: HashSet::new(),
             reaction_unread: 0,
             typing: HashMap::new(),
         }
@@ -232,6 +236,21 @@ impl AppState {
         let mut live: Vec<(&String, &Instant)> = people.iter().collect();
         live.sort_by_key(|(_, at)| **at);
         live.into_iter().map(|(id, _)| id.clone()).collect()
+    }
+
+    /// Finds a post anywhere we are holding one — channel feeds first, then
+    /// threads, since a reply only lives in the latter under CRT.
+    pub fn post(&self, post_id: &str) -> Option<Post> {
+        self.feeds
+            .values()
+            .chain(self.threads.values())
+            .find_map(|feed| feed.posts.iter().find(|p| p.id == post_id).cloned())
+    }
+
+    /// The current team's URL name, for building permalinks.
+    pub fn current_team_name(&self) -> Option<String> {
+        let id = self.current_team.as_ref()?;
+        self.teams.iter().find(|t| &t.id == id).map(|t| t.name.clone())
     }
 
     pub fn channel(&self, id: &str) -> Option<&Channel> {

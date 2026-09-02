@@ -37,7 +37,7 @@ use crate::state::{ActiveCall, AppState, ChannelFeed, SharedState};
 use crate::video;
 use call_dock::CallDock;
 use chat::ChatView;
-use message::MessageActions;
+use message::{MessageActions, PostAction};
 use rhs::{PanelMode, RightPanel};
 use sidebar::ChannelSidebar;
 
@@ -81,6 +81,8 @@ enum Action {
     OpenCallChannel,
     /// The composer's contents changed; the flag says whether it is non-empty.
     ComposerChanged(bool),
+    /// Something from a message's own menu.
+    Post(String, PostAction),
 }
 
 pub fn build_window(app: &adw::Application) {
@@ -594,6 +596,10 @@ impl Ui {
                 let ui = self.clone();
                 Rc::new(move |post, emoji| ui.dispatch(Action::ToggleReaction(post, emoji)))
             },
+            post_action: {
+                let ui = self.clone();
+                Rc::new(move |post, what| ui.dispatch(Action::Post(post, what)))
+            },
             show_profile: {
                 let ui = self.clone();
                 Rc::new(move |user_id, anchor| ui.show_profile(&user_id, &anchor))
@@ -673,6 +679,180 @@ impl Ui {
             }
             other => tracing::debug!(event = other, "unhandled reactions-notify event"),
         }
+    }
+
+    /// Applies an edit. An emptied message means delete, which is what the
+    /// other clients do and what the server expects.
+    fn submit_edit(self: &Rc<Self>, post_id: String, text: String) {
+        self.chat.end_edit();
+        if text.trim().is_empty() {
+            self.confirm_delete(post_id);
+            return;
+        }
+        let client = self.state.borrow().client.clone();
+        let ui = self.clone();
+        runtime::spawn(
+            async move { client.update_post(&post_id, &text).await },
+            move |result| {
+                // Success arrives as post_edited over the socket, so only the
+                // failure needs saying.
+                if let Err(e) = result {
+                    ui.toast(&format!("Could not save the edit: {e}"));
+                }
+            },
+        );
+    }
+
+    /// Everything a message's own menu can ask for.
+    fn post_action(self: &Rc<Self>, post_id: String, what: PostAction) {
+        let (client, me, post) = {
+            let st = self.state.borrow();
+            (st.client.clone(), st.me.id.clone(), st.post(&post_id))
+        };
+        let Some(post) = post else {
+            self.toast("That message is no longer here.");
+            return;
+        };
+
+        match what {
+            PostAction::CopyText => {
+                self.window.clipboard().set_text(&post.message);
+                self.toast("Message copied.");
+            }
+            PostAction::CopyLink => {
+                let team = self
+                    .state
+                    .borrow()
+                    .current_team_name()
+                    .unwrap_or_else(|| "_redirect".to_string());
+                let link = format!("{}/{team}/pl/{post_id}", client.site_url());
+                self.window.clipboard().set_text(&link);
+                self.toast("Link copied.");
+            }
+            PostAction::Edit => self.chat.begin_edit(&post_id, post.source_text()),
+            PostAction::Delete => self.confirm_delete(post_id),
+            PostAction::Pin | PostAction::Unpin => {
+                let pin = what == PostAction::Pin;
+                let ui = self.clone();
+                runtime::spawn(
+                    async move { client.pin_post(&post_id, pin).await },
+                    move |result| match result {
+                        // The server echoes the change as post_edited, so
+                        // there is nothing to apply here.
+                        Ok(()) => ui.toast(if pin { "Pinned." } else { "Unpinned." }),
+                        Err(e) => ui.toast(&format!("Could not change the pin: {e}")),
+                    },
+                );
+            }
+            PostAction::Save | PostAction::Unsave => {
+                let save = what == PostAction::Save;
+                self.set_saved(post_id, save);
+            }
+            PostAction::MarkUnread => {
+                let (crt, channel) = {
+                    let st = self.state.borrow();
+                    (st.crt_enabled, post.channel_id.clone())
+                };
+                let ui = self.clone();
+                runtime::spawn(
+                    async move { client.set_post_unread(&me, &post_id, crt).await },
+                    move |result| match result {
+                        Ok(()) => {
+                            // Nothing is being read here any more, so stop
+                            // marking it read on the way out.
+                            if ui.state.borrow().current_channel.as_deref()
+                                == Some(channel.as_str())
+                            {
+                                ui.state.borrow_mut().current_channel = None;
+                                ui.chat.set_composer_text("");
+                            }
+                            ui.schedule_sidebar_reload();
+                        }
+                        Err(e) => ui.toast(&format!("Could not mark it unread: {e}")),
+                    },
+                );
+            }
+        }
+    }
+
+    /// Deleting is destructive and has no undo, so it asks first.
+    fn confirm_delete(self: &Rc<Self>, post_id: String) {
+        let dialog = adw::MessageDialog::new(
+            Some(&self.window),
+            Some("Delete this message?"),
+            Some("It will be removed for everyone. This cannot be undone."),
+        );
+        dialog.add_responses(&[("cancel", "Cancel"), ("delete", "Delete")]);
+        dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
+        dialog.set_default_response(Some("cancel"));
+        dialog.set_close_response("cancel");
+
+        let ui = self.clone();
+        dialog.connect_response(None, move |dialog, response| {
+            dialog.close();
+            if response != "delete" {
+                return;
+            }
+            let client = ui.state.borrow().client.clone();
+            let post_id = post_id.clone();
+            let ui = ui.clone();
+            runtime::spawn(
+                async move { client.delete_post(&post_id).await },
+                move |result| {
+                    if let Err(e) = result {
+                        ui.toast(&format!("Could not delete it: {e}"));
+                    }
+                },
+            );
+        });
+        dialog.present();
+    }
+
+    /// Saving a post is a preference, not a post field, so it is written and
+    /// mirrored locally rather than waiting for an echo that never comes.
+    fn set_saved(self: &Rc<Self>, post_id: String, save: bool) {
+        let (client, me) = {
+            let mut st = self.state.borrow_mut();
+            if save {
+                st.saved_posts.insert(post_id.clone());
+            } else {
+                st.saved_posts.remove(&post_id);
+            }
+            (st.client.clone(), st.me.id.clone())
+        };
+        self.refresh_messages();
+
+        let ui = self.clone();
+        let id = post_id.clone();
+        runtime::spawn(
+            async move {
+                let pref = mattermost_api::models::Preference {
+                    user_id: me.clone(),
+                    category: "flagged_post".into(),
+                    name: id.clone(),
+                    value: "true".into(),
+                };
+                if save {
+                    client.save_preferences(&me, &[pref]).await
+                } else {
+                    client.delete_preferences(&me, &[pref]).await
+                }
+            },
+            move |result| {
+                if let Err(e) = result {
+                    // Put the local view back where the server still has it.
+                    let mut st = ui.state.borrow_mut();
+                    if save {
+                        st.saved_posts.remove(&post_id);
+                    } else {
+                        st.saved_posts.insert(post_id.clone());
+                    }
+                    drop(st);
+                    ui.refresh_messages();
+                    ui.toast(&format!("Could not change that: {e}"));
+                }
+            },
+        );
     }
 
     /// Saves the composer as a draft shortly after typing stops.
@@ -1050,7 +1230,12 @@ impl Ui {
             Action::SelectTeam(team_id) => self.select_team(team_id),
             Action::SelectChannel(channel_id) => self.select_channel(channel_id),
             Action::Send(text) => {
-                self.send_message(text, None);
+                // The composer is shared with editing, so what "send" means
+                // depends on which mode it is in.
+                match self.chat.editing() {
+                    Some(post_id) => self.submit_edit(post_id, text),
+                    None => self.send_message(text, None),
+                }
                 // The composer is empty now, so the draft has to go with it —
                 // and immediately, not on the debounce.
                 self.save_draft();
@@ -1079,6 +1264,7 @@ impl Ui {
                 }
             }
             Action::OpenDirectMessage(user_id) => self.open_direct_message(user_id),
+            Action::Post(post_id, what) => self.post_action(post_id, what),
             Action::ComposerChanged(has_text) => {
                 if has_text {
                     self.notify_typing();
@@ -2333,6 +2519,15 @@ fn bootstrap(ui: Rc<Ui>) {
                     st.memberships.insert(m.channel_id.clone(), m);
                 }
                 st.categories = boot.categories;
+                // Saved posts are preferences, and the startup sequence has
+                // already fetched those — asking again would be a second
+                // request for something we are holding.
+                st.saved_posts = boot
+                    .preferences
+                    .iter()
+                    .filter(|p| p.category == "flagged_post" && p.value == "true")
+                    .map(|p| p.name.clone())
+                    .collect();
                 st.calls = calls;
                 st.active_calls = active
                     .into_iter()

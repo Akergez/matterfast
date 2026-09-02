@@ -27,6 +27,24 @@ pub struct MessageActions {
     pub toggle_reaction: Rc<dyn Fn(String, String)>,
     /// Show the profile card for a user, anchored on the given widget.
     pub show_profile: Rc<dyn Fn(String, gtk::Widget)>,
+    /// Everything behind the "…" menu: post id and what to do with it.
+    pub post_action: Rc<dyn Fn(String, PostAction)>,
+}
+
+/// The overflow menu's entries. One enum rather than one callback each: they
+/// all travel the same path to the action loop, and the row does not care what
+/// any of them mean.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PostAction {
+    Edit,
+    Delete,
+    Pin,
+    Unpin,
+    Save,
+    Unsave,
+    MarkUnread,
+    CopyLink,
+    CopyText,
 }
 
 pub struct RowOptions {
@@ -196,7 +214,15 @@ pub fn build(
     // just noise.
 
     row.append(&body);
-    row.append(&hover_actions(post, actions, options.show_thread_footer));
+    let mine = post.user_id == state.borrow().me.id;
+    let saved = state.borrow().saved_posts.contains(&post.id);
+    row.append(&hover_actions(
+        post,
+        actions,
+        options.show_thread_footer,
+        mine,
+        saved,
+    ));
 
     // An unconfirmed send stays dimmed until the server echoes it back.
     if post.is_pending() {
@@ -207,7 +233,13 @@ pub fn build(
 }
 
 /// The small react / reply buttons on the right of a row.
-fn hover_actions(post: &Post, actions: &MessageActions, allow_thread: bool) -> gtk::Widget {
+fn hover_actions(
+    post: &Post,
+    actions: &MessageActions,
+    allow_thread: bool,
+    mine: bool,
+    saved: bool,
+) -> gtk::Widget {
     let bar = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(2)
@@ -224,6 +256,34 @@ fn hover_actions(post: &Post, actions: &MessageActions, allow_thread: bool) -> g
     react.set_popover(Some(&reaction_picker(post, actions)));
     bar.append(&react);
 
+    // Saving is one click in every other client, so it is a button here too
+    // rather than being buried in the menu.
+    let save = gtk::Button::builder()
+        .icon_name(if saved {
+            "starred-symbolic"
+        } else {
+            "non-starred-symbolic"
+        })
+        .tooltip_text(if saved { "Remove from saved" } else { "Save" })
+        .build();
+    save.add_css_class("flat");
+    save.add_css_class("circular");
+    save.connect_clicked({
+        let actions = actions.clone();
+        let post_id = post.id.clone();
+        move |_| {
+            (actions.post_action)(
+                post_id.clone(),
+                if saved {
+                    PostAction::Unsave
+                } else {
+                    PostAction::Save
+                },
+            )
+        }
+    });
+    bar.append(&save);
+
     if allow_thread {
         let reply = gtk::Button::builder()
             .icon_name("mail-reply-sender-symbolic")
@@ -239,7 +299,52 @@ fn hover_actions(post: &Post, actions: &MessageActions, allow_thread: bool) -> g
         bar.append(&reply);
     }
 
+    bar.append(&overflow_menu(post, actions, mine));
     bar.upcast()
+}
+
+/// The "…" menu. Editing and deleting are only offered on your own posts —
+/// the server would refuse anyway, and an option that always fails is worse
+/// than no option.
+fn overflow_menu(post: &Post, actions: &MessageActions, mine: bool) -> gtk::Widget {
+    let menu = gtk::gio::Menu::new();
+    let group = gtk::gio::SimpleActionGroup::new();
+
+    let mut entries: Vec<(&str, &str, PostAction)> = vec![
+        ("Copy text", "copy-text", PostAction::CopyText),
+        ("Copy link", "copy-link", PostAction::CopyLink),
+        ("Mark as unread", "mark-unread", PostAction::MarkUnread),
+    ];
+    if post.is_pinned {
+        entries.push(("Unpin from channel", "unpin", PostAction::Unpin));
+    } else {
+        entries.push(("Pin to channel", "pin", PostAction::Pin));
+    }
+    if mine {
+        entries.push(("Edit", "edit", PostAction::Edit));
+        entries.push(("Delete", "delete", PostAction::Delete));
+    }
+
+    for (label, name, action) in entries {
+        let item = gtk::gio::SimpleAction::new(name, None);
+        item.connect_activate({
+            let actions = actions.clone();
+            let post_id = post.id.clone();
+            move |_, _| (actions.post_action)(post_id.clone(), action)
+        });
+        group.add_action(&item);
+        menu.append(Some(label), Some(&format!("post.{name}")));
+    }
+
+    let button = gtk::MenuButton::builder()
+        .icon_name("view-more-symbolic")
+        .tooltip_text("More actions")
+        .menu_model(&menu)
+        .build();
+    button.add_css_class("flat");
+    button.add_css_class("circular");
+    button.insert_action_group("post", Some(&group));
+    button.upcast()
 }
 
 fn reaction_picker(post: &Post, actions: &MessageActions) -> gtk::Popover {
