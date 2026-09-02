@@ -36,6 +36,10 @@ pub struct RightPanel {
     thread_list: gtk::Box,
     thread_scroller: gtk::ScrolledWindow,
     thread_entry: gtk::TextView,
+    follow: gtk::ToggleButton,
+    /// Set while the toggle is being synced from state, so it does not report
+    /// that as a click.
+    updating_follow: Rc<RefCell<bool>>,
     /// Set while a draft is being restored, so it is not mistaken for typing.
     restoring: Rc<RefCell<bool>>,
 
@@ -58,6 +62,7 @@ impl RightPanel {
         on_open_thread: impl Fn(String) + 'static,
         on_open_post: impl Fn(String, String) + 'static,
         on_draft: impl Fn() + 'static,
+        on_follow: impl Fn(bool) + 'static,
     ) -> Rc<Self> {
         let title = gtk::Label::builder()
             .ellipsize(gtk::pango::EllipsizeMode::End)
@@ -88,7 +93,26 @@ impl RightPanel {
             .title_widget(&title_box)
             .show_start_title_buttons(false)
             .build();
+        // Following a thread is how you keep getting told about it after you
+        // stop being mentioned in it, so it belongs on the thread itself.
+        let follow = gtk::ToggleButton::builder()
+            .icon_name("bookmark-new-symbolic")
+            .tooltip_text("Follow this thread")
+            .visible(false)
+            .build();
+        follow.add_css_class("flat");
+        let updating_follow = Rc::new(RefCell::new(false));
+        follow.connect_toggled({
+            let updating = updating_follow.clone();
+            move |button| {
+                if !*updating.borrow() {
+                    on_follow(button.is_active());
+                }
+            }
+        });
+
         header.pack_end(&close);
+        header.pack_end(&follow);
 
         // ---- thread page
         let thread_list = gtk::Box::builder()
@@ -251,6 +275,8 @@ impl RightPanel {
             thread_list,
             thread_scroller,
             thread_entry,
+            follow,
+            updating_follow,
             restoring,
             search_list,
             inbox_stack,
@@ -272,6 +298,17 @@ impl RightPanel {
 
     pub fn focus_composer(&self) {
         self.thread_entry.grab_focus();
+    }
+
+    /// Reflects whether the open thread is followed, without reporting the
+    /// change back as though someone had clicked it.
+    pub fn set_following(&self, following: bool) {
+        if self.follow.is_active() == following {
+            return;
+        }
+        *self.updating_follow.borrow_mut() = true;
+        self.follow.set_active(following);
+        *self.updating_follow.borrow_mut() = false;
     }
 
     /// What is in the thread's reply box.
@@ -391,6 +428,7 @@ impl RightPanel {
         drop(st);
 
         self.title.set_text("Thread");
+        self.follow.set_visible(true);
         self.subtitle.set_text(&channel_title);
         self.subtitle.set_visible(!channel_title.is_empty());
 
@@ -481,6 +519,7 @@ impl RightPanel {
 
     fn render_inbox(&self, state: &SharedState, avatars: &Avatars) {
         self.stack.set_visible_child_name("inbox");
+        self.follow.set_visible(false);
         self.title.set_text("Inbox");
         self.subtitle.set_visible(false);
         clear(&self.mentions_list);

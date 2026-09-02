@@ -158,6 +158,9 @@ pub struct AppState {
     /// Unsent text, keyed by channel id. Mirrors what the server has, so the
     /// same half-written message is waiting on every device.
     pub drafts: HashMap<String, String>,
+    /// Unread counts for teams other than the current one, so the switcher
+    /// can say where something is waiting. Keyed by team id.
+    pub team_unreads: HashMap<String, (i64, i64)>,
     /// The LLM bots this server offers, empty when the Agents plugin is not
     /// installed — which is the same as having nothing to offer, so it needs
     /// no separate flag.
@@ -249,6 +252,7 @@ impl AppState {
             drafts: HashMap::new(),
             thread_drafts: HashMap::new(),
             drafts_synced: true,
+            team_unreads: HashMap::new(),
             bots: Vec::new(),
             pending_files: Vec::new(),
             search_results: Vec::new(),

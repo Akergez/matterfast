@@ -161,6 +161,8 @@ enum Action {
     ThreadDraftChanged,
     /// The reader reached the top of the feed and wants what came before.
     LoadOlder,
+    /// Follow or unfollow the thread the panel is showing.
+    FollowThread(bool),
 }
 
 pub fn build_window(app: &adw::Application) {
@@ -483,6 +485,12 @@ fn build_session_ui(
             let tx = tx.clone();
             move || {
                 let _ = tx.send_blocking(Action::ThreadDraftChanged);
+            }
+        },
+        {
+            let tx = tx.clone();
+            move |following| {
+                let _ = tx.send_blocking(Action::FollowThread(following));
             }
         },
     );
@@ -3091,6 +3099,29 @@ impl Ui {
         );
     }
 
+    /// Follows or unfollows the open thread. Following is what keeps a thread
+    /// in the inbox after you stop being mentioned in it.
+    fn follow_thread(self: &Rc<Self>, following: bool) {
+        let PanelMode::Thread(root_id) = self.right.mode() else {
+            return;
+        };
+        let (client, team_id) = {
+            let st = self.state.borrow();
+            (
+                st.client.clone(),
+                st.current_team.clone().unwrap_or_default(),
+            )
+        };
+        let ui = self.clone();
+        runtime::spawn(
+            async move { client.follow_thread(&team_id, &root_id, following).await },
+            move |result| match result {
+                Ok(()) => ui.load_inbox(),
+                Err(e) => ui.toast(&format!("Could not change that: {e}")),
+            },
+        );
+    }
+
     /// Runs a slash command. Its output arrives as a post or an ephemeral
     /// message, so there is usually nothing to show from the response itself.
     fn run_command(self: &Rc<Self>, channel_id: String, command: String) {
@@ -3222,9 +3253,16 @@ impl Ui {
             return;
         }
 
-        let draft = mattermost_api::models::Draft::new(&channel_id, &root_id, text.trim());
+        let body = text.trim().to_string();
+        let draft = mattermost_api::models::Draft::new(&channel_id, &root_id, &body);
         runtime::spawn(
-            async move { client.upsert_draft(&draft).await.map(|_| ()) },
+            async move {
+                if body.is_empty() {
+                    client.delete_draft(&channel_id, &root_id).await
+                } else {
+                    client.upsert_draft(&draft).await.map(|_| ())
+                }
+            },
             move |result| {
                 if let Err(e) = result {
                     tracing::warn!(error = %e, "could not save the thread draft");
@@ -3289,12 +3327,18 @@ impl Ui {
         }
 
         let ui = self.clone();
-        let draft = mattermost_api::models::Draft::new(&channel_id, "", text.trim());
+        let body = text.trim().to_string();
+        let draft = mattermost_api::models::Draft::new(&channel_id, "", &body);
         runtime::spawn(
             async move {
-                // An empty message is the server's own delete, so one call
-                // covers both saving and clearing.
-                client.upsert_draft(&draft).await.map(|_| ())
+                // An empty upsert deletes server-side, but the explicit route
+                // says what is meant and does not depend on that behaviour
+                // staying true.
+                if body.is_empty() {
+                    client.delete_draft(&channel_id, "").await
+                } else {
+                    client.upsert_draft(&draft).await.map(|_| ())
+                }
             },
             move |result| {
                 if let Err(e) = result {
@@ -3465,6 +3509,30 @@ impl Ui {
                 ui.channels.refresh(&ui.state, &ui.avatars);
                 ui.refresh_title();
                 ui.hydrate_dm_teammates();
+            },
+        );
+    }
+
+    /// Unread and mention counts for every team, so the switcher can show
+    /// where something is waiting rather than only what is in front of you.
+    fn load_team_unreads(self: &Rc<Self>) {
+        let (client, crt) = {
+            let st = self.state.borrow();
+            (st.client.clone(), st.crt_enabled)
+        };
+        let ui = self.clone();
+        runtime::spawn(
+            async move { client.my_team_unreads(crt).await },
+            move |result| {
+                let Ok(unreads) = result else { return };
+                {
+                    let mut st = ui.state.borrow_mut();
+                    st.team_unreads = unreads
+                        .into_iter()
+                        .map(|u| (u.team_id, (u.msg_count, u.mention_count)))
+                        .collect();
+                }
+                ui.channels.refresh(&ui.state, &ui.avatars);
             },
         );
     }
@@ -3666,6 +3734,7 @@ impl Ui {
             Action::ScheduleMessage => self.schedule_message(),
             Action::ThreadDraftChanged => self.schedule_thread_draft_save(),
             Action::LoadOlder => self.load_older(),
+            Action::FollowThread(following) => self.follow_thread(following),
             Action::PickAttachment => self.pick_attachment(),
             Action::AttachFiles(paths) => {
                 let Some(channel_id) = self.state.borrow().current_channel.clone() else {
@@ -3900,6 +3969,13 @@ impl Ui {
         self.overlay.set_show_sidebar(true);
         self.refresh_messages();
         self.restore_thread_draft();
+        let following = {
+            let st = self.state.borrow();
+            st.thread_inbox
+                .iter()
+                .any(|t| t.id == root_id && t.is_following)
+        };
+        self.right.set_following(following);
 
         // Always refetch. A thread we opened earlier may have grown, and the
         // root's reply count is not enough to tell which replies we hold.
@@ -4539,6 +4615,20 @@ impl Ui {
                     self.drop_video(&session_id, mattermost_calls::protocol::track_type::SCREEN);
                 }
                 self.refresh_call_ui();
+            }
+            CallUpdate::Participant(mattermost_calls::CallsEvent::UserDismissedNotification {
+                user_id,
+                ..
+            }) => {
+                // Answered somewhere else: take the doorbell down here too.
+                if user_id == self.state.borrow().me.id {
+                    if let (Some(app), Some(channel)) = (
+                        self.window.application(),
+                        self.state.borrow().current_channel.clone(),
+                    ) {
+                        app.withdraw_notification(&format!("call-{channel}"));
+                    }
+                }
             }
             CallUpdate::Participant(mattermost_calls::CallsEvent::Caption {
                 user_id,
@@ -5213,6 +5303,7 @@ fn bootstrap(ui: Rc<Ui>) {
             ui.load_inbox();
             ui.load_drafts();
             ui.load_bots();
+            ui.load_team_unreads();
 
             if let Some(id) = initial_channel {
                 ui.dispatch(Action::SelectChannel(id));

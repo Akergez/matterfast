@@ -115,6 +115,25 @@ fn present_or_build(app: &adw::Application) {
 }
 
 fn add_actions(app: &adw::Application) {
+    // A stateful action so the menu draws it as a checkbox: leaving a process
+    // running with no window is only acceptable if it is visible and stoppable.
+    let background =
+        gio::SimpleAction::new_stateful("background", None, &Background::enabled().to_variant());
+    background.connect_activate({
+        let app = app.clone();
+        move |action, _| {
+            let on = !action.state().and_then(|s| s.get::<bool>()).unwrap_or(true);
+            Background::set_enabled(on);
+            action.set_state(&on.to_variant());
+            // Turning it off while already backgrounded should take effect
+            // now, not at the next close.
+            if !on && app.windows().is_empty() {
+                HOLD.with_borrow_mut(|hold| *hold = None);
+            }
+        }
+    });
+    app.add_action(&background);
+
     let new_window = gio::SimpleAction::new("new-window", None);
     new_window.connect_activate({
         let app = app.clone();

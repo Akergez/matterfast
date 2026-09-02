@@ -304,6 +304,68 @@ fn acknowledgement(post: &Post, state: &SharedState, actions: &MessageActions) -
     row.upcast()
 }
 
+/// A link the server resolved into a title and a description.
+fn link_preview(embed: &mattermost_api::models::PostEmbed) -> Option<gtk::Widget> {
+    let data = embed.data.as_ref()?;
+    let read = |key: &str| {
+        data.get(key)
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string()
+    };
+    let title = match read("title") {
+        t if t.is_empty() => read("site_name"),
+        t => t,
+    };
+    // Without a title there is nothing to preview that the link text does not
+    // already say.
+    if title.is_empty() {
+        return None;
+    }
+
+    let heading = gtk::Label::builder()
+        .label(&title)
+        .xalign(0.0)
+        .wrap(true)
+        .build();
+    heading.add_css_class("heading");
+
+    let card = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(2)
+        .build();
+    card.add_css_class("permalink-card");
+    card.append(&heading);
+
+    let description = read("description");
+    if !description.is_empty() {
+        let body = gtk::Label::builder()
+            .label(&description)
+            .xalign(0.0)
+            .wrap(true)
+            .lines(3)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .build();
+        body.add_css_class("dim-label");
+        card.append(&body);
+    }
+
+    let open = gtk::Button::builder().child(&card).build();
+    open.add_css_class("flat");
+    open.add_css_class("permalink-button");
+    let url = if embed.url.is_empty() {
+        read("url")
+    } else {
+        embed.url.clone()
+    };
+    open.set_tooltip_text(Some(&url));
+    open.connect_clicked(move |_| {
+        let _ =
+            gtk::gio::AppInfo::launch_default_for_uri(&url, None::<&gtk::gio::AppLaunchContext>);
+    });
+    Some(open.upcast())
+}
+
 /// One emoji, however it has to be drawn: a Unicode glyph in a label, or a
 /// custom upload as a small picture. A custom one that has not arrived shows
 /// its shortcode, which is at least readable.
@@ -331,6 +393,9 @@ fn permalink_preview(
     avatars: &Avatars,
     actions: &MessageActions,
 ) -> Option<gtk::Widget> {
+    if embed.r#type == "opengraph" || embed.r#type == "link" {
+        return link_preview(embed);
+    }
     if embed.r#type != "permalink" {
         return None;
     }

@@ -101,6 +101,11 @@ impl ChannelSidebar {
         account_section.append(Some("Set a Status…"), Some("win.custom-status"));
         account_section.append(Some("Notifications…"), Some("win.notification-settings"));
         account_section.append(Some("Sign Out"), Some("win.sign-out"));
+
+        let app_section = gtk::gio::Menu::new();
+        app_section.append(Some("Keep Running in Background"), Some("app.background"));
+        app_section.append(Some("Quit"), Some("app.quit"));
+        menu.append_section(None, &app_section);
         menu.append_section(None, &account_section);
 
         let menu_button = gtk::MenuButton::builder()
@@ -662,6 +667,20 @@ impl Switcher {
                 .build();
             row_box.append(&avatar);
             row_box.append(&label);
+
+            // Where something is waiting, so switching teams is a decision
+            // rather than a guess.
+            if let Some((messages, mentions)) = st.team_unreads.get(&team.id) {
+                if *mentions > 0 {
+                    let badge = gtk::Label::new(Some(&mentions.to_string()));
+                    badge.add_css_class("mention-badge");
+                    row_box.append(&badge);
+                } else if *messages > 0 {
+                    let dot = gtk::Box::builder().valign(gtk::Align::Center).build();
+                    dot.add_css_class("unread-dot");
+                    row_box.append(&dot);
+                }
+            }
 
             let row = gtk::ListBoxRow::builder().child(&row_box).build();
             unsafe { row.set_data("team-id", team.id.clone()) };
