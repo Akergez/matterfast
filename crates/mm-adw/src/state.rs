@@ -158,6 +158,9 @@ pub struct AppState {
     /// Unsent text, keyed by channel id. Mirrors what the server has, so the
     /// same half-written message is waiting on every device.
     pub drafts: HashMap<String, String>,
+    /// When the user map was last refreshed wholesale, so a resync can ask
+    /// only for what changed since.
+    pub users_fetched_at: Millis,
     /// Channels we have raised an incoming-call notification for, so it can
     /// be taken back down when the call ends or is answered elsewhere. The
     /// dismissal event names a *call*, not a channel, and we hold no mapping
@@ -257,6 +260,7 @@ impl AppState {
             drafts: HashMap::new(),
             thread_drafts: HashMap::new(),
             drafts_synced: true,
+            users_fetched_at: 0,
             ringing: Vec::new(),
             team_unreads: HashMap::new(),
             bots: Vec::new(),

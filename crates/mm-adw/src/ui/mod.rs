@@ -6091,6 +6091,7 @@ fn bootstrap(ui: Rc<Ui>) {
                     .filter(|p| p.category == "flagged_post" && p.value == "true")
                     .map(|p| p.name.clone())
                     .collect();
+                st.users_fetched_at = glib::real_time() / 1000;
                 st.calls = calls;
                 st.active_calls = active
                     .into_iter()
@@ -6225,6 +6226,44 @@ fn resync(ui: &Rc<Ui>) {
                     }
                 }
             }
+            // Names, pictures and positions change while we are away, and
+            // nothing else tells us: status_change carries presence only.
+            {
+                let (client, ids, since) = {
+                    let st = ui.state.borrow();
+                    let ids: Vec<String> = st.users.keys().cloned().collect();
+                    (st.client.clone(), ids, st.users_fetched_at)
+                };
+                if !ids.is_empty() && since > 0 {
+                    let ui = ui.clone();
+                    runtime::spawn(
+                        async move { client.users_updated_since(&ids, since).await },
+                        move |result| {
+                            let Ok(users) = result else { return };
+                            if users.is_empty() {
+                                return;
+                            }
+                            {
+                                let mut st = ui.state.borrow_mut();
+                                for user in users {
+                                    // A new picture makes the cached texture
+                                    // stale, exactly as user_updated does.
+                                    let changed = st.users.get(&user.id).is_none_or(|old| {
+                                        old.last_picture_update != user.last_picture_update
+                                    });
+                                    if changed {
+                                        ui.avatars.forget(&user.id);
+                                    }
+                                    st.users.insert(user.id.clone(), user);
+                                }
+                                st.users_fetched_at = glib::real_time() / 1000;
+                            }
+                            ui.refresh_all();
+                        },
+                    );
+                }
+            }
+
             ui.refresh_all();
             ui.load_inbox();
             // `?since=` is capped by the server, so a long absence can leave a
