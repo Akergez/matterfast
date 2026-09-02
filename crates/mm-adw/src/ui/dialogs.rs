@@ -824,6 +824,64 @@ impl BookmarkList {
     }
 }
 
+/// Rename a channel, or change its topic. Answers (display_name, header).
+pub fn edit_channel(
+    parent: &impl IsA<gtk::Window>,
+    current: (String, String),
+    on_save: impl Fn(String, String) + 'static,
+) {
+    let name = adw::EntryRow::builder().title("Name").build();
+    name.set_text(&current.0);
+    let header = adw::EntryRow::builder().title("Topic").build();
+    header.set_text(&current.1);
+
+    let group = adw::PreferencesGroup::builder().build();
+    group.add(&name);
+    group.add(&header);
+
+    let dialog = adw::MessageDialog::new(Some(parent.as_ref()), Some("Channel details"), None);
+    dialog.set_extra_child(Some(&group));
+    dialog.add_responses(&[("cancel", "Cancel"), ("save", "Save")]);
+    dialog.set_response_appearance("save", adw::ResponseAppearance::Suggested);
+    dialog.set_default_response(Some("save"));
+    dialog.set_close_response("cancel");
+    dialog.connect_response(None, move |dialog, response| {
+        dialog.close();
+        if response == "save" {
+            on_save(name.text().trim().to_string(), header.text().to_string());
+        }
+    });
+    dialog.present();
+}
+
+/// Confirm archiving a channel. Archiving hides it for everyone, so it asks
+/// in the same words the other clients use.
+pub fn confirm_archive(
+    parent: &impl IsA<gtk::Window>,
+    channel_name: &str,
+    on_archive: impl Fn() + 'static,
+) {
+    let dialog = adw::MessageDialog::new(
+        Some(parent.as_ref()),
+        Some("Archive this channel?"),
+        Some(&format!(
+            "{channel_name} will be hidden for everyone. Its messages are kept, and an admin can \
+             bring it back."
+        )),
+    );
+    dialog.add_responses(&[("cancel", "Cancel"), ("archive", "Archive")]);
+    dialog.set_response_appearance("archive", adw::ResponseAppearance::Destructive);
+    dialog.set_default_response(Some("cancel"));
+    dialog.set_close_response("cancel");
+    dialog.connect_response(None, move |dialog, response| {
+        dialog.close();
+        if response == "archive" {
+            on_archive();
+        }
+    });
+    dialog.present();
+}
+
 /// Confirm removing someone from a channel.
 pub fn confirm_remove_member(
     parent: &impl IsA<gtk::Window>,

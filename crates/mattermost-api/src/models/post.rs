@@ -267,6 +267,18 @@ pub struct PostList {
 }
 
 impl PostList {
+    /// Wraps a bare list of posts, newest first, in the envelope the rest of
+    /// the client expects. `POST /posts/ids` answers with an array rather than
+    /// a list, and every reader here goes through `order`.
+    pub fn from_posts(mut posts: Vec<Post>) -> PostList {
+        posts.sort_by_key(|p| std::cmp::Reverse(p.create_at));
+        PostList {
+            order: posts.iter().map(|p| p.id.clone()).collect(),
+            posts: posts.into_iter().map(|p| (p.id.clone(), p)).collect(),
+            ..Default::default()
+        }
+    }
+
     /// `next_post_id == ""` means this page reaches the newest post in the
     /// channel — the block is `recent` in webapp terms.
     pub fn is_recent(&self) -> bool {

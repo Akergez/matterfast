@@ -58,7 +58,7 @@ impl ChannelSidebar {
         // A search bar rather than a dialog: it belongs to the list it filters
         // into, and Escape puts it away without losing your place.
         let search_entry = gtk::SearchEntry::builder()
-            .placeholder_text("Search messages")
+            .placeholder_text("Search messages, or file: to search attachments")
             .hexpand(true)
             .build();
         let search_bar = gtk::SearchBar::builder()

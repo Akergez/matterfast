@@ -144,11 +144,13 @@ impl ChatView {
         // What you do to *this* channel, as opposed to the message under the
         // pointer or the list in the sidebar.
         let channel_menu = gtk::gio::Menu::new();
+        channel_menu.append(Some("Channel Details…"), Some("win.edit-channel"));
         channel_menu.append(Some("Members…"), Some("win.channel-members"));
         channel_menu.append(Some("Bookmarks…"), Some("win.channel-bookmarks"));
         channel_menu.append(Some("Pinned Messages"), Some("win.pinned-posts"));
         channel_menu.append(Some("Notifications…"), Some("win.channel-notifications"));
         channel_menu.append(Some("Leave Channel"), Some("win.leave-channel"));
+        channel_menu.append(Some("Archive Channel"), Some("win.archive-channel"));
         let channel_button = gtk::MenuButton::builder()
             .icon_name("view-more-symbolic")
             .tooltip_text("Channel menu")

@@ -82,6 +82,8 @@ enum MenuAction {
     ChannelMembers,
     ChannelBookmarks,
     BrowseTeams,
+    EditChannel,
+    ArchiveChannel,
     ChannelNotifications,
     LeaveChannel,
     PinnedPosts,
@@ -690,6 +692,8 @@ fn build_session_ui(
         ("channel-members", MenuAction::ChannelMembers),
         ("channel-bookmarks", MenuAction::ChannelBookmarks),
         ("browse-teams", MenuAction::BrowseTeams),
+        ("edit-channel", MenuAction::EditChannel),
+        ("archive-channel", MenuAction::ArchiveChannel),
         ("custom-status", MenuAction::CustomStatus),
         ("channel-notifications", MenuAction::ChannelNotifications),
         ("leave-channel", MenuAction::LeaveChannel),
@@ -724,6 +728,36 @@ fn build_session_ui(
             }
         });
         app.add_action(&action);
+
+        // The buttons on an incoming-call notification.
+        for (name, join) in [("join-call", true), ("dismiss-call", false)] {
+            let call_action =
+                gtk::gio::SimpleAction::new(name, Some(&String::static_variant_type()));
+            call_action.connect_activate({
+                let ui = ui.clone();
+                move |_, target| {
+                    let Some(channel_id) = target.and_then(|t| t.get::<String>()) else {
+                        return;
+                    };
+                    if join {
+                        ui.window.present();
+                        ui.dispatch(Action::SelectChannel(channel_id));
+                        ui.dispatch(Action::ToggleCall);
+                    } else {
+                        // Tell the server, so the same call stops ringing on
+                        // this account's other devices too.
+                        let client = ui.state.borrow().client.clone();
+                        runtime::spawn(
+                            async move {
+                                mattermost_calls::dismiss_notification(&client, &channel_id).await
+                            },
+                            |_| {},
+                        );
+                    }
+                }
+            });
+            app.add_action(&call_action);
+        }
     }
 
     // A picture arriving is a reason to redraw the messages, and nothing else.
@@ -873,6 +907,42 @@ impl Ui {
             // updated server-side too; nothing left to do.
             StreamUpdate::Done { .. } | StreamUpdate::Ignored => {}
         }
+    }
+
+    /// Announces an incoming call, with the two things you might want to do
+    /// about it. Mattermost has no ring signal of its own — a call starting is
+    /// the whole event — so this is the client's doing.
+    fn ring(self: &Rc<Self>, channel_id: &str) {
+        let title = {
+            let st = self.state.borrow();
+            st.channel(channel_id)
+                .map(|c| st.channel_title(c))
+                .unwrap_or_else(|| "Someone".to_string())
+        };
+        let Some(app) = self.window.application() else {
+            return;
+        };
+
+        let notification = gtk::gio::Notification::new(&format!("{title} is calling"));
+        notification.set_body(Some("Incoming call"));
+        notification.set_priority(gtk::gio::NotificationPriority::Urgent);
+        notification.add_button_with_target_value(
+            "Join",
+            "app.join-call",
+            Some(&channel_id.to_variant()),
+        );
+        notification.add_button_with_target_value(
+            "Dismiss",
+            "app.dismiss-call",
+            Some(&channel_id.to_variant()),
+        );
+        notification.set_default_action_and_target_value(
+            "app.open-channel",
+            Some(&channel_id.to_variant()),
+        );
+        // Keyed by channel, so a second call in the same DM replaces the first
+        // rather than stacking two doorbells.
+        app.send_notification(Some(&format!("call-{channel_id}")), &notification);
     }
 
     /// Applies a host control. These are HTTP routes rather than websocket
@@ -1168,6 +1238,8 @@ impl Ui {
             MenuAction::ChannelMembers => self.channel_members(),
             MenuAction::ChannelBookmarks => self.channel_bookmarks(),
             MenuAction::BrowseTeams => self.browse_teams(),
+            MenuAction::EditChannel => self.edit_channel(),
+            MenuAction::ArchiveChannel => self.archive_channel(),
             MenuAction::CustomStatus => self.custom_status(),
             MenuAction::ChannelNotifications => self.channel_notifications(),
             MenuAction::LeaveChannel => self.leave_channel(),
@@ -1377,6 +1449,77 @@ impl Ui {
                         ui.toast("Scheduled.");
                     }
                     Err(e) => ui.toast(&format!("Could not schedule it: {e}")),
+                },
+            );
+        });
+    }
+
+    /// The channel's name and topic.
+    fn edit_channel(self: &Rc<Self>) {
+        let (client, channel_id, current) = {
+            let st = self.state.borrow();
+            let Some(channel_id) = st.current_channel.clone() else {
+                return;
+            };
+            let Some(channel) = st.channel(&channel_id) else {
+                return;
+            };
+            (
+                st.client.clone(),
+                channel_id,
+                (channel.display_name.clone(), channel.header.clone()),
+            )
+        };
+
+        let ui = self.clone();
+        dialogs::edit_channel(&self.window, current, move |name, header| {
+            let client = client.clone();
+            let channel_id = channel_id.clone();
+            let ui = ui.clone();
+            runtime::spawn(
+                async move {
+                    // Two routes, because the server patches these separately.
+                    if !name.is_empty() {
+                        client.rename_channel(&channel_id, &name).await?;
+                    }
+                    client.update_channel_header(&channel_id, &header).await
+                },
+                move |result| match result {
+                    // channel_updated comes back over the socket and repaints.
+                    Ok(_) => {}
+                    Err(e) => ui.toast(&format!("Could not save that: {e}")),
+                },
+            );
+        });
+    }
+
+    fn archive_channel(self: &Rc<Self>) {
+        let (client, channel_id, name) = {
+            let st = self.state.borrow();
+            let Some(channel_id) = st.current_channel.clone() else {
+                return;
+            };
+            let name = st
+                .channel(&channel_id)
+                .map(|c| st.channel_title(c))
+                .unwrap_or_default();
+            (st.client.clone(), channel_id, name)
+        };
+
+        let ui = self.clone();
+        dialogs::confirm_archive(&self.window, &name, move || {
+            let client = client.clone();
+            let channel_id = channel_id.clone();
+            let ui = ui.clone();
+            runtime::spawn(
+                async move { client.archive_channel(&channel_id).await },
+                move |result| match result {
+                    Ok(()) => {
+                        ui.state.borrow_mut().current_channel = None;
+                        ui.schedule_sidebar_reload();
+                        ui.refresh_messages();
+                    }
+                    Err(e) => ui.toast(&format!("Could not archive it: {e}")),
                 },
             );
         });
@@ -2458,6 +2601,13 @@ impl Ui {
     /// failure here is worth saying out loud rather than showing as "no
     /// results" — those mean very different things to whoever is looking.
     fn search(self: &Rc<Self>, terms: String) {
+        // "file:" scopes the same box to attachments. A second search field
+        // would be a second thing to find; Mattermost's own syntax already
+        // works this way for `in:` and `from:`.
+        if let Some(rest) = terms.strip_prefix("file:") {
+            self.search_files(rest.trim().to_string());
+            return;
+        }
         let (client, team) = {
             let mut st = self.state.borrow_mut();
             st.searching = true;
@@ -2499,6 +2649,77 @@ impl Ui {
                             ui.refresh_messages();
                             return;
                         }
+                    }
+                }
+                ui.refresh_messages();
+            },
+        );
+    }
+
+    /// Attachments matching a search, as a list of names to open.
+    fn search_files(self: &Rc<Self>, terms: String) {
+        let (client, team) = {
+            let mut st = self.state.borrow_mut();
+            st.searching = true;
+            st.search_results.clear();
+            (st.client.clone(), st.current_team.clone())
+        };
+        let Some(team_id) = team else { return };
+
+        self.right
+            .set_mode(rhs::PanelMode::Search(format!("files: {terms}")));
+        self.refresh_panel_mode();
+        self.overlay.set_show_sidebar(true);
+        self.refresh_messages();
+
+        let ui = self.clone();
+        runtime::spawn(
+            async move { client.search_files(&team_id, &terms).await },
+            move |result| {
+                match result {
+                    Ok(files) => {
+                        // A file hit names the post it is attached to, so the
+                        // posts are what gets listed — the same rows as any
+                        // other search, and clicking one goes to the message.
+                        let ids: Vec<String> = files.ordered().map(|f| f.post_id.clone()).collect();
+                        ui.load_posts_by_id(ids);
+                    }
+                    Err(e) => {
+                        ui.state.borrow_mut().searching = false;
+                        ui.toast(&format!("File search failed: {e}"));
+                        ui.refresh_messages();
+                    }
+                }
+            },
+        );
+    }
+
+    /// Fetches posts by id and shows them as the current search results.
+    fn load_posts_by_id(self: &Rc<Self>, ids: Vec<String>) {
+        if ids.is_empty() {
+            self.state.borrow_mut().searching = false;
+            self.refresh_messages();
+            return;
+        }
+        let client = self.state.borrow().client.clone();
+        let ui = self.clone();
+        runtime::spawn(
+            async move {
+                let posts = client.posts_by_ids(&ids).await?;
+                let (authors, statuses) = hydrate_authors(&client, &posts).await;
+                Ok::<_, mattermost_api::Error>((posts, authors, statuses))
+            },
+            move |result| {
+                {
+                    let mut st = ui.state.borrow_mut();
+                    st.searching = false;
+                    if let Ok((posts, authors, statuses)) = result {
+                        for user in authors {
+                            st.users.insert(user.id.clone(), user);
+                        }
+                        st.apply_statuses(statuses);
+                        st.search_results = ChannelFeed::from_list(&posts).posts;
+                        st.search_results.reverse();
                     }
                 }
                 ui.refresh_messages();
@@ -4537,10 +4758,20 @@ impl Ui {
     fn apply_calls_event(self: &Rc<Self>, event: mattermost_calls::CallsEvent) {
         use mattermost_calls::CallsEvent as Ev;
         let mut touched = true;
+        let mut ring: Option<String> = None;
         {
             let mut st = self.state.borrow_mut();
             match event {
                 Ev::CallStarted { channel_id, .. } => {
+                    // Worth interrupting someone for only where a call is
+                    // addressed to them: a DM, or a group they are in. A busy
+                    // public channel starting calls all day is not a doorbell.
+                    let direct = st.channel(&channel_id).is_some_and(|c| {
+                        matches!(c.r#type, ChannelType::Direct | ChannelType::Group)
+                    });
+                    if direct && st.call.is_none() {
+                        ring = Some(channel_id.clone());
+                    }
                     st.active_calls.entry(channel_id).or_default();
                 }
                 Ev::CallEnded { channel_id } => {
@@ -4583,6 +4814,9 @@ impl Ui {
                 }
                 _ => touched = false,
             }
+        }
+        if let Some(channel_id) = ring {
+            self.ring(&channel_id);
         }
         if touched {
             self.channels.refresh(&self.state, &self.avatars);

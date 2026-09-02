@@ -1057,6 +1057,15 @@ impl Client {
         self.get(&format!("/posts/{post_id}"), "post").await
     }
 
+    /// `POST /api/v4/posts/ids` — several posts at once.
+    ///
+    /// The natural way to turn a list of ids into posts; a file search answers
+    /// with post ids rather than the posts themselves.
+    pub async fn posts_by_ids(&self, ids: &[String]) -> Result<PostList> {
+        let posts: Vec<Post> = self.post_json("/posts/ids", &ids, "posts by ids").await?;
+        Ok(PostList::from_posts(posts))
+    }
+
     pub async fn post_thread(&self, post_id: &str, crt_enabled: bool) -> Result<PostList> {
         self.get_q(
             &format!("/posts/{post_id}/thread"),
