@@ -205,6 +205,14 @@ pub enum Event {
     /// A draft you wrote on another device. Both create and update arrive as
     /// `draft_created` — `draft_updated` exists in the server's enum but is
     /// never published.
+    /// Something about a followed thread moved: new reply, follow toggled,
+    /// or read state changed. Carries no useful delta, so it means "refetch".
+    ThreadsChanged,
+    /// A priority message's acknowledgements changed; the post has to be
+    /// refetched to know who.
+    AcknowledgementChanged {
+        post_id: String,
+    },
     /// A message shown only to you and never stored — how slash commands and
     /// plugins answer.
     EphemeralMessage(Box<Post>),
@@ -232,6 +240,21 @@ impl Event {
                 Some(p) => Event::Posted(p),
                 None => Event::other(frame),
             },
+            // CRT bookkeeping: a thread you follow changed, or your follow
+            // state for one did. Both mean the inbox is stale.
+            "thread_updated" | "thread_follow_changed" | "thread_read_changed" => {
+                Event::ThreadsChanged
+            }
+            // Somebody confirmed reading a priority message, or took it back.
+            "post_acknowledgement_added" | "post_acknowledgement_removed" => {
+                match extract(d, "acknowledgement")
+                    .and_then(|a: serde_json::Value| Some(a.get("post_id")?.as_str()?.to_string()))
+                    .or_else(|| d.get("post_id").and_then(|v| v.as_str()).map(str::to_owned))
+                {
+                    Some(post_id) => Event::AcknowledgementChanged { post_id },
+                    None => Event::other(frame),
+                }
+            }
             "draft_created" | "draft_updated" => match extract(d, "draft") {
                 Some(draft) => Event::DraftCreated(Box::new(draft)),
                 None => Event::other(frame),

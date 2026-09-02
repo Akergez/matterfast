@@ -1401,7 +1401,9 @@ impl Ui {
             .margin_end(12)
             .build();
 
-        for version in versions {
+        // The current text is the first entry the server returns, so anything
+        // after it is something you could go back to.
+        for (index, version) in versions.into_iter().enumerate() {
             let when = gtk::Label::builder()
                 .label(format!(
                     "{} {}",
@@ -1425,6 +1427,36 @@ impl Ui {
                 .build();
             entry.append(&when);
             entry.append(&text);
+
+            if index > 0 {
+                let restore = gtk::Button::builder()
+                    .label("Restore this version")
+                    .halign(gtk::Align::Start)
+                    .margin_top(4)
+                    .build();
+                restore.add_css_class("pill");
+                restore.connect_clicked({
+                    let ui = self.clone();
+                    let post_id = version.original_id.clone();
+                    let version_id = version.id.clone();
+                    move |button| {
+                        button.set_sensitive(false);
+                        let client = ui.state.borrow().client.clone();
+                        let post_id = post_id.clone();
+                        let version_id = version_id.clone();
+                        let ui = ui.clone();
+                        runtime::spawn(
+                            async move { client.restore_post_version(&post_id, &version_id).await },
+                            move |result| match result {
+                                Ok(_) => ui.toast("Restored."),
+                                Err(e) => ui.toast(&format!("Could not restore it: {e}")),
+                            },
+                        );
+                    }
+                });
+                entry.append(&restore);
+            }
+
             list.append(&entry);
         }
 
@@ -4830,6 +4862,8 @@ impl Ui {
         let mut redraw_draft = false;
         let mut reload_sidebar = false;
         let mut reload_teams = false;
+        let mut reload_inbox = false;
+        let mut refetch_post: Option<String> = None;
         let mut forget_avatar: Option<String> = None;
         let mut notify_about: Option<mattermost_api::ws::Posted> = None;
         // Reading a message as it lands is not something to be told about, but
@@ -4900,6 +4934,8 @@ impl Ui {
                 // Ephemeral posts are shown like any other, but the server
                 // will never mention them again — no edit, no delete, and
                 // they are gone on the next fetch. That is the intent.
+                Event::ThreadsChanged => reload_inbox = true,
+                Event::AcknowledgementChanged { post_id } => refetch_post = Some(post_id),
                 Event::EphemeralMessage(post) => {
                     st.apply_post(*post);
                     redraw_messages = true;
@@ -5063,6 +5099,21 @@ impl Ui {
         }
         if reload_teams {
             self.reload_teams();
+        }
+        if reload_inbox {
+            self.load_inbox();
+        }
+        if let Some(post_id) = refetch_post {
+            // The event says which post changed but not to what, and
+            // acknowledgements live in the post's metadata.
+            let client = self.state.borrow().client.clone();
+            let ui = self.clone();
+            runtime::spawn(async move { client.post(&post_id).await }, move |result| {
+                if let Ok(post) = result {
+                    ui.state.borrow_mut().apply_post(post);
+                    ui.refresh_messages();
+                }
+            });
         }
         if reload_sidebar {
             self.schedule_sidebar_reload();
