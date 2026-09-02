@@ -267,6 +267,10 @@ fn attach_category_menu(
     let popover = gtk::PopoverMenu::from_model(Some(&menu));
     popover.set_parent(row);
     popover.set_has_arrow(false);
+    row.connect_destroy({
+        let popover = popover.clone();
+        move |_| popover.unparent()
+    });
     row.insert_action_group("category", Some(&group));
 
     let click = gtk::GestureClick::new();
@@ -349,6 +353,13 @@ fn attach_row_menu(
     popover.set_parent(row);
     popover.set_has_arrow(false);
     popover.set_halign(gtk::Align::Start);
+    // A parented popover is a child of the row, and the sidebar rebuilds its
+    // rows constantly — without this, every rebuild finalises a row that still
+    // owns a popover and GTK says so, once per row, forever.
+    row.connect_destroy({
+        let popover = popover.clone();
+        move |_| popover.unparent()
+    });
     row.insert_action_group("row", Some(&group));
 
     let click = gtk::GestureClick::new();

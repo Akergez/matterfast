@@ -67,6 +67,13 @@ impl Autocomplete {
             .child(&scroller)
             .build();
         popover.set_parent(entry);
+        // The composer outlives every popover it opens, but not the window —
+        // and a text view finalised with a popover still attached is the same
+        // warning the sidebar rows produce.
+        entry.connect_destroy({
+            let popover = popover.clone();
+            move |_| popover.unparent()
+        });
 
         let inner = Rc::new(Inner {
             entry: entry.clone(),
