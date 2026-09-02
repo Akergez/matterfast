@@ -486,13 +486,36 @@ mod tests {
     }
 
     #[test]
-    fn unknown_calls_events_are_preserved_not_dropped() {
+    fn captions_carry_who_said_it() {
         match ev(r#"{"event":"custom_com.mattermost.calls_caption",
+                    "data":{"user_id":"u1","session_id":"s1","text":"hello"},
+                    "broadcast":{},"seq":9}"#)
+        .unwrap()
+        {
+            CallsEvent::Caption {
+                user_id,
+                session_id,
+                text,
+            } => {
+                assert_eq!(user_id, "u1");
+                assert_eq!(session_id, "s1");
+                assert_eq!(text, "hello");
+            }
+            other => panic!("expected Caption, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unknown_calls_events_are_preserved_not_dropped() {
+        // Deliberately a name the plugin does not send: the point is that an
+        // event this crate has never heard of survives with its payload rather
+        // than being silently dropped.
+        match ev(r#"{"event":"custom_com.mattermost.calls_something_new",
                     "data":{"text":"hello"},"broadcast":{},"seq":9}"#)
         .unwrap()
         {
             CallsEvent::Unhandled { name, data } => {
-                assert_eq!(name, "caption");
+                assert_eq!(name, "something_new");
                 assert_eq!(data.get("text").unwrap(), "hello");
             }
             other => panic!("expected Unhandled, got {other:?}"),

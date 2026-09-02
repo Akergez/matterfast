@@ -3638,7 +3638,6 @@ impl Ui {
             Action::ScheduleMessage => self.schedule_message(),
             Action::ThreadDraftChanged => self.schedule_thread_draft_save(),
             Action::LoadOlder => self.load_older(),
-            Action::LoadOlder => self.load_older(),
             Action::PickAttachment => self.pick_attachment(),
             Action::AttachFiles(paths) => {
                 let Some(channel_id) = self.state.borrow().current_channel.clone() else {
