@@ -4384,6 +4384,7 @@ impl Ui {
         };
 
         self.loading_older.set(true);
+        self.chat.set_loading_older(true);
         let anchor = self.chat.scroll_anchor();
         let ui = self.clone();
         runtime::spawn(
@@ -4396,6 +4397,7 @@ impl Ui {
             },
             move |result| {
                 ui.loading_older.set(false);
+                ui.chat.set_loading_older(false);
                 let Ok((channel_id, posts, authors, statuses)) = result else {
                     return;
                 };

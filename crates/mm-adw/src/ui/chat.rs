@@ -53,6 +53,9 @@ pub struct ChatView {
     /// Shown instead of an empty feed while the first page is in flight, so a
     /// slow channel reads as loading rather than as empty.
     loading: Rc<RefCell<bool>>,
+    /// The spinner at the top of the feed while the page before this one is
+    /// being fetched. Kept so it can be taken back out again.
+    older_spinner: RefCell<Option<gtk::Box>>,
     connection: adw::Banner,
     typing: gtk::Label,
     attachments: gtk::Box,
@@ -562,6 +565,7 @@ impl ChatView {
             editing,
             restoring,
             showing: RefCell::new(None),
+            older_spinner: RefCell::new(None),
             loading: Rc::new(RefCell::new(false)),
             connection,
             pinned_to_bottom,
@@ -874,6 +878,38 @@ impl ChatView {
         false
     }
 
+    /// Says, at the top of the feed, that the page before this one is on its
+    /// way. Without it a scrollback that takes a moment looks like the start
+    /// of the channel.
+    pub fn set_loading_older(&self, loading: bool) {
+        let mut slot = self.older_spinner.borrow_mut();
+        if !loading {
+            // `prepend_older` may have taken it out already, along with the
+            // rest of the stale decoration above the first row.
+            if let Some(row) = slot.take() {
+                if row.parent().as_ref() == Some(self.messages.upcast_ref::<gtk::Widget>()) {
+                    self.messages.remove(&row);
+                }
+            }
+            return;
+        }
+        if slot.is_some() {
+            return;
+        }
+        let row = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .halign(gtk::Align::Center)
+            .margin_top(8)
+            .margin_bottom(8)
+            .build();
+        // adw::Spinner needs libadwaita 1.6; GTK's own works everywhere.
+        let spinner = gtk::Spinner::new();
+        spinner.start();
+        row.append(&spinner);
+        self.messages.prepend(&row);
+        *slot = Some(row);
+    }
+
     /// How far the feed is scrolled, and how tall it is. Used to keep the
     /// reader looking at the same message when older ones are added above.
     pub fn scroll_anchor(&self) -> (f64, f64) {
@@ -886,10 +922,33 @@ impl ChatView {
     pub fn restore_scroll(&self, anchor: (f64, f64)) {
         let adjustment = self.scroller.vadjustment();
         let (value, previous_upper) = anchor;
-        let grew = adjustment.upper() - previous_upper;
-        if grew > 0.0 {
-            adjustment.set_value(value + grew);
-        }
+
+        // `upper` only tells the truth once the new rows have been laid out,
+        // which is a frame away — reading it here gives the height from
+        // before the prepend, so the view is left pinned at the top. The top
+        // is what asks for the page before this one, so it asked again
+        // immediately, and again, walking back to the beginning of the
+        // channel as fast as the server would answer while building every
+        // row on the way. That is what "not responding" was.
+        //
+        // `changed` is the adjustment saying its own bounds moved, which is
+        // exactly the moment to move with them. One shot: the handler takes
+        // itself off again.
+        let handler = Rc::new(RefCell::new(None));
+        let id = adjustment.connect_changed({
+            let handler = handler.clone();
+            move |adjustment| {
+                let grew = adjustment.upper() - previous_upper;
+                if grew <= 0.0 {
+                    return;
+                }
+                adjustment.set_value(value + grew);
+                if let Some(id) = handler.borrow_mut().take() {
+                    adjustment.disconnect(id);
+                }
+            }
+        });
+        *handler.borrow_mut() = Some(id);
     }
 
     /// Adds the just-fetched older page to the top of the feed without
