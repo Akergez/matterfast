@@ -166,7 +166,11 @@ pub fn build_window(app: &adw::Application) {
                 move |result| {
                     // Only now is the token known to work.
                     let token = result.client.token().unwrap_or_default();
-                    crate::session::save(result.client.site_url(), &token);
+                    let server = result.client.site_url().to_string();
+                    runtime::spawn(
+                        async move { crate::session::save_async(&server, &token).await },
+                        |_| {},
+                    );
                     start_session(&window, &toasts, result.client, result.me);
                 }
             });
@@ -174,11 +178,26 @@ pub fn build_window(app: &adw::Application) {
         }
     };
 
-    match crate::session::load() {
-        Some((server, token)) => {
-            restore_session(&window, &toast_overlay, server, token, show_login)
-        }
-        None => show_login(),
+    // Reading the keyring can prompt for an unlock, so the window goes up
+    // first and the stored session arrives into it.
+    {
+        let window_ = window.clone();
+        let toasts = toast_overlay.clone();
+        let spinner = gtk::Spinner::builder()
+            .halign(gtk::Align::Center)
+            .valign(gtk::Align::Center)
+            .width_request(32)
+            .height_request(32)
+            .build();
+        spinner.start();
+        toast_overlay.set_child(Some(&spinner));
+
+        runtime::spawn(crate::session::load_async(), move |stored| match stored {
+            Some((server, token)) => {
+                restore_session(&window_, &toasts, server, token, show_login)
+            }
+            None => show_login(),
+        });
     }
 
     window.present();
@@ -197,8 +216,8 @@ fn restore_session(
     let client = match mattermost_api::Client::new(&server) {
         Ok(c) => c,
         Err(_) => {
-            crate::session::clear();
-        crate::cache::clear();
+            runtime::spawn(crate::session::clear_async(), |_| {});
+            crate::cache::clear();
             show_login();
             return;
         }
@@ -227,8 +246,8 @@ fn restore_session(
                 // A refused token is spent; anything else (server down, no
                 // network) leaves it alone so the next launch can retry.
                 if !matches!(&e, mattermost_api::Error::Http(_)) {
-                    crate::session::clear();
-        crate::cache::clear();
+                    runtime::spawn(crate::session::clear_async(), |_| {});
+                    crate::cache::clear();
                 }
                 tracing::info!("stored session not usable: {e}");
                 show_login();
@@ -1953,7 +1972,7 @@ impl Ui {
 
     /// Fetches recent mentions and the thread inbox for the current team.
     fn load_inbox(self: &Rc<Self>) {
-        let (client, team_id, username, crt) = {
+        let (client, team_id, username, crt, me) = {
             let st = self.state.borrow();
             let Some(team) = st.current_team.clone() else {
                 return;
@@ -1963,6 +1982,7 @@ impl Ui {
                 team,
                 st.me.username.clone(),
                 st.crt_enabled,
+                st.me.id.clone(),
             )
         };
 
@@ -1981,7 +2001,15 @@ impl Ui {
                     None
                 };
 
+                // Saved posts are a preference list of ids; the posts
+                // themselves have to be fetched, or the saved tab can only
+                // show whatever a channel happened to load.
+                let saved = client.flagged_posts(&me, INBOX_PAGE).await.ok();
+
                 let mut ids: HashSet<String> = HashSet::new();
+                if let Some(s) = &saved {
+                    ids.extend(s.posts.values().map(|p| p.user_id.clone()));
+                }
                 if let Some(m) = &mentions {
                     ids.extend(m.posts.posts.values().map(|p| p.user_id.clone()));
                 }
@@ -1994,9 +2022,9 @@ impl Ui {
                 } else {
                     client.users_by_ids(&ids).await.unwrap_or_default()
                 };
-                (mentions, threads, authors)
+                (mentions, threads, saved, authors)
             },
-            move |(mentions, threads, authors)| {
+            move |(mentions, threads, saved, authors)| {
                 {
                     let mut st = ui.state.borrow_mut();
                     for user in authors {
@@ -2007,6 +2035,13 @@ impl Ui {
                     }
                     if let Some(threads) = threads {
                         st.thread_inbox = threads.threads;
+                    }
+                    // Filed under their own channels, so the saved tab and the
+                    // conversation agree about what a post says.
+                    if let Some(saved) = saved {
+                        for post in saved.posts.values() {
+                            st.apply_post(post.clone());
+                        }
                     }
                 }
                 ui.refresh_messages();

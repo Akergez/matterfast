@@ -9,7 +9,7 @@ use std::rc::Rc;
 
 use adw::prelude::*;
 use gtk::glib;
-use mattermost_api::models::Millis;
+use mattermost_api::models::{Millis, Post};
 
 use crate::avatars::Avatars;
 use crate::state::{ChannelFeed, SharedState};
@@ -40,6 +40,7 @@ pub struct RightPanel {
     search_list: gtk::Box,
 
     inbox_stack: gtk::Stack,
+    saved_list: gtk::Box,
     mentions_list: gtk::Box,
     threads_list: gtk::Box,
 
@@ -188,8 +189,10 @@ impl RightPanel {
             .transition_type(gtk::StackTransitionType::Crossfade)
             .vexpand(true)
             .build();
+        let saved_list = list_box();
         inbox_stack.add_titled(&scroller(&mentions_list), Some("mentions"), "Mentions");
         inbox_stack.add_titled(&scroller(&threads_list), Some("threads"), "Threads");
+        inbox_stack.add_titled(&scroller(&saved_list), Some("saved"), "Saved");
 
         let switcher = gtk::StackSwitcher::builder()
             .stack(&inbox_stack)
@@ -236,6 +239,7 @@ impl RightPanel {
             thread_entry,
             search_list,
             inbox_stack,
+            saved_list,
             mentions_list,
             threads_list,
             on_open_thread: Rc::new(on_open_thread),
@@ -445,6 +449,7 @@ impl RightPanel {
         self.subtitle.set_visible(false);
         clear(&self.mentions_list);
         clear(&self.threads_list);
+        clear(&self.saved_list);
 
         let st = state.borrow();
 
@@ -484,6 +489,57 @@ impl RightPanel {
                 )
             });
             self.mentions_list.append(&row);
+        }
+
+        // Saved posts: the ones you flagged, newest first. They are held as a
+        // set of ids, so this walks what is loaded rather than fetching —
+        // anything not in memory shows up as soon as its channel is opened.
+        let mut saved: Vec<&Post> = st
+            .feeds
+            .values()
+            .chain(st.threads.values())
+            .flat_map(|feed| feed.posts.iter())
+            .filter(|p| st.saved_posts.contains(&p.id))
+            .collect();
+        saved.sort_by_key(|p| std::cmp::Reverse(p.create_at));
+        saved.dedup_by_key(|p| p.id.clone());
+
+        if saved.is_empty() {
+            self.saved_list.append(&empty_state(
+                "starred-symbolic",
+                "Nothing saved",
+                "Save a message from its menu and it waits here.",
+            ));
+        }
+        for post in saved {
+            let channel = st
+                .channel(&post.channel_id)
+                .map(|c| st.channel_title(c))
+                .unwrap_or_else(|| "unknown channel".into());
+            let row = inbox_row(
+                avatars,
+                &post.user_id,
+                &st.author_name(post),
+                &channel,
+                &post.message,
+                post.create_at,
+                None,
+            );
+            let channel_id = post.channel_id.clone();
+            let root_id = post.thread_root().to_string();
+            let is_reply = post.is_reply();
+            let open = self.on_open_post.clone();
+            row.connect_clicked(move |_| {
+                open(
+                    channel_id.clone(),
+                    if is_reply {
+                        root_id.clone()
+                    } else {
+                        String::new()
+                    },
+                )
+            });
+            self.saved_list.append(&row);
         }
 
         if st.thread_inbox.is_empty() {
