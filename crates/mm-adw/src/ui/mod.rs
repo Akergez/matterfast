@@ -50,6 +50,43 @@ use sidebar::{ChannelSidebar, RowAction};
 /// which notifies you about reactions to your own posts.
 const REACTION_NOTIFY_PREFIX: &str = "custom_ru.toxblh.reactions-notify_";
 
+/// The `@names` a message mentions, by the same rule the renderer uses.
+fn mentioned_names(message: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut rest = message;
+    while let Some(at) = rest.find('@') {
+        // Mid-word, so it is an email address rather than a mention.
+        let preceded = rest[..at].chars().next_back();
+        rest = &rest[at + 1..];
+        if preceded.is_some_and(|c| c.is_alphanumeric()) {
+            continue;
+        }
+        let end = rest
+            .find(|c: char| !(c.is_alphanumeric() || matches!(c, '.' | '-' | '_')))
+            .unwrap_or(rest.len());
+        if end > 0 {
+            names.push(rest[..end].trim_end_matches('.').to_string());
+        }
+        rest = &rest[end..];
+    }
+    names
+}
+
+#[cfg(test)]
+mod mention_tests {
+    use super::mentioned_names;
+
+    #[test]
+    fn finds_mentions_and_ignores_addresses() {
+        assert_eq!(mentioned_names("hi @anna and @bob"), ["anna", "bob"]);
+        // An email is not a mention, and neither is a trailing full stop.
+        assert_eq!(mentioned_names("mail me at a@b.com"), Vec::<String>::new());
+        assert_eq!(mentioned_names("ask @anna."), ["anna"]);
+        assert_eq!(mentioned_names("nothing here"), Vec::<String>::new());
+        assert_eq!(mentioned_names("@"), Vec::<String>::new());
+    }
+}
+
 /// The icon for a channel in a flat list, where there is no "#" column.
 fn channel_icon_name(channel: &Channel) -> String {
     match channel.r#type {
@@ -1107,6 +1144,50 @@ impl Ui {
                 if let Err(e) = result {
                     ui.toast(&format!("Could not do that: {e}"));
                 }
+            },
+        );
+    }
+
+    /// Looks up people named in messages that we do not hold.
+    ///
+    /// A mention is only highlighted once the name resolves, and a channel you
+    /// have just opened is full of names you may never have seen — without
+    /// this, every one of them reads as plain text until they happen to post.
+    fn resolve_mentions(self: &Rc<Self>) {
+        let (client, wanted) = {
+            let st = self.state.borrow();
+            let known: HashSet<&str> = st.users.values().map(|u| u.username.as_str()).collect();
+            let mut wanted: HashSet<String> = HashSet::new();
+            let feed = st.current_channel.as_ref().and_then(|id| st.feeds.get(id));
+            for post in feed.into_iter().flat_map(|feed| feed.posts.iter()) {
+                for name in mentioned_names(&post.message) {
+                    if !known.contains(name.as_str()) {
+                        wanted.insert(name);
+                    }
+                }
+            }
+            (st.client.clone(), wanted)
+        };
+        if wanted.is_empty() {
+            return;
+        }
+
+        let names: Vec<String> = wanted.into_iter().take(50).collect();
+        let ui = self.clone();
+        runtime::spawn(
+            async move { client.users_by_usernames(&names).await },
+            move |result| {
+                let Ok(users) = result else { return };
+                if users.is_empty() {
+                    return;
+                }
+                {
+                    let mut st = ui.state.borrow_mut();
+                    for user in users {
+                        st.users.insert(user.id.clone(), user);
+                    }
+                }
+                ui.refresh_messages();
             },
         );
     }
@@ -4431,7 +4512,23 @@ impl Ui {
             move |id| ui.dispatch(Action::OpenDirectMessage(id))
         });
         let Some(popover) = popover else {
-            self.toast("That user has not loaded yet.");
+            // Not held yet — fetch them and try again rather than telling
+            // someone to wait for something they cannot make happen.
+            let client = self.state.borrow().client.clone();
+            let id = user_id.to_string();
+            let ui = self.clone();
+            let anchor = anchor.clone();
+            runtime::spawn(
+                async move { client.user(&id).await },
+                move |result| match result {
+                    Ok(user) => {
+                        let id = user.id.clone();
+                        ui.state.borrow_mut().users.insert(id.clone(), user);
+                        ui.show_profile(&id, &anchor);
+                    }
+                    Err(_) => ui.toast("That person could not be looked up."),
+                },
+            );
             return;
         };
         // The popover parents itself onto the anchor, so it has to unparent
@@ -4687,6 +4784,7 @@ impl Ui {
                             ui.chat.set_loading(false);
                             ui.refresh_messages();
                             ui.chat.focus_composer();
+                            ui.resolve_mentions();
                             // Straight into the store, so the next launch has
                             // this channel without asking for it again.
                             ui.store_posts(posts.chronological().into_iter().cloned().collect());
