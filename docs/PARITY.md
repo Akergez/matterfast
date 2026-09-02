@@ -120,8 +120,9 @@ ones that matter:
 
 ### Platform
 
-- **Local persistence.** Everything is refetched on launch; there is no
-  database, so a cold start is a network round trip before anything appears.
+- **A real local store.** There is a snapshot — last session's channels and a
+  screenful of posts each, drawn before the network answers — but no database,
+  so history beyond that is always a fetch and nothing is searchable offline.
 - **Background/tray operation.**
 - **Push notifications** on mobile builds.
 - **Group mentions** (`@group`), licensed servers only.
@@ -144,8 +145,9 @@ something. Where that holds today:
 
 Where it does not:
 
-- **First open of a channel** waits for `posts?per_page=60`. It shows a
-  spinner, which is honest, but a local cache would show the last known
-  messages instead.
-- **Cold start** shows nothing until the startup sequence finishes.
+- **First open of a channel** waits for `posts?per_page=60` unless the snapshot
+  happened to keep it. It shows a spinner, which is honest, but a real store
+  would show the last known messages for every channel rather than eight.
+- **Cold start** draws the cached snapshot immediately; the first *ever* launch
+  on a machine still waits for the startup sequence.
 - **Search** has no local index, so every search is a round trip.

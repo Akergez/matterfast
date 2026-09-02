@@ -64,6 +64,22 @@ impl ChannelFeed {
         }
     }
 
+    /// Builds a feed from posts that are already in order — the cache stores
+    /// them the way this holds them, so there is nothing to sort or reverse.
+    ///
+    /// `at_latest` is false: a restored feed is a snapshot from last time and
+    /// almost certainly has messages after it, which is exactly what stops the
+    /// view claiming it is up to date before the network says so.
+    pub fn from_posts(posts: Vec<Post>) -> Self {
+        let last_fetched_at = posts.last().map(|p| p.create_at).unwrap_or(0);
+        ChannelFeed {
+            posts,
+            at_latest: false,
+            at_oldest: false,
+            last_fetched_at,
+        }
+    }
+
     /// Inserts or replaces a post, keeping chronological order.
     ///
     /// Used for both `posted` and `post_edited`: the server sends whole posts,

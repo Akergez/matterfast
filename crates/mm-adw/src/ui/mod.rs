@@ -198,6 +198,7 @@ fn restore_session(
         Ok(c) => c,
         Err(_) => {
             crate::session::clear();
+        crate::cache::clear();
             show_login();
             return;
         }
@@ -227,6 +228,7 @@ fn restore_session(
                 // network) leaves it alone so the next launch can retry.
                 if !matches!(&e, mattermost_api::Error::Http(_)) {
                     crate::session::clear();
+        crate::cache::clear();
                 }
                 tracing::info!("stored session not usable: {e}");
                 show_login();
@@ -497,6 +499,7 @@ fn build_session_ui(
         sidebar_reload_pending: std::cell::Cell::new(false),
         typing_sweep_pending: std::cell::Cell::new(false),
         draft_save_pending: std::cell::Cell::new(false),
+        snapshot_pending: std::cell::Cell::new(false),
         typing_sent_recently: std::cell::Cell::new(false),
         dock_in_chat: std::cell::Cell::new(false),
         dock_visible: std::cell::Cell::new(false),
@@ -522,6 +525,16 @@ fn build_session_ui(
     split.connect_collapsed_notify({
         let ui = ui.clone();
         move |split| ui.place_dock(split.is_collapsed())
+    });
+
+    // The debounce means the last few seconds would otherwise be lost, and
+    // closing the window is exactly when the next launch's picture is decided.
+    window.connect_close_request({
+        let ui = ui.clone();
+        move |_| {
+            ui.save_snapshot();
+            glib::Propagation::Proceed
+        }
     });
 
     // Clicking a notification lands here. The action is on the application so
@@ -611,6 +624,7 @@ struct Ui {
     sidebar_reload_pending: std::cell::Cell<bool>,
     typing_sweep_pending: std::cell::Cell<bool>,
     draft_save_pending: std::cell::Cell<bool>,
+    snapshot_pending: std::cell::Cell<bool>,
     typing_sent_recently: std::cell::Cell<bool>,
     dock_in_chat: std::cell::Cell<bool>,
     dock_visible: std::cell::Cell<bool>,
@@ -712,6 +726,55 @@ impl Ui {
                 }
             },
         );
+    }
+
+    /// Writes the snapshot the next launch will open with.
+    ///
+    /// Debounced hard: this serialises a chunk of state, and the only thing
+    /// that matters is that it ran reasonably recently before the app closed.
+    fn schedule_snapshot(self: &Rc<Self>) {
+        if self.snapshot_pending.replace(true) {
+            return;
+        }
+        let ui = self.clone();
+        glib::timeout_add_local_once(std::time::Duration::from_secs(5), move || {
+            ui.snapshot_pending.set(false);
+            ui.save_snapshot();
+        });
+    }
+
+    fn save_snapshot(&self) {
+        let st = self.state.borrow();
+        let feeds = crate::cache::trim_feeds(
+            st.feeds.iter().map(|(id, feed)| (id, feed.posts.as_slice())),
+            st.current_channel.as_deref(),
+        );
+        // Only the people who appear in what we kept — the whole user map is
+        // most of the file otherwise, and the rest is one request to refill.
+        let wanted: std::collections::HashSet<&str> = feeds
+            .values()
+            .flatten()
+            .map(|p| p.user_id.as_str())
+            .chain(st.channels.values().filter_map(|c| c.dm_teammate_id(&st.me.id)))
+            .collect();
+
+        crate::cache::save(&crate::cache::Snapshot {
+            server: st.client.site_url().to_string(),
+            me: Some(st.me.clone()),
+            teams: st.teams.clone(),
+            current_team: st.current_team.clone(),
+            current_channel: st.current_channel.clone(),
+            channels: st.channels.values().cloned().collect(),
+            memberships: st.memberships.values().cloned().collect(),
+            categories: st.categories.clone(),
+            users: st
+                .users
+                .values()
+                .filter(|u| wanted.contains(u.id.as_str()))
+                .cloned()
+                .collect(),
+            feeds,
+        });
     }
 
     /// Sets your own presence, showing it immediately: the server echoes it
@@ -1707,6 +1770,7 @@ impl Ui {
         self.refresh_call_ui();
         self.refresh_typing();
         self.restore_draft();
+        self.schedule_snapshot();
 
         let (client, crt, have_feed) = {
             let st = self.state.borrow();
@@ -2903,6 +2967,35 @@ async fn hydrate_authors(
 /// Runs the startup sequence and connects the websocket.
 fn bootstrap(ui: Rc<Ui>) {
     let client = ui.state.borrow().client.clone();
+
+    // Draw last time's picture first. Everything here is replaced the moment
+    // the real data lands; it is on screen so that launching the app shows
+    // your channels instead of an empty window for the length of a round trip.
+    if let Some(snapshot) = crate::cache::load(client.site_url()) {
+        {
+            let mut st = ui.state.borrow_mut();
+            if let Some(me) = snapshot.me {
+                st.me = me;
+            }
+            st.teams = snapshot.teams;
+            st.current_team = snapshot.current_team;
+            st.current_channel = snapshot.current_channel;
+            for channel in snapshot.channels {
+                st.channels.insert(channel.id.clone(), channel);
+            }
+            for member in snapshot.memberships {
+                st.memberships.insert(member.channel_id.clone(), member);
+            }
+            st.categories = snapshot.categories;
+            for user in snapshot.users {
+                st.users.insert(user.id.clone(), user);
+            }
+            for (channel_id, posts) in snapshot.feeds {
+                st.feeds.insert(channel_id, ChannelFeed::from_posts(posts));
+            }
+        }
+        ui.refresh_all();
+    }
 
     runtime::spawn(
         async move {

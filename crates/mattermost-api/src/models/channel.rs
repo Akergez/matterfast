@@ -258,7 +258,7 @@ pub struct SidebarCategory {
     pub channel_ids: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct OrderedSidebarCategories {
     #[serde(default)]
     pub categories: Vec<SidebarCategory>,
