@@ -1598,6 +1598,39 @@ impl Ui {
         };
 
         match what {
+            RowAction::MarkRead => {
+                let crt = self.state.borrow().crt_enabled;
+                let ui = self.clone();
+                runtime::spawn(
+                    async move { client.view_channel(&channel_id, "", crt).await },
+                    move |result| match result {
+                        // The server broadcasts multiple_channels_viewed, which
+                        // is what actually clears the badge.
+                        Ok(_) => ui.schedule_sidebar_reload(),
+                        Err(e) => ui.toast(&format!("Could not mark it read: {e}")),
+                    },
+                );
+            }
+            RowAction::MarkUnread => {
+                let crt = self.state.borrow().crt_enabled;
+                let ui = self.clone();
+                let target = channel_id.clone();
+                runtime::spawn(
+                    async move { client.mark_channel_unread(&me, &channel_id, crt).await },
+                    move |result| match result {
+                        Ok(()) => {
+                            // Reading it again on the way out would undo this.
+                            if ui.state.borrow().current_channel.as_deref() == Some(target.as_str())
+                            {
+                                ui.state.borrow_mut().current_channel = None;
+                                ui.refresh_messages();
+                            }
+                            ui.schedule_sidebar_reload();
+                        }
+                        Err(e) => ui.toast(&format!("Could not mark it unread: {e}")),
+                    },
+                );
+            }
             RowAction::SetMuted(muted) => {
                 // Muted is stored as mark_unread: "mention" — the same field
                 // the notification dialog writes, so it goes the same way.

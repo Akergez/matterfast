@@ -13,6 +13,8 @@ use crate::state::SharedState;
 /// What the channel row's own menu can ask for.
 #[derive(Debug, Clone)]
 pub enum RowAction {
+    MarkRead,
+    MarkUnread,
     SetMuted(bool),
     MoveTo(String),
     RenameCategory,
@@ -292,11 +294,25 @@ fn attach_row_menu(
         .memberships
         .get(channel_id)
         .is_some_and(|m| m.is_muted());
-    let mut entries: Vec<(String, String, RowAction)> = vec![(
+    let mut entries: Vec<(String, String, RowAction)> = Vec::new();
+    if state.unread(channel_id).is_unread() {
+        entries.push((
+            "Mark as read".to_string(),
+            "read".to_string(),
+            RowAction::MarkRead,
+        ));
+    } else {
+        entries.push((
+            "Mark as unread".to_string(),
+            "unread".to_string(),
+            RowAction::MarkUnread,
+        ));
+    }
+    entries.push((
         if muted { "Unmute" } else { "Mute" }.to_string(),
         "mute".to_string(),
         RowAction::SetMuted(!muted),
-    )];
+    ));
 
     // Where it is now is not somewhere to move it to.
     let current = state
