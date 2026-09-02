@@ -159,7 +159,9 @@ impl Player {
         controls.append(&label);
 
         // With a thumbnail the controls sit *over* the still, the way a video
-        // reads everywhere else. Without one they are all there is.
+        // reads everywhere else. Without one, a video still has to read as a
+        // video rather than as a line of text: a tile with the play button in
+        // the middle of it, the name underneath.
         let poster: gtk::Widget = match &poster_image {
             Some(texture) => {
                 // Height only, and the width capped by a clamp: a width
@@ -194,7 +196,42 @@ impl Player {
                 overlay.add_overlay(&label);
                 overlay.upcast()
             }
-            None => controls.upcast(),
+            None if is_audio(file) => controls.upcast(),
+            // No still to show, so the tile is a blank one. The play button
+            // is the whole of it, sized like a video rather than like a row,
+            // because that shape is what says "this is something to watch".
+            None => {
+                play.set_halign(gtk::Align::Center);
+                play.set_valign(gtk::Align::Center);
+                play.add_css_class("osd");
+                spinner.set_halign(gtk::Align::Center);
+                spinner.set_valign(gtk::Align::Center);
+
+                let face = gtk::Overlay::builder()
+                    .height_request(POSTER_HEIGHT)
+                    .build();
+                face.add_css_class("video-tile");
+                face.add_overlay(&play);
+                face.add_overlay(&spinner);
+
+                controls.remove(&play);
+                controls.remove(&spinner);
+                controls.set_halign(gtk::Align::Start);
+
+                let tile = gtk::Box::builder()
+                    .orientation(gtk::Orientation::Vertical)
+                    .spacing(4)
+                    .halign(gtk::Align::Start)
+                    .build();
+                tile.append(
+                    &adw::Clamp::builder()
+                        .maximum_size(POSTER_WIDTH)
+                        .child(&face)
+                        .build(),
+                );
+                tile.append(&controls);
+                tile.upcast()
+            }
         };
 
         play.connect_clicked({

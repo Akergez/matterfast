@@ -119,6 +119,18 @@
   padding-right: 6px;
 }
 
+/* Links inside message text. GTK's own theme underlines every `link` node,
+   which turns a message full of URLs and @-mentions into a fence of lines;
+   colour alone is enough to read them as links. The hand cursor comes from
+   GtkLabel itself. Accent rather than the theme's fixed blue, so links follow
+   the user's accent colour like the rest of the app. */
+link,
+link:hover,
+link:visited {
+  color: @accent_color;
+  text-decoration: none;
+}
+
 /* A fenced code block. Monospace, on its own tinted panel, so it reads as
    something quoted rather than as more prose. */
 .message-code {
@@ -212,6 +224,13 @@
   padding: 2px;
   margin-top: 4px;
   background: none;
+}
+
+/* A video with no still yet: a blank tile with the play button in it, so a
+   clip reads as something to watch rather than as a line of text. */
+.video-tile {
+  border-radius: 8px;
+  background-color: alpha(currentColor, 0.10);
 }
 
 /* A file waiting to go out with the next message. */
