@@ -3535,6 +3535,53 @@ impl Ui {
         );
     }
 
+    /// Fetches everything posted in a channel *after* the newest post we
+    /// hold. Used when the socket has been away long enough that the feed has
+    /// a hole in it — scrolling up finds older messages, and nothing else
+    /// would find the ones in the middle.
+    fn load_newer(self: &Rc<Self>, channel_id: String) {
+        let (client, crt, newest) = {
+            let st = self.state.borrow();
+            let Some(feed) = st.feeds.get(&channel_id) else {
+                return;
+            };
+            let Some(newest) = feed.posts.last().map(|p| p.id.clone()) else {
+                return;
+            };
+            (st.client.clone(), st.crt_enabled, newest)
+        };
+
+        let ui = self.clone();
+        runtime::spawn(
+            async move {
+                let posts = client
+                    .posts_after(&channel_id, &newest, INITIAL_POSTS, crt)
+                    .await?;
+                let (authors, statuses) = hydrate_authors(&client, &posts).await;
+                Ok::<_, mattermost_api::Error>((channel_id, posts, authors, statuses))
+            },
+            move |result| {
+                let Ok((channel_id, posts, authors, statuses)) = result else {
+                    return;
+                };
+                {
+                    let mut st = ui.state.borrow_mut();
+                    for user in authors {
+                        st.users.insert(user.id.clone(), user);
+                    }
+                    st.apply_statuses(statuses);
+                    let newer = ChannelFeed::from_list(&posts);
+                    if let Some(feed) = st.feeds.get_mut(&channel_id) {
+                        for post in newer.posts {
+                            feed.upsert(post);
+                        }
+                    }
+                }
+                ui.refresh_messages();
+            },
+        );
+    }
+
     /// Fetches the page of messages before the oldest one we hold.
     ///
     /// Only one at a time, and never past the beginning: reaching the top of a
@@ -5881,7 +5928,7 @@ fn resync(ui: &Rc<Ui>) {
                 for m in members {
                     st.memberships.insert(m.channel_id.clone(), m);
                 }
-                if let (Some(id), Some(list)) = (channel_id, missed) {
+                if let (Some(id), Some(list)) = (channel_id.clone(), missed) {
                     let posts: Vec<Post> = list.chronological().into_iter().cloned().collect();
                     for post in posts {
                         if post.is_deleted() {
@@ -5898,6 +5945,13 @@ fn resync(ui: &Rc<Ui>) {
             }
             ui.refresh_all();
             ui.load_inbox();
+            // `?since=` is capped by the server, so a long absence can leave a
+            // hole between what it returned and now. Scrolling up finds older
+            // messages and nothing finds the ones in the middle, so ask for
+            // whatever came after the newest post we hold.
+            if let Some(id) = channel_id {
+                ui.load_newer(id);
+            }
         },
     );
 }
