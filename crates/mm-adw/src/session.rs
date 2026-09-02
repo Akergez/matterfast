@@ -39,44 +39,75 @@ fn attributes() -> std::collections::HashMap<&'static str, &'static str> {
     std::collections::HashMap::from([("application", crate::APP_ID), ("type", "session")])
 }
 
-/// Reads the session out of the keyring, falling back to the old plaintext
-/// file — and migrating it in, so the fallback is used at most once.
-///
-/// Async because the Secret Service is a D-Bus service that may need to prompt
-/// the user to unlock. Blocking the GTK thread on that would freeze the window
-/// behind the unlock dialog.
-pub async fn load_async() -> Option<(String, String)> {
-    match keyring_load().await {
-        Ok(Some(found)) => return Some(found),
-        Ok(None) => {}
-        Err(e) => tracing::warn!("keyring unavailable, using the file: {e}"),
-    }
-    // Either nothing is stored, or this is an upgrade from a version that
-    // wrote the file. Move it in and take the file back out of circulation.
-    let found = load()?;
-    save_async(&found.0, &found.1).await;
-    clear_file();
-    Some(found)
+/// The same attributes, narrowed to one server. The server is part of the key
+/// so several accounts can be stored side by side rather than overwriting each
+/// other.
+fn attributes_for(server: &str) -> std::collections::HashMap<&str, &str> {
+    std::collections::HashMap::from([
+        ("application", crate::APP_ID),
+        ("type", "session"),
+        ("server", server),
+    ])
 }
 
-async fn keyring_load() -> Result<Option<(String, String)>, oo7::Error> {
-    let keyring = oo7::Keyring::new().await?;
-    let items = keyring.search_items(&attributes()).await?;
-    let Some(item) = items.first() else {
-        return Ok(None);
-    };
-    let secret = item.secret().await?;
-    let stored: serde_json::Value = match serde_json::from_slice(&secret) {
-        Ok(v) => v,
-        Err(_) => return Ok(None),
-    };
-    let read = |key: &str| stored.get(key).and_then(|v| v.as_str()).map(str::to_owned);
-    Ok(match (read("server"), read("token")) {
-        (Some(server), Some(token)) if !server.is_empty() && !token.is_empty() => {
-            Some((server, token))
+/// Every stored session, newest last. Used to offer a choice when more than
+/// one server is signed in.
+pub async fn load_all_async() -> Vec<(String, String)> {
+    let found = async {
+        let keyring = oo7::Keyring::new().await?;
+        let items = keyring.search_items(&attributes()).await?;
+        let mut sessions = Vec::new();
+        for item in items {
+            let Ok(secret) = item.secret().await else {
+                continue;
+            };
+            if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&secret) {
+                let read = |key: &str| {
+                    value
+                        .get(key)
+                        .and_then(|v| v.as_str())
+                        .map(str::to_owned)
+                        .filter(|s| !s.is_empty())
+                };
+                if let (Some(server), Some(token)) = (read("server"), read("token")) {
+                    sessions.push((server, token));
+                }
+            }
         }
-        _ => None,
-    })
+        Ok::<_, oo7::Error>(sessions)
+    }
+    .await;
+
+    match found {
+        Ok(sessions) if !sessions.is_empty() => sessions,
+        // Nothing in the keyring: either a first run, or an upgrade from the
+        // version that wrote a file. Migrate it in and take it out of
+        // circulation, so the fallback is read at most once.
+        Ok(_) => match load() {
+            Some((server, token)) => {
+                save_async(&server, &token).await;
+                clear_file();
+                vec![(server, token)]
+            }
+            None => Vec::new(),
+        },
+        Err(e) => {
+            tracing::warn!("keyring unavailable, using the file: {e}");
+            load().into_iter().collect()
+        }
+    }
+}
+
+/// Forgets one server's session, leaving any others alone.
+pub async fn forget_async(server: &str) {
+    let result = async {
+        let keyring = oo7::Keyring::new().await?;
+        keyring.delete(&attributes_for(server)).await
+    }
+    .await;
+    if let Err(e) = result {
+        tracing::debug!("could not forget {server}: {e}");
+    }
 }
 
 /// Stores the session in the keyring, replacing whatever was there.
@@ -85,7 +116,7 @@ pub async fn save_async(server: &str, token: &str) {
     let result = async {
         let keyring = oo7::Keyring::new().await?;
         keyring
-            .create_item(LABEL, &attributes(), secret.as_bytes(), true)
+            .create_item(LABEL, &attributes_for(server), secret.as_bytes(), true)
             .await
     }
     .await;

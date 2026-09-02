@@ -81,11 +81,15 @@ impl ChannelSidebar {
         // than to any one channel.
         let menu = gtk::gio::Menu::new();
         let channels_section = gtk::gio::Menu::new();
+        channels_section.append(Some("Jump to…"), Some("win.quick-switch"));
         channels_section.append(Some("New Channel…"), Some("win.new-channel"));
         channels_section.append(Some("Browse Channels…"), Some("win.browse-channels"));
         menu.append_section(None, &channels_section);
         let account_section = gtk::gio::Menu::new();
+        account_section.append(Some("Edit Profile…"), Some("win.edit-profile"));
+        account_section.append(Some("Set a Status…"), Some("win.custom-status"));
         account_section.append(Some("Notifications…"), Some("win.notification-settings"));
+        account_section.append(Some("Sign Out"), Some("win.sign-out"));
         menu.append_section(None, &account_section);
 
         let menu_button = gtk::MenuButton::builder()

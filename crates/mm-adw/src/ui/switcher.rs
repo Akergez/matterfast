@@ -173,12 +173,7 @@ impl Switcher {
 
 /// Moves the selection by `delta` and keeps it on screen. Selecting rather than
 /// focusing is what leaves the entry able to carry on typing.
-fn step(
-    list: &gtk::ListBox,
-    scroller: &gtk::ScrolledWindow,
-    targets: &[Target],
-    delta: i32,
-) {
+fn step(list: &gtk::ListBox, scroller: &gtk::ScrolledWindow, targets: &[Target], delta: i32) {
     let next = next_index(
         list.selected_row().map(|row| row.index()),
         delta,

@@ -8,6 +8,7 @@
 //! The one exception is the profile popover, which needs the widget it anchors
 //! to; it is built inline from an `Rc<Ui>` capture instead.
 
+mod account;
 mod autocomplete;
 mod call_dock;
 mod chat;
@@ -19,6 +20,7 @@ mod profile;
 mod rhs;
 mod sidebar;
 pub mod sso;
+mod switcher;
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -47,16 +49,43 @@ use sidebar::ChannelSidebar;
 /// which notifies you about reactions to your own posts.
 const REACTION_NOTIFY_PREFIX: &str = "custom_ru.toxblh.reactions-notify_";
 
+/// The icon for a channel in a flat list, where there is no "#" column.
+fn channel_icon_name(channel: &Channel) -> String {
+    match channel.r#type {
+        ChannelType::Open => "network-workgroup-symbolic",
+        ChannelType::Private => "changes-prevent-symbolic",
+        ChannelType::Direct => "avatar-default-symbolic",
+        _ => "system-users-symbolic",
+    }
+    .to_string()
+}
+
+/// A server URL with the scheme stripped, which is how people say it.
+fn pretty_server(url: &str) -> String {
+    url.trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .trim_end_matches('/')
+        .to_string()
+}
+
 /// The entries in the two header menus.
 #[derive(Debug, Clone, Copy)]
 enum MenuAction {
     NewChannel,
     BrowseChannels,
     AccountNotifications,
+    EditProfile,
+    CustomStatus,
+    QuickSwitch,
+    SignOut,
     ChannelNotifications,
     LeaveChannel,
     PinnedPosts,
 }
+
+/// How many rows the quick switcher offers per source. Long enough to find
+/// what you meant, short enough to stay a keyboard shortcut.
+const QUICK_SWITCH_ROWS: usize = 10;
 
 /// How many completion candidates to offer. More than this and the popover is
 /// a list to read rather than a shortcut.
@@ -215,10 +244,42 @@ pub fn build_window(app: &adw::Application) {
         spinner.start();
         toast_overlay.set_child(Some(&spinner));
 
-        runtime::spawn(crate::session::load_async(), move |stored| match stored {
-            Some((server, token)) => restore_session(&window_, &toasts, server, token, show_login),
-            None => show_login(),
-        });
+        runtime::spawn(
+            crate::session::load_all_async(),
+            move |stored| match stored.as_slice() {
+                [] => show_login(),
+                [(server, token)] => {
+                    restore_session(&window_, &toasts, server.clone(), token.clone(), show_login)
+                }
+                // More than one account is stored, so ask rather than guessing
+                // which one this launch is for.
+                many => {
+                    let servers: Vec<(String, String)> = many
+                        .iter()
+                        .map(|(server, _)| (server.clone(), pretty_server(server)))
+                        .collect();
+                    let stored = many.to_vec();
+                    let window = window_.clone();
+                    let toasts_ = toasts.clone();
+                    let show_login = Rc::new(show_login);
+                    let add = show_login.clone();
+                    account::choose_server(
+                        &window_.clone(),
+                        servers,
+                        move |chosen| {
+                            let Some((server, token)) =
+                                stored.iter().find(|(s, _)| s == &chosen).cloned()
+                            else {
+                                return;
+                            };
+                            let show_login = show_login.clone();
+                            restore_session(&window, &toasts_, server, token, move || show_login());
+                        },
+                        move || add(),
+                    );
+                }
+            },
+        );
     }
 
     window.present();
@@ -601,6 +662,10 @@ fn build_session_ui(
         ("new-channel", MenuAction::NewChannel),
         ("browse-channels", MenuAction::BrowseChannels),
         ("notification-settings", MenuAction::AccountNotifications),
+        ("edit-profile", MenuAction::EditProfile),
+        ("quick-switch", MenuAction::QuickSwitch),
+        ("sign-out", MenuAction::SignOut),
+        ("custom-status", MenuAction::CustomStatus),
         ("channel-notifications", MenuAction::ChannelNotifications),
         ("leave-channel", MenuAction::LeaveChannel),
         ("pinned-posts", MenuAction::PinnedPosts),
@@ -611,6 +676,10 @@ fn build_session_ui(
             move |_, _| ui.menu_action(action)
         });
         window.add_action(&entry);
+    }
+
+    if let Some(app) = window.application() {
+        app.set_accels_for_action("win.quick-switch", &["<Control>k"]);
     }
 
     // Clicking a notification lands here. The action is on the application so
@@ -1044,6 +1113,10 @@ impl Ui {
             MenuAction::NewChannel => self.new_channel(),
             MenuAction::BrowseChannels => self.browse_channels(),
             MenuAction::AccountNotifications => self.account_notifications(),
+            MenuAction::EditProfile => self.edit_profile(),
+            MenuAction::QuickSwitch => self.quick_switch(),
+            MenuAction::SignOut => self.sign_out(),
+            MenuAction::CustomStatus => self.custom_status(),
             MenuAction::ChannelNotifications => self.channel_notifications(),
             MenuAction::LeaveChannel => self.leave_channel(),
             MenuAction::PinnedPosts => self.show_pinned(),
@@ -1254,6 +1327,284 @@ impl Ui {
                     Err(e) => ui.toast(&format!("Could not schedule it: {e}")),
                 },
             );
+        });
+    }
+
+    /// Signs out of this server, forgetting its token and its cached
+    /// messages, and leaves any other server signed in.
+    fn sign_out(self: &Rc<Self>) {
+        let dialog = adw::MessageDialog::new(
+            Some(&self.window),
+            Some("Sign out?"),
+            Some("This device will forget the session. Anything unsent is lost."),
+        );
+        dialog.add_responses(&[("cancel", "Cancel"), ("sign-out", "Sign Out")]);
+        dialog.set_response_appearance("sign-out", adw::ResponseAppearance::Destructive);
+        dialog.set_default_response(Some("cancel"));
+        dialog.set_close_response("cancel");
+
+        let ui = self.clone();
+        dialog.connect_response(None, move |dialog, response| {
+            dialog.close();
+            if response != "sign-out" {
+                return;
+            }
+            let client = ui.state.borrow().client.clone();
+            let server = client.site_url().to_string();
+            crate::cache::clear();
+            runtime::spawn(
+                async move {
+                    // Revoke it server-side too, so a copy that leaked with
+                    // the file is useless rather than merely forgotten.
+                    let _ = client.logout().await;
+                    crate::session::forget_async(&server).await;
+                },
+                |_| {},
+            );
+            ui.window.close();
+        });
+        dialog.present();
+    }
+
+    /// Ctrl+K: jump to a channel or a person by typing a few letters.
+    ///
+    /// Channels are matched locally against the sidebar — instant, and the
+    /// list is small. People have to be searched for, because the client only
+    /// knows the ones it has seen.
+    fn quick_switch(self: &Rc<Self>) {
+        let holder: Rc<RefCell<Option<Rc<switcher::Switcher>>>> = Rc::new(RefCell::new(None));
+        let search_ui = self.clone();
+        let pick_ui = self.clone();
+        let search_holder = holder.clone();
+
+        let opened = Rc::new(switcher::Switcher::present(
+            &self.window,
+            move |term| {
+                let lowered = term.to_lowercase();
+                let (client, team_id, mut rows) = {
+                    let st = search_ui.state.borrow();
+                    let mut rows: Vec<(switcher::Target, String, String, String)> =
+                        st.channels
+                            .values()
+                            .filter(|c| c.delete_at == 0)
+                            .filter_map(|channel| {
+                                let title = st.channel_title(channel);
+                                (lowered.is_empty() || title.to_lowercase().contains(&lowered))
+                                    .then(|| {
+                                        (
+                                            switcher::Target::Channel(channel.id.clone()),
+                                            title,
+                                            String::new(),
+                                            channel_icon_name(channel),
+                                        )
+                                    })
+                            })
+                            .collect();
+                    rows.sort_by_key(|row| row.1.to_lowercase());
+                    rows.truncate(QUICK_SWITCH_ROWS);
+                    (
+                        st.client.clone(),
+                        st.current_team.clone().unwrap_or_default(),
+                        rows,
+                    )
+                };
+
+                if let Some(switcher) = search_holder.borrow().as_ref() {
+                    switcher.set_results(rows.clone());
+                }
+                if lowered.is_empty() {
+                    return;
+                }
+
+                // People arrive after the channels rather than instead of
+                // them: the local answer should never wait on the network.
+                let holder = search_holder.clone();
+                let state = search_ui.state.clone();
+                runtime::spawn(
+                    async move { client.search_users(&term, &team_id, "", "").await },
+                    move |result| {
+                        let Ok(users) = result else { return };
+                        let display = state.borrow().teammate_name_display().to_string();
+                        rows.extend(users.into_iter().take(QUICK_SWITCH_ROWS).map(|user| {
+                            (
+                                switcher::Target::User(user.id.clone()),
+                                user.display_name(&display),
+                                format!("@{}", user.username),
+                                "avatar-default-symbolic".to_string(),
+                            )
+                        }));
+                        if let Some(switcher) = holder.borrow().as_ref() {
+                            switcher.set_results(rows.clone());
+                        }
+                    },
+                );
+            },
+            move |target| match target {
+                switcher::Target::Channel(id) => pick_ui.dispatch(Action::SelectChannel(id)),
+                switcher::Target::User(id) => pick_ui.dispatch(Action::OpenDirectMessage(id)),
+            },
+        ));
+        *holder.borrow_mut() = Some(opened);
+    }
+
+    /// Your own name, nickname, position and picture.
+    fn edit_profile(self: &Rc<Self>) {
+        let (client, me, current) = {
+            let st = self.state.borrow();
+            let me = &st.me;
+            (
+                st.client.clone(),
+                me.id.clone(),
+                (
+                    me.first_name.clone(),
+                    me.last_name.clone(),
+                    me.nickname.clone(),
+                    me.position.clone(),
+                ),
+            )
+        };
+        let avatar = self.avatars.texture(&me);
+
+        let save_ui = self.clone();
+        let avatar_ui = self.clone();
+        let save_client = client.clone();
+        let save_me = me.clone();
+        account::edit_profile(
+            &self.window,
+            current,
+            avatar,
+            move |first, last, nickname, position| {
+                let patch = serde_json::json!({
+                    "first_name": first,
+                    "last_name": last,
+                    "nickname": nickname,
+                    "position": position,
+                });
+                let client = save_client.clone();
+                let me = save_me.clone();
+                let ui = save_ui.clone();
+                runtime::spawn(
+                    async move { client.patch_user(&me, &patch).await },
+                    move |result| match result {
+                        Ok(user) => {
+                            ui.state
+                                .borrow_mut()
+                                .users
+                                .insert(user.id.clone(), user.clone());
+                            ui.state.borrow_mut().me = user;
+                            ui.refresh_all();
+                        }
+                        Err(e) => ui.toast(&format!("Could not save that: {e}")),
+                    },
+                );
+            },
+            move |path| {
+                let client = client.clone();
+                let me = me.clone();
+                let ui = avatar_ui.clone();
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "avatar.png".into());
+                runtime::spawn(
+                    async move {
+                        let bytes = tokio::fs::read(&path).await.map_err(|e| e.to_string())?;
+                        client
+                            .set_profile_image(&me, &name, bytes)
+                            .await
+                            .map_err(|e| e.to_string())
+                    },
+                    move |result| match result {
+                        Ok(()) => {
+                            // The cached texture is now wrong everywhere it is
+                            // drawn, so drop it and let it refetch.
+                            let me = ui.state.borrow().me.id.clone();
+                            ui.avatars.forget(&me);
+                            ui.refresh_all();
+                        }
+                        Err(e) => ui.toast(&format!("Could not upload that: {e}")),
+                    },
+                );
+            },
+        );
+    }
+
+    /// The emoji-and-a-line status that shows next to your name.
+    fn custom_status(self: &Rc<Self>) {
+        let (client, current) = {
+            let st = self.state.borrow();
+            let status = st.me.custom_status();
+            (
+                st.client.clone(),
+                status
+                    .map(|s| (s.emoji.clone(), s.text.clone()))
+                    .unwrap_or_default(),
+            )
+        };
+
+        let set_client = client.clone();
+        let set_ui = self.clone();
+        let clear_ui = self.clone();
+        account::custom_status(
+            &self.window,
+            current,
+            move |emoji, text, expires_at| {
+                let status = mattermost_api::models::CustomStatus {
+                    emoji,
+                    text,
+                    duration: if expires_at > 0 {
+                        "date_and_time".into()
+                    } else {
+                        String::new()
+                    },
+                    // The server wants RFC3339 here, unlike every other time
+                    // in this API.
+                    expires_at: (expires_at > 0)
+                        .then(|| {
+                            glib::DateTime::from_unix_local(expires_at / 1000)
+                                .ok()
+                                .and_then(|d| d.format_iso8601().ok())
+                                .map(|s| s.to_string())
+                        })
+                        .flatten(),
+                };
+                let client = set_client.clone();
+                let ui = set_ui.clone();
+                runtime::spawn(
+                    async move { client.set_custom_status(&status).await },
+                    move |result| match result {
+                        Ok(()) => ui.reload_me(),
+                        Err(e) => ui.toast(&format!("Could not set that: {e}")),
+                    },
+                );
+            },
+            move || {
+                let client = client.clone();
+                let ui = clear_ui.clone();
+                runtime::spawn(
+                    async move { client.clear_custom_status().await },
+                    move |result| match result {
+                        Ok(()) => ui.reload_me(),
+                        Err(e) => ui.toast(&format!("Could not clear that: {e}")),
+                    },
+                );
+            },
+        );
+    }
+
+    /// Refetches our own user after changing something the server owns the
+    /// canonical version of.
+    fn reload_me(self: &Rc<Self>) {
+        let client = self.state.borrow().client.clone();
+        let ui = self.clone();
+        runtime::spawn(async move { client.me().await }, move |result| {
+            if let Ok(user) = result {
+                let mut st = ui.state.borrow_mut();
+                st.users.insert(user.id.clone(), user.clone());
+                st.me = user;
+                drop(st);
+                ui.refresh_all();
+            }
         });
     }
 
