@@ -1358,14 +1358,25 @@ impl Client {
         Ok(resp.bytes().await?.to_vec())
     }
 
-    /// `GET /api/v4/files/{file}/thumbnail` — the server-side thumbnail, for
-    /// showing an attached image inline without pulling the original.
+    /// `GET /api/v4/files/{file}/thumbnail` — the server-side thumbnail
+    /// (120×100), for the rare image with no preview to fall back to.
     pub async fn file_thumbnail_bytes(&self, file_id: &str) -> Result<Vec<u8>> {
         let resp = self
             .send(self.request(
                 Method::GET,
                 &self.api(&format!("/files/{file_id}/thumbnail")),
             ))
+            .await?;
+        Ok(resp.bytes().await?.to_vec())
+    }
+
+    /// `GET /api/v4/files/{file}/preview` — the server-side preview (capped
+    /// at 1920px wide), for showing an attached image inline without pulling
+    /// the full original. Big enough that a HiDPI display does not need to
+    /// fall back on the tiny thumbnail to look sharp.
+    pub async fn file_preview_bytes(&self, file_id: &str) -> Result<Vec<u8>> {
+        let resp = self
+            .send(self.request(Method::GET, &self.api(&format!("/files/{file_id}/preview"))))
             .await?;
         Ok(resp.bytes().await?.to_vec())
     }

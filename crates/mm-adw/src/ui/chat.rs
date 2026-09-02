@@ -892,6 +892,131 @@ impl ChatView {
         }
     }
 
+    /// Adds the just-fetched older page to the top of the feed without
+    /// touching a single row that was already on screen.
+    ///
+    /// `refresh` used to be the only way in: a scrollback page landing called
+    /// it same as everything else, which meant tearing down and rebuilding
+    /// every row already read — avatars, rich text, reaction strips, the
+    /// works — for the sake of showing `posts.len()` new ones above them.
+    /// Scroll to the top of a busy channel a few times and that rebuild grows
+    /// with everything ever paged in, which is exactly the kind of
+    /// main-thread stall GNOME calls "not responding". Nothing about an
+    /// already-rendered row changes when older history arrives, so this only
+    /// builds the new rows and splices them in.
+    ///
+    /// `merged` is the channel's full post list (oldest first) *after* the
+    /// new page was folded in, and `new_count` is how many posts at its front
+    /// are the ones this call adds — the same shape `refresh` itself already
+    /// works from, so a caller that already has the feed does not have to
+    /// reshape it to use this.
+    ///
+    /// `at_oldest_title` carries both the "did this page reach the very
+    /// start of the channel" flag and the name that goes on the label if so
+    /// — folded into one `Option` rather than two parameters, since the name
+    /// is never wanted without the flag.
+    pub fn prepend_older(
+        &self,
+        merged: &[Post],
+        new_count: usize,
+        at_oldest_title: Option<&str>,
+        state: &SharedState,
+        avatars: &Avatars,
+        actions: &MessageActions,
+    ) {
+        if new_count == 0 {
+            return;
+        }
+        let new_posts = &merged[..new_count];
+
+        // Everything currently above the first real message row is a day
+        // separator or a system-event block decided back when that row was
+        // the start of everything we had. It no longer is, so it is stale —
+        // rebuilt below against the posts that now come before it. A real
+        // row is the only kind of widget `message::build` tags with an id.
+        let mut child = self.messages.first_child();
+        while let Some(widget) = child {
+            if unsafe { widget.data::<String>("post-id") }.is_some() {
+                break;
+            }
+            let next = widget.next_sibling();
+            self.messages.remove(&widget);
+            child = next;
+        }
+
+        let crt = state.borrow().crt_enabled;
+        let mut prefix: Vec<gtk::Widget> = Vec::new();
+        if let Some(title) = at_oldest_title {
+            prefix.push(start_label(title));
+        }
+
+        let mut last_author: Option<String> = None;
+        let mut last_at: Millis = 0;
+        let mut last_day: Option<String> = None;
+        let mut system_run: Vec<&Post> = Vec::new();
+
+        for post in new_posts {
+            if post.is_deleted() || (crt && post.is_reply()) {
+                continue;
+            }
+
+            let day = message::format_day(post.create_at);
+            if last_day.as_deref() != Some(day.as_str()) {
+                prefix.extend(message::system_block(&system_run, state, actions));
+                system_run.clear();
+                prefix.push(message::day_separator(&day));
+                last_day = Some(day);
+                last_author = None;
+            }
+
+            if post.is_system() {
+                system_run.push(post);
+                last_author = None;
+                continue;
+            }
+
+            prefix.extend(message::system_block(&system_run, state, actions));
+            system_run.clear();
+
+            let author = state.borrow().author_name(post);
+            let grouped = last_author.as_deref() == Some(author.as_str())
+                && post.create_at - last_at < message::GROUPING_WINDOW_MS;
+            prefix.push(message::build(
+                post,
+                state,
+                avatars,
+                actions,
+                RowOptions {
+                    grouped,
+                    show_thread_footer: true,
+                },
+            ));
+            last_author = Some(author);
+            last_at = post.create_at;
+        }
+
+        // ponytail: a trailing system run here that turns out to combine with
+        // the old block's first post (also a system event) draws as two rows
+        // instead of one merged sentence — cosmetic, and gone the next time
+        // this channel gets a full `refresh` (e.g. leaving and coming back).
+        prefix.extend(message::system_block(&system_run, state, actions));
+
+        // The seam: a day boundary the old block could not have known about,
+        // since when it was drawn it believed it was the first thing here.
+        if let Some(old_first) = merged.get(new_count) {
+            let day = message::format_day(old_first.create_at);
+            if last_day.as_deref() != Some(day.as_str()) {
+                prefix.push(message::day_separator(&day));
+            }
+        }
+
+        let mut anchor: Option<gtk::Widget> = None;
+        for widget in prefix {
+            self.messages.insert_child_after(&widget, anchor.as_ref());
+            anchor = Some(widget);
+        }
+    }
+
     /// Redraws the whole feed for the current channel.
     pub fn refresh(&self, state: &SharedState, avatars: &Avatars, actions: &MessageActions) {
         let st = state.borrow();
@@ -960,14 +1085,7 @@ impl ChatView {
         // Only claim "this is the start" when we actually hold the oldest
         // block; otherwise there is simply more history we have not paged in.
         if at_oldest && !posts.is_empty() {
-            let start = gtk::Label::builder()
-                .label(format!("This is the beginning of {channel_title}"))
-                .xalign(0.0)
-                .wrap(true)
-                .margin_bottom(8)
-                .build();
-            start.add_css_class("dim-label");
-            self.messages.append(&start);
+            self.messages.append(&start_label(&channel_title));
         }
 
         if posts.is_empty() {
@@ -1086,6 +1204,20 @@ impl ChatView {
             });
         }
     }
+}
+
+/// The label marking the true start of a channel's history. Shared by a full
+/// `refresh` and by `prepend_older`, which only gets to show it once a
+/// scrollback page turns out to be the last one.
+fn start_label(channel_title: &str) -> gtk::Widget {
+    let start = gtk::Label::builder()
+        .label(format!("This is the beginning of {channel_title}"))
+        .xalign(0.0)
+        .wrap(true)
+        .margin_bottom(8)
+        .build();
+    start.add_css_class("dim-label");
+    start.upcast()
 }
 
 /// Colours a header button while its feature is on.

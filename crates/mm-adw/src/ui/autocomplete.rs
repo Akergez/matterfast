@@ -72,6 +72,13 @@ impl Autocomplete {
             // Wide enough for a name and a handle side by side; without it the
             // popover shrinks to the caret and truncates both to a few letters.
             .width_request(320)
+            // With no horizontal scrollbar to hide overflow behind, a row
+            // wide enough — a long display name next to its handle — grows
+            // the popover to fit rather than truncating, so the cap has to
+            // be explicit; `propagate_natural_width` is what makes GTK
+            // consult it instead of just falling back to `width_request`.
+            .propagate_natural_width(true)
+            .max_content_width(350)
             .child(&list)
             .build();
 

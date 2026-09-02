@@ -35,6 +35,9 @@ type LoadedCallback = Rc<RefCell<Option<Box<dyn Fn()>>>>;
 
 /// Marks a cache key as a file thumbnail rather than a user's picture.
 const FILE_PREFIX: &str = "file:";
+/// Marks a cache key as a file's larger preview image, on the same cache but
+/// never colliding with its own thumbnail entry.
+const FILE_PREVIEW_PREFIX: &str = "preview:";
 /// Marks a cache key as a custom emoji, looked up by name rather than by id.
 const EMOJI_PREFIX: &str = "emoji:";
 
@@ -78,6 +81,13 @@ impl Avatars {
     /// file id can never collide with a user id.
     pub fn file_thumbnail(&self, file_id: &str) -> Option<gdk::Texture> {
         self.cached(&format!("{FILE_PREFIX}{file_id}"))
+    }
+
+    /// An attached image's larger preview (server-capped at 1920px wide),
+    /// for showing it inline without either a blurry thumbnail or a full
+    /// download of the original.
+    pub fn file_preview(&self, file_id: &str) -> Option<gdk::Texture> {
+        self.cached(&format!("{FILE_PREVIEW_PREFIX}{file_id}"))
     }
 
     fn cached(&self, key: &str) -> Option<gdk::Texture> {
@@ -125,6 +135,9 @@ impl Avatars {
             async move {
                 if let Some(file_id) = fetch_id.strip_prefix(FILE_PREFIX) {
                     return client.file_thumbnail_bytes(file_id).await;
+                }
+                if let Some(file_id) = fetch_id.strip_prefix(FILE_PREVIEW_PREFIX) {
+                    return client.file_preview_bytes(file_id).await;
                 }
                 if let Some(name) = fetch_id.strip_prefix(EMOJI_PREFIX) {
                     // Two calls: the name has to become an id before the image

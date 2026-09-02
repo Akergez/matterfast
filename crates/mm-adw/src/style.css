@@ -299,6 +299,13 @@ link:visited {
   text-decoration: underline;
 }
 
+/* A subtle highlight for whatever the pointer is over — the row itself is
+   clickable now (it opens the thread), and nothing said so without this. */
+.message-row:hover {
+  background-color: alpha(currentColor, 0.05);
+  border-radius: 8px;
+}
+
 /* React / reply, kept quiet until the row is pointed at. */
 .message-actions {
   opacity: 0;

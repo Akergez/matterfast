@@ -45,6 +45,26 @@ mod click_tests {
     }
 }
 
+/// Whether a point — in the coordinates of the row a click gesture is
+/// attached to — lands on an attached image's button, the one place in a
+/// message a click has to open the lightbox instead of the thread.
+fn attachment_image_at(gesture: &gtk::GestureClick, x: f64, y: f64) -> bool {
+    let Some(row) = gesture.widget() else {
+        return false;
+    };
+    let mut widget = row.pick(x, y, gtk::PickFlags::DEFAULT);
+    while let Some(current) = widget {
+        if current.has_css_class("attachment-button") {
+            return true;
+        }
+        if current == row {
+            break;
+        }
+        widget = current.parent();
+    }
+    false
+}
+
 /// What a message row can ask the application to do.
 #[derive(Clone)]
 pub struct MessageActions {
@@ -374,9 +394,26 @@ pub fn build(
         click.set_propagation_phase(gtk::PropagationPhase::Capture);
 
         let press_at: Rc<Cell<(f64, f64)>> = Rc::new(Cell::new((0.0, 0.0)));
+        // Set on a press that landed on the attached image (or its button's
+        // own padding), so `released` and `cancel` below both know to leave
+        // it to the image's own click instead of opening the thread.
+        let over_image: Rc<Cell<bool>> = Rc::new(Cell::new(false));
         click.connect_pressed({
             let press_at = press_at.clone();
-            move |_, _, x, y| press_at.set((x, y))
+            let over_image = over_image.clone();
+            move |gesture, _, x, y| {
+                press_at.set((x, y));
+                let on_image = attachment_image_at(gesture, x, y);
+                over_image.set(on_image);
+                if on_image {
+                    // Give up the sequence here, in Capture, before Bubble
+                    // reaches the image's own button — whichever gesture
+                    // claims a sequence first wins it for the whole tree
+                    // (see the comment on `connect_cancel` below), and this
+                    // one runs first only because Capture always does.
+                    gesture.set_state(gtk::EventSequenceState::Denied);
+                }
+            }
         });
 
         click.connect_released({
@@ -384,9 +421,14 @@ pub fn build(
             let root = post.thread_root().to_string();
             let allow_thread = options.show_thread_footer;
             let press_at = press_at.clone();
+            let over_image = over_image.clone();
             move |_, presses, x, y| {
                 // A double click is somebody selecting a word.
-                if presses > 1 || !allow_thread || !is_click(press_at.get(), (x, y)) {
+                if over_image.get()
+                    || presses > 1
+                    || !allow_thread
+                    || !is_click(press_at.get(), (x, y))
+                {
                     return;
                 }
                 (actions.open_thread)(root.clone());
@@ -400,12 +442,16 @@ pub fn build(
         // repeated here from wherever the pointer was when the cancellation
         // happened, which is what makes a plain click reliable rather than
         // working only "most of the time".
+        //
+        // The same signal also fires for the self-denial above (an image
+        // click looks, at this point, exactly like a cancelled one), which is
+        // why it is guarded the same way.
         click.connect_cancel({
             let actions = actions.clone();
             let root = post.thread_root().to_string();
             let allow_thread = options.show_thread_footer;
             move |gesture, sequence| {
-                if !allow_thread {
+                if over_image.get() || !allow_thread {
                     return;
                 }
                 if let Some(released_at) = gesture.point(sequence) {
@@ -805,7 +851,22 @@ fn attachment(
             .tooltip_text(&file.name)
             .build();
         picture.add_css_class("attachment-image");
-        if let Some(texture) = avatars.file_thumbnail(&file.id) {
+        // ponytail: `scale_factor()` reads 1 until the picture is realized,
+        // which happens only after this function returns it to `chat.rs` —
+        // so a HiDPI *second* monitor can occasionally still get the smaller
+        // size. Upgrade path: redo the fetch from a `notify::scale-factor`
+        // handler if that turns out to matter in practice.
+        let source = image_source(
+            file.width,
+            file.height,
+            picture.scale_factor(),
+            file.has_preview_image,
+        );
+        let texture = match source {
+            ImageSource::Preview => avatars.file_preview(&file.id),
+            ImageSource::Thumbnail => avatars.file_thumbnail(&file.id),
+        };
+        if let Some(texture) = texture {
             picture.set_paintable(Some(&texture));
         }
 
@@ -1515,6 +1576,62 @@ fn reaction_picker(post: &Post, actions: &MessageActions) -> gtk::Popover {
     popover
 }
 
+/// Who reacted with one emoji: names in the order they reacted, with the
+/// current user pulled to the front as "You" — the same shape the webapp
+/// builds for its own reaction tooltip (`reaction_tooltip/index.ts`'s
+/// `getNamesOfUsers`) — plus how many more reacted whose profile we do not
+/// have loaded, so a reactor we cannot name still counts instead of quietly
+/// vanishing from the total.
+fn reaction_names(
+    reactions: &[&mattermost_api::models::Reaction],
+    me: &str,
+    state: &SharedState,
+) -> (Vec<String>, usize) {
+    let mut ordered: Vec<&mattermost_api::models::Reaction> = reactions.to_vec();
+    ordered.sort_by_key(|r| r.create_at);
+
+    let st = state.borrow();
+    let display = st.teammate_name_display().to_string();
+    let mut you_reacted = false;
+    let mut names = Vec::new();
+    let mut unresolved = 0;
+    for reaction in ordered {
+        if reaction.user_id == me {
+            you_reacted = true;
+            continue;
+        }
+        match st.users.get(&reaction.user_id) {
+            Some(user) => names.push(user.display_name(&display)),
+            None => unresolved += 1,
+        }
+    }
+    if you_reacted {
+        names.insert(0, "You".to_string());
+    }
+    (names, unresolved)
+}
+
+/// "Anna, Bob and you reacted with :thumbsup:" — the web's tooltip wording
+/// (`reaction_tooltip.tsx`'s `tooltipTitle`), collapsed the way it collapses:
+/// everyone we can name, then a trailing count for the rest once there are
+/// more reactors than we have names for.
+fn reaction_tooltip(names: &[String], unresolved: usize, emoji_name: &str) -> String {
+    let who = match unresolved {
+        0 => match names {
+            [] => String::new(),
+            [only] => only.clone(),
+            [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+        },
+        n if names.is_empty() => format!("{n} {}", plural(n as i64, "user", "users")),
+        n => format!(
+            "{} and {n} other {}",
+            names.join(", "),
+            plural(n as i64, "user", "users")
+        ),
+    };
+    format!("{who} reacted with :{emoji_name}:")
+}
+
 /// Reactions, collapsed by emoji and rendered as actual emoji rather than
 /// `:shortcodes:`. Clicking a chip toggles our own reaction, as everywhere else.
 fn reaction_strip(
@@ -1531,18 +1648,14 @@ fn reaction_strip(
 
     // Preserve first-seen order rather than sorting: it matches what the other
     // clients show and keeps chips from jumping around as counts change.
-    let mut counted: Vec<(String, usize, bool)> = Vec::new();
+    let mut grouped: Vec<(String, Vec<&mattermost_api::models::Reaction>)> = Vec::new();
     for reaction in reactions {
-        let mine = reaction.user_id == me;
-        match counted
+        match grouped
             .iter_mut()
-            .find(|(n, _, _)| *n == reaction.emoji_name)
+            .find(|(name, _)| *name == reaction.emoji_name)
         {
-            Some((_, count, is_mine)) => {
-                *count += 1;
-                *is_mine |= mine;
-            }
-            None => counted.push((reaction.emoji_name.clone(), 1, mine)),
+            Some((_, group)) => group.push(reaction),
+            None => grouped.push((reaction.emoji_name.clone(), vec![reaction])),
         }
     }
 
@@ -1552,7 +1665,9 @@ fn reaction_strip(
         .margin_top(3)
         .build();
 
-    for (name, count, mine) in counted {
+    for (name, group) in grouped {
+        let mine = group.iter().any(|r| r.user_id == me);
+        let count = group.len();
         let content = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(4)
@@ -1562,9 +1677,10 @@ fn reaction_strip(
         n.add_css_class("reaction-count");
         content.append(&n);
 
+        let (names, unresolved) = reaction_names(&group, &me, state);
         let chip = gtk::Button::builder()
             .child(&content)
-            .tooltip_text(format!(":{name}:"))
+            .tooltip_text(reaction_tooltip(&names, unresolved, &name))
             .build();
         chip.add_css_class("reaction-chip");
         if mine {
@@ -1957,6 +2073,49 @@ fn scaled_size(width: i32, height: i32) -> (i32, i32) {
     )
 }
 
+/// Server-side sizes available for an attached image, short of downloading
+/// the original: a 120×100 thumbnail and a preview capped at 1920px wide
+/// (`imageThumbnailWidth` / `imagePreviewWidth` in the Mattermost server,
+/// `server/channels/app/file.go`). The thumbnail is what this app used to
+/// draw every inline image at, which is why they came out blurry — it is
+/// smaller than the box they were shown in even at 1x.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ImageSource {
+    Thumbnail,
+    Preview,
+}
+
+/// The physical box a 120×100 thumbnail is generated into, whatever the
+/// source photo's own proportions.
+const THUMBNAIL_WIDTH: i32 = 120;
+const THUMBNAIL_HEIGHT: i32 = 100;
+
+/// Which server-generated size to fetch for an inline image.
+///
+/// `scale_factor` is `gtk::Widget::scale_factor()`: on a 2x display, the
+/// logical box the image is drawn into (see [`scaled_size`]) needs roughly
+/// twice the source pixels to look sharp, so it is the *physical* size that
+/// decides whether the thumbnail is still big enough — not the logical one.
+fn image_source(width: i32, height: i32, scale_factor: i32, has_preview: bool) -> ImageSource {
+    if !has_preview {
+        // No preview was generated for this file (the server makes one for
+        // almost everything, but not, say, a format it does not decode) —
+        // the thumbnail is the only size short of the original, and
+        // fetching the original for every such image would defeat the point
+        // of a thumbnail at all.
+        return ImageSource::Thumbnail;
+    }
+    let (logical_w, logical_h) = scaled_size(width, height);
+    let scale = scale_factor.max(1);
+    if logical_w.saturating_mul(scale) <= THUMBNAIL_WIDTH
+        && logical_h.saturating_mul(scale) <= THUMBNAIL_HEIGHT
+    {
+        ImageSource::Thumbnail
+    } else {
+        ImageSource::Preview
+    }
+}
+
 /// Decides what a clicked link means: a person, a message on this server, or
 /// an ordinary web page that the browser should have.
 fn follow_link(label: &gtk::Label, url: &str, actions: &MessageActions) -> glib::Propagation {
@@ -2077,6 +2236,34 @@ mod size_tests {
 }
 
 #[cfg(test)]
+mod image_source_tests {
+    use super::{image_source, ImageSource};
+
+    #[test]
+    fn a_small_sticker_stays_on_the_thumbnail_at_1x() {
+        // 64x64 fits inside the 120x100 thumbnail box with room to spare.
+        assert_eq!(image_source(64, 64, 1, true), ImageSource::Thumbnail);
+    }
+
+    #[test]
+    fn the_same_sticker_needs_the_preview_at_2x() {
+        // 64x64 doubled is 128x128, past the thumbnail's own 120x100 box.
+        assert_eq!(image_source(64, 64, 2, true), ImageSource::Preview);
+    }
+
+    #[test]
+    fn an_ordinary_photo_always_wants_the_preview() {
+        // Clamped to 467x350 by `scaled_size`, already past the thumbnail.
+        assert_eq!(image_source(1600, 1200, 1, true), ImageSource::Preview);
+    }
+
+    #[test]
+    fn no_preview_on_the_server_falls_back_to_the_thumbnail_regardless_of_size() {
+        assert_eq!(image_source(1600, 1200, 2, false), ImageSource::Thumbnail);
+    }
+}
+
+#[cfg(test)]
 mod permalink_tests {
     use super::permalink;
 
@@ -2100,6 +2287,52 @@ mod permalink_tests {
         // Not ours.
         assert_eq!(permalink("https://example.com/pl/short"), None);
         assert_eq!(permalink("https://example.com/blog/post"), None);
+    }
+}
+
+#[cfg(test)]
+mod reaction_tooltip_tests {
+    use super::reaction_tooltip;
+
+    fn names(names: &[&str]) -> Vec<String> {
+        names.iter().map(|n| n.to_string()).collect()
+    }
+
+    #[test]
+    fn one_named_reactor() {
+        assert_eq!(
+            reaction_tooltip(&names(&["Anna"]), 0, "thumbsup"),
+            "Anna reacted with :thumbsup:"
+        );
+    }
+
+    #[test]
+    fn two_named_reactors_get_an_and_not_a_comma() {
+        assert_eq!(
+            reaction_tooltip(&names(&["Anna", "You"]), 0, "thumbsup"),
+            "Anna and You reacted with :thumbsup:"
+        );
+    }
+
+    #[test]
+    fn three_or_more_are_comma_joined_before_the_last_and() {
+        assert_eq!(
+            reaction_tooltip(&names(&["Anna", "Bob", "You"]), 0, "tada"),
+            "Anna, Bob and You reacted with :tada:"
+        );
+    }
+
+    #[test]
+    fn reactors_with_no_loaded_profile_become_a_trailing_count() {
+        assert_eq!(
+            reaction_tooltip(&names(&["Anna"]), 3, "fire"),
+            "Anna and 3 other users reacted with :fire:"
+        );
+        // Singular agreement, and no named reactors at all.
+        assert_eq!(
+            reaction_tooltip(&[], 1, "fire"),
+            "1 user reacted with :fire:"
+        );
     }
 }
 

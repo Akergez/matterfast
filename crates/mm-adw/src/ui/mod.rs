@@ -540,36 +540,23 @@ fn restore_session(
     };
     client.set_token(token);
 
-    let spinner = gtk::Spinner::builder()
-        .halign(gtk::Align::Center)
-        .valign(gtk::Align::Center)
-        .width_request(32)
-        .height_request(32)
-        .build();
-    spinner.start();
-    toasts.set_child(Some(&spinner));
-
-    let window = window.clone();
-    let toasts = toasts.clone();
-    runtime::spawn(
-        {
-            let client = client.clone();
-            async move { client.me().await }
-        },
-        move |result| match result {
-            Ok(me) => start_session(&window, &toasts, client, me),
-            Err(e) => {
-                // A refused token is spent; anything else (server down, no
-                // network) leaves it alone so the next launch can retry.
-                if !matches!(&e, mattermost_api::Error::Http(_)) {
-                    runtime::spawn(crate::session::clear_async(), |_| {});
-                    crate::cache::clear();
-                }
-                tracing::info!("stored session not usable: {e}");
-                show_login();
-            }
-        },
-    );
+    // No round trip before this. A token read back from the keyring used to
+    // be checked with its own `client.me()` call before anything was built —
+    // which meant a network reply gated the very first pixel of a channel
+    // list that the local store already had sitting on disk. Trusting the
+    // token on sight and building the session window straight away lets
+    // `bootstrap`'s cache read (see its doc comment) draw into it before the
+    // network has said a word. If the token turns out to be no good,
+    // `bootstrap`'s own account fetch is what finds that out, and the
+    // `on_auth_failure` fallback below undoes the guess.
+    let state: SharedState = Rc::new(RefCell::new(AppState::new(
+        client,
+        User::default(),
+        ClientConfig::default(),
+        false,
+    )));
+    let ui = build_session_ui(window, toasts, state);
+    bootstrap(ui, Some(Box::new(show_login)));
 }
 
 /// Replaces the login view with the main UI and kicks off the startup sequence.
@@ -586,7 +573,10 @@ fn start_session(
         false,
     )));
     let ui = build_session_ui(window, toasts, state);
-    bootstrap(ui);
+    // The account here was already proven live (a fresh login, or the
+    // dev-shortcut password login), so there is no stale token to fall back
+    // from — unlike `restore_session`'s untested one.
+    bootstrap(ui, None);
 }
 
 /// Shows the UI filled with sample data, for looking at the layout without a
@@ -4410,6 +4400,10 @@ impl Ui {
                     return;
                 };
                 let kept;
+                // Only built when the channel this page belongs to is still
+                // the one on screen: a `prepend_older` for a feed nobody is
+                // looking at would splice rows into the wrong pane.
+                let mut prepend = None;
                 {
                     let mut st = ui.state.borrow_mut();
                     for user in authors {
@@ -4421,17 +4415,45 @@ impl Ui {
                     // the feed should stop asking.
                     let exhausted = older.posts.is_empty();
                     kept = older.posts.clone();
+                    let new_count = older.posts.len();
+                    let now_at_oldest = exhausted || older.at_oldest;
+                    // Computed before the mutable borrow below so this can
+                    // still call the ordinary (immutable) state accessors.
+                    // The title is only fetched when it will actually be
+                    // shown — a channel that is not yet exhausted, or is not
+                    // even the one on screen, never needs it.
+                    let showing = st.current_channel.as_deref() == Some(channel_id.as_str());
+                    let at_oldest_title = (showing && now_at_oldest)
+                        .then(|| st.channel(&channel_id).map(|c| st.channel_title(c)))
+                        .flatten();
                     if let Some(feed) = st.feeds.get_mut(&channel_id) {
                         for post in older.posts {
                             feed.upsert(post);
                         }
-                        feed.at_oldest = exhausted || older.at_oldest;
+                        feed.at_oldest = now_at_oldest;
+                        if showing {
+                            prepend = Some((feed.posts.clone(), new_count, at_oldest_title));
+                        }
                     }
                 }
-                ui.refresh_messages();
-                // The feed grew upwards, so the view has to move down by the
-                // same amount or the reader is thrown back in time.
-                ui.chat.restore_scroll(anchor);
+                // Splices in only the new rows rather than rebuilding the
+                // whole feed (see `ChatView::prepend_older`) — the fix for
+                // the scrollback stall, which used to redraw everything ever
+                // paged into this channel on every page turn.
+                if let Some((merged, new_count, at_oldest_title)) = prepend {
+                    let actions = ui.message_actions();
+                    ui.chat.prepend_older(
+                        &merged,
+                        new_count,
+                        at_oldest_title.as_deref(),
+                        &ui.state,
+                        &ui.avatars,
+                        &actions,
+                    );
+                    // The feed grew upwards, so the view has to move down by
+                    // the same amount or the reader is thrown back in time.
+                    ui.chat.restore_scroll(anchor);
+                }
                 ui.store_posts(kept);
             },
         );
@@ -6643,7 +6665,15 @@ async fn hydrate_authors(
 }
 
 /// Runs the startup sequence and connects the websocket.
-fn bootstrap(ui: Rc<Ui>) {
+///
+/// `on_auth_failure` is only `Some` for a restored session: one whose token
+/// came out of the keyring untested (see `restore_session`, which no longer
+/// spends a round trip on `client.me()` before drawing anything). If the boot
+/// call below is the one that finds out the token is no good, this is what
+/// sends the reader to the login form instead of leaving them looking at a
+/// window that will never finish loading. A fresh login has no such fallback
+/// to offer — its account was already proven live — so it passes `None`.
+fn bootstrap(ui: Rc<Ui>, on_auth_failure: Option<Box<dyn FnOnce()>>) {
     let client = ui.state.borrow().client.clone();
 
     // Draw last time's picture first. Everything here is replaced the moment
@@ -6741,7 +6771,19 @@ fn bootstrap(ui: Rc<Ui>) {
             let (boot, calls, active) = match result {
                 Ok(v) => v,
                 Err(e) => {
-                    ui.toast(&format!("Could not load your account: {e}"));
+                    // A refused token is spent; anything else (server down,
+                    // no network) leaves it alone so the next launch can
+                    // retry — the same split `restore_session` used to make
+                    // itself before this call was the first thing to ask.
+                    match (on_auth_failure, &e) {
+                        (Some(fallback), e) if !matches!(e, mattermost_api::Error::Http(_)) => {
+                            tracing::info!("stored session not usable: {e}");
+                            runtime::spawn(crate::session::clear_async(), |_| {});
+                            crate::cache::clear();
+                            fallback();
+                        }
+                        _ => ui.toast(&format!("Could not load your account: {e}")),
+                    }
                     return;
                 }
             };
