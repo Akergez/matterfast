@@ -55,6 +55,11 @@ use sidebar::{ChannelSidebar, RowAction};
 /// that a whole word costs one request.
 const MENTION_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(180);
 
+/// How long a landed picture waits for the rest of its flock before the
+/// conversation is redrawn. Long enough to catch a screenful of faces
+/// arriving together, short enough that nobody watches an avatar appear.
+const AVATAR_REDRAW_WAIT: std::time::Duration = std::time::Duration::from_millis(120);
+
 const REACTION_NOTIFY_PREFIX: &str = "custom_ru.toxblh.reactions-notify_";
 
 /// Mentions answerable from memory: anyone whose handle or name *contains*
@@ -903,6 +908,7 @@ fn build_session_ui(
         store: RefCell::new(None),
         typing_sent_recently: std::cell::Cell::new(false),
         completion_generation: std::cell::Cell::new(0),
+        avatar_redraw_pending: std::cell::Cell::new(false),
         mention_query_pending: std::cell::Cell::new(false),
         mention_query: RefCell::new(None),
         last_completions: RefCell::new(Vec::new()),
@@ -1066,16 +1072,26 @@ fn build_session_ui(
         }
     }
 
-    // A picture arriving is a reason to redraw wherever a face is showing.
+    // A picture arriving is a reason to redraw wherever a face is showing —
+    // but pictures arrive in flocks, and a redraw is the whole conversation
+    // plus the whole sidebar. One redraw for the flock: the first arrival
+    // books it, the rest of the burst lands inside the wait and is drawn by
+    // the same pass.
     avatars.connect_loaded({
         let ui = ui.clone();
-        // The sidebar draws faces too now, so a landed texture has to repaint
-        // it as well — otherwise DM rows keep their initials until the next
-        // unrelated refresh. Same for the mention popover, if one is open.
         move || {
-            ui.refresh_messages();
-            ui.channels.refresh(&ui.state, &ui.avatars);
-            ui.refresh_completion_avatars();
+            if ui.avatar_redraw_pending.replace(true) {
+                return;
+            }
+            let ui = ui.clone();
+            glib::timeout_add_local_once(AVATAR_REDRAW_WAIT, move || {
+                ui.avatar_redraw_pending.set(false);
+                ui.refresh_messages();
+                // The sidebar draws faces too, and so does an open mention
+                // popover; neither notices on its own.
+                ui.channels.refresh(&ui.state, &ui.avatars);
+                ui.refresh_completion_avatars();
+            });
         }
     });
 
@@ -1144,6 +1160,8 @@ struct Ui {
     /// person has already typed past is discarded rather than replacing the
     /// list under them.
     completion_generation: std::cell::Cell<u64>,
+    /// Set while a redraw for freshly-landed pictures is already booked.
+    avatar_redraw_pending: std::cell::Cell<bool>,
     /// Set while a debounced `@mention` network lookup is scheduled; further
     /// keystrokes just overwrite `mention_query` instead of scheduling again.
     mention_query_pending: std::cell::Cell<bool>,

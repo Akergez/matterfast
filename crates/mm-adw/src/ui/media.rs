@@ -15,6 +15,7 @@
 use std::cell::RefCell;
 use std::path::PathBuf;
 
+use gtk::glib;
 use gtk::prelude::*;
 use mattermost_api::models::FileInfo;
 
@@ -168,7 +169,7 @@ fn mp4_head_has_full_moov(head: &[u8]) -> bool {
 /// longer shown, the same as the full download in [`Player::set_data`] does
 /// for itself.
 pub fn video_still(file: &FileInfo, head: &[u8]) -> Option<(gtk::gdk::Paintable, PathBuf)> {
-    if !head_playable(head) {
+    if std::env::var("MM_ADW_NO_STILL").is_ok() || !head_playable(head) {
         return None;
     }
 
@@ -204,6 +205,11 @@ pub fn video_still(file: &FileInfo, head: &[u8]) -> Option<(gtk::gdk::Paintable,
 /// The still shown before a video is played. Matches the size an image
 /// attachment is drawn at, so a channel of clips and photos reads evenly.
 const POSTER_WIDTH: i32 = 420;
+
+/// How long the decoder is given to produce the first frame before the still
+/// is copied out of it. Generous: getting nothing means the row keeps its
+/// play button, which is where it started.
+const STILL_WAIT: std::time::Duration = std::time::Duration::from_millis(900);
 const POSTER_HEIGHT: i32 = 260;
 
 pub struct Player {
@@ -243,9 +249,13 @@ impl Player {
     /// ownership of and deletes on drop. `None` when there is nothing to
     /// show yet (the head has not arrived) or ever (the container's index
     /// was not in the head, or this is audio).
+    /// `on_still` is handed the first frame once the decoder has produced it,
+    /// so it can be kept and the decoder let go; see the comment where it is
+    /// called.
     pub fn new(
         file: &FileInfo,
         poster: Option<(gtk::gdk::Paintable, PathBuf)>,
+        on_still: impl Fn(gtk::gdk::Texture) + 'static,
         on_load: impl Fn(String) + 'static,
     ) -> Player {
         let (poster_image, poster_temp) = match poster {
@@ -298,6 +308,29 @@ impl Player {
                     .height_request(POSTER_HEIGHT)
                     .build();
                 still.add_css_class("attachment-image");
+
+                // A `GtkMediaFile` is a whole GStreamer pipeline, and it stays
+                // one for as long as anything holds it: a channel of clips was
+                // a hundred and forty megabytes of decoders sitting on a
+                // single frame each. So the frame is copied out — that is what
+                // `current_image` is, a still of whatever the paintable shows
+                // — and the pipeline dropped. The caller keeps the copy, so
+                // the next redraw of this row starts nothing at all.
+                if paintable.is::<gtk::MediaFile>() {
+                    let still = still.clone();
+                    let paintable = paintable.clone();
+                    glib::timeout_add_local_once(STILL_WAIT, move || {
+                        let frame = paintable.current_image();
+                        // A blank paintable answers with a 1x1; that is a
+                        // decoder that never got there, not a still.
+                        if frame.intrinsic_width() > 1 && frame.intrinsic_height() > 1 {
+                            still.set_paintable(Some(&frame));
+                            if let Ok(texture) = frame.downcast::<gtk::gdk::Texture>() {
+                                on_still(texture);
+                            }
+                        }
+                    });
+                }
 
                 // Out of the row before into the overlay: a widget cannot be
                 // given a second parent while it still has the first.

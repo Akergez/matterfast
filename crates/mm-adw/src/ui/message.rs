@@ -902,10 +902,20 @@ fn attachment(
                 None
             } else {
                 avatars
-                    .video_head(&file.id)
-                    .and_then(|head| super::media::video_still(file, head.as_slice()))
+                    .poster(&file.id)
+                    .map(|texture| (texture.upcast(), std::path::PathBuf::new()))
+                    .or_else(|| {
+                        avatars
+                            .video_head(&file.id)
+                            .and_then(|head| super::media::video_still(file, head.as_slice()))
+                    })
             };
-            super::media::Player::new(file, poster, move |file_id| {
+            let keep = {
+                let avatars = avatars.clone();
+                let id = file.id.clone();
+                move |texture| avatars.remember_poster(&id, texture)
+            };
+            super::media::Player::new(file, poster, keep, move |file_id| {
                 let Some(player) = weak.upgrade() else { return };
                 let client = client.clone();
                 crate::runtime::spawn(

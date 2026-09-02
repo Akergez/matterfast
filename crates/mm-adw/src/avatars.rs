@@ -82,6 +82,9 @@ const FILE_PREVIEW_PREFIX: &str = "preview:";
 const EMOJI_PREFIX: &str = "emoji:";
 /// Marks a cache key as a video's head bytes (see [`Avatars::video_head`]).
 const VIDEO_HEAD_PREFIX: &str = "video-head:";
+/// Marks a cache key as a still taken from a video, which is made here rather
+/// than fetched.
+const POSTER_PREFIX: &str = "poster:";
 
 /// How much of a video file to fetch for a poster attempt: enough to hold
 /// `ftyp` + `moov` for a phone-shot clip's sample table, tiny next to the
@@ -192,6 +195,31 @@ impl Avatars {
     ///
     /// Cached like everything else here, so scrolling a video row out of view
     /// and back does not repeat the request.
+    /// A video's still, if one has already been taken. Unlike everything else
+    /// here it is never fetched — it is made locally from the head of the
+    /// file and handed back with [`Avatars::remember_poster`] — so a miss
+    /// starts nothing.
+    pub fn poster(&self, file_id: &str) -> Option<gdk::Texture> {
+        self.inner
+            .borrow()
+            .textures
+            .get(&format!("{POSTER_PREFIX}{file_id}"))
+            .cloned()
+    }
+
+    /// Keeps a still that was just taken, so the next redraw of that row
+    /// draws a picture instead of starting a decoder over again.
+    pub fn remember_poster(&self, file_id: &str, texture: gdk::Texture) {
+        let key = format!("{POSTER_PREFIX}{file_id}");
+        let mut inner = self.inner.borrow_mut();
+        inner.held += texture_bytes(&texture);
+        inner.order.push(key.clone());
+        if let Some(old) = inner.textures.insert(key, texture) {
+            inner.held = inner.held.saturating_sub(texture_bytes(&old));
+        }
+        inner.trim();
+    }
+
     pub fn video_head(&self, file_id: &str) -> Option<Rc<Vec<u8>>> {
         // The prefix belongs in the lookup as well as the fetch. Without it
         // the hit never happened: every redraw asked again, every answer
