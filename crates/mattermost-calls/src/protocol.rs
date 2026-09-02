@@ -48,6 +48,26 @@ pub mod client_action {
     pub const METRIC: &str = "metric";
 }
 
+/// Host-control routes, `POST /calls/{call_id}/host/{action}`.
+///
+/// Host controls are the one part of the protocol with **no websocket action**:
+/// the plugin serves them over HTTP only, so they do not belong in
+/// [`client_action`]. The server answers by emitting the matching `host_*`
+/// event from [`server_event`] to the target, who is expected to obey it —
+/// nothing is enforced in the media plane, so a client that ignores `host_mute`
+/// keeps being heard.
+pub mod host_route {
+    pub const MUTE: &str = "mute";
+    /// Takes no target: the plugin mutes everyone *except the caller*.
+    pub const MUTE_OTHERS: &str = "mute-others";
+    pub const SCREEN_OFF: &str = "screen-off";
+    pub const LOWER_HAND: &str = "lower-hand";
+    pub const REMOVE: &str = "remove";
+    /// Body is `{"new_host_id": <user id>}` — a user id, not a session id.
+    pub const MAKE: &str = "make";
+    pub const END: &str = "end";
+}
+
 /// Server → client event names (already stripped of [`WS_PREFIX`]).
 pub mod server_event {
     /// Your join was accepted; `data.connID` echoes your session id.
@@ -291,6 +311,12 @@ impl CallState {
             .map(|s| s.user_id.as_str())
     }
 
+    /// Whether a user holds the host controls. The host is a *user*, not a
+    /// session: a second device of the same user is host too.
+    pub fn is_host(&self, user_id: &str) -> bool {
+        !user_id.is_empty() && self.host_id == user_id
+    }
+
     pub fn is_screen_sharing(&self) -> bool {
         !self.screen_sharing_session_id.is_empty()
     }
@@ -406,5 +432,9 @@ mod tests {
         assert_eq!(state.participant_count(), 2);
         assert_eq!(state.user_for_session("s2"), Some("u2"));
         assert!(state.is_screen_sharing());
+        assert!(state.is_host("u1"));
+        assert!(!state.is_host("u2"));
+        // An empty user id must never come out as the host.
+        assert!(!CallState::default().is_host(""));
     }
 }

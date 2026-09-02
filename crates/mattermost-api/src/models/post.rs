@@ -124,6 +124,14 @@ impl Post {
         self.metadata.as_ref()?.priority.as_ref()
     }
 
+    /// Link previews the server resolved for this message.
+    pub fn embeds(&self) -> &[PostEmbed] {
+        self.metadata
+            .as_ref()
+            .map(|m| m.embeds.as_slice())
+            .unwrap_or(&[])
+    }
+
     pub fn files(&self) -> &[FileInfo] {
         self.metadata
             .as_ref()

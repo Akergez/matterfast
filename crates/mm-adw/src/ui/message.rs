@@ -181,6 +181,15 @@ pub fn build(
         body.append(&attachment(file, avatars, state));
     }
 
+    // A link to another message renders as that message. The server resolves
+    // it for us into the embed, so this is presentation only — following the
+    // link by hand would be a second fetch for something already here.
+    for embed in post.embeds() {
+        if let Some(preview) = permalink_preview(embed, state, avatars, actions) {
+            body.append(&preview);
+        }
+    }
+
     if post
         .priority()
         .and_then(|p| p.requested_ack)
@@ -293,6 +302,81 @@ fn acknowledgement(post: &Post, state: &SharedState, actions: &MessageActions) -
     }
 
     row.upcast()
+}
+
+/// The quoted message behind a permalink, as a compact card.
+fn permalink_preview(
+    embed: &mattermost_api::models::PostEmbed,
+    state: &SharedState,
+    avatars: &Avatars,
+    actions: &MessageActions,
+) -> Option<gtk::Widget> {
+    if embed.r#type != "permalink" {
+        return None;
+    }
+    // The embed carries the post under a `post` key; anything else is a
+    // permalink the server could not resolve, and a card saying nothing is
+    // worse than the bare link already in the text.
+    let quoted: Post = serde_json::from_value(
+        embed
+            .data
+            .as_ref()?
+            .get("post")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+    )
+    .ok()?;
+
+    let st = state.borrow();
+    let author = st.author_name(&quoted);
+    let channel = st
+        .channel(&quoted.channel_id)
+        .map(|c| st.channel_title(c))
+        .unwrap_or_default();
+    drop(st);
+
+    let avatar = adw::Avatar::builder().size(20).build();
+    avatars.apply(&avatar, &quoted.user_id, &author);
+
+    let who = gtk::Label::new(Some(&author));
+    who.add_css_class("message-author");
+    let when = gtk::Label::new(Some(&format_time(quoted.create_at)));
+    when.add_css_class("message-timestamp");
+
+    let header = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(6)
+        .build();
+    header.append(&avatar);
+    header.append(&who);
+    header.append(&when);
+    if !channel.is_empty() {
+        let where_ = gtk::Label::new(Some(&format!("in {channel}")));
+        where_.add_css_class("dim-label");
+        where_.add_css_class("message-timestamp");
+        header.append(&where_);
+    }
+
+    let card = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(2)
+        .build();
+    card.add_css_class("permalink-card");
+    card.append(&header);
+    for block in crate::markdown::parse(&quoted.message) {
+        card.append(&render_block(block));
+    }
+
+    // Clicking it goes there, which is what the link would have done.
+    let open = gtk::Button::builder().child(&card).build();
+    open.add_css_class("flat");
+    open.add_css_class("permalink-button");
+    open.connect_clicked({
+        let actions = actions.clone();
+        let root = quoted.thread_root().to_string();
+        move |_| (actions.open_thread)(root.clone())
+    });
+    Some(open.upcast())
 }
 
 /// An attached file. Images show themselves; everything else is a name and a

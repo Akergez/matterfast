@@ -148,6 +148,19 @@
   margin: 12px 0 4px 0;
 }
 
+/* A quoted message behind a permalink. Bordered rather than tinted so it
+   reads as "from somewhere else" instead of "highlighted". */
+.permalink-card {
+  border-left: 3px solid alpha(currentColor, 0.25);
+  padding: 4px 8px;
+}
+
+.permalink-button {
+  padding: 0;
+  margin-top: 4px;
+  background: none;
+}
+
 /* An image posted in the conversation. */
 .attachment-image {
   border-radius: 8px;

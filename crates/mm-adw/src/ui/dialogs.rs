@@ -525,6 +525,391 @@ fn slugify(name: &str) -> String {
     out.trim_matches('-').to_string()
 }
 
+/// Who is in a channel, with a search for adding more.
+///
+/// Like [`ChannelBrowser`] the window outlives this call: the caller answers
+/// `on_search` through [`Self::set_candidates`], and refills the roster with
+/// [`Self::set_members`] once the server has confirmed an add or a removal.
+pub struct MemberList {
+    members: gtk::ListBox,
+    candidates: gtk::ListBox,
+    on_add: Rc<dyn Fn(String)>,
+    on_remove: Rc<dyn Fn(String)>,
+}
+
+impl MemberList {
+    pub fn present(
+        parent: &impl IsA<gtk::Window>,
+        channel_name: &str,
+        on_search: impl Fn(String) + 'static,
+        on_add: impl Fn(String) + 'static,
+        on_remove: impl Fn(String) + 'static,
+    ) -> Self {
+        let members = empty_list("system-users-symbolic", "Nobody here yet");
+        let members_group = adw::PreferencesGroup::builder().title("Members").build();
+        members_group.add(&members);
+
+        let search = gtk::SearchEntry::builder()
+            .placeholder_text("Search people")
+            .build();
+        let on_search = Rc::new(on_search);
+        search.connect_search_changed({
+            let on_search = on_search.clone();
+            move |entry| on_search(entry.text().trim().to_string())
+        });
+        // Ask once on open, as the channel browser does: the people you want to
+        // add are usually the ones the server would have listed anyway.
+        on_search(String::new());
+
+        let candidates = empty_list("system-search-symbolic", "No matching people");
+        let add_group = adw::PreferencesGroup::builder().title("Add people").build();
+        add_group.add(&search);
+        add_group.add(&candidates);
+
+        let content = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(18)
+            .build();
+        content.append(&members_group);
+        content.append(&add_group);
+
+        list_window(parent, &format!("Members of {channel_name}"), &content).present();
+
+        MemberList {
+            members,
+            candidates,
+            on_add: Rc::new(on_add),
+            on_remove: Rc::new(on_remove),
+        }
+    }
+
+    /// `members` is (user_id, display_name, @username, is_admin).
+    pub fn set_members(&self, members: Vec<(String, String, String, bool)>) {
+        clear_list(&self.members);
+
+        for (id, display_name, username, is_admin) in members {
+            let row = adw::ActionRow::builder()
+                .title(glib::markup_escape_text(&display_name))
+                .subtitle(glib::markup_escape_text(&username))
+                .build();
+
+            if is_admin {
+                // Removing an admin needs permissions we cannot check from
+                // here, so the row explains itself instead of offering a
+                // button the server would refuse.
+                let admin = gtk::Label::new(Some("Admin"));
+                admin.add_css_class("dim-label");
+                row.add_suffix(&admin);
+            } else {
+                let button = gtk::Button::builder()
+                    .icon_name("list-remove-symbolic")
+                    .tooltip_text("Remove from channel")
+                    .valign(gtk::Align::Center)
+                    .build();
+                button.add_css_class("flat");
+                button.connect_clicked({
+                    let on_remove = self.on_remove.clone();
+                    // The row stays until the caller sends the roster back; the
+                    // button only stops a second click on the way there.
+                    move |button| {
+                        button.set_sensitive(false);
+                        on_remove(id.clone());
+                    }
+                });
+                row.add_suffix(&button);
+            }
+
+            self.members.append(&row);
+        }
+    }
+
+    /// `users` is (user_id, display_name, @username).
+    pub fn set_candidates(&self, users: Vec<(String, String, String)>) {
+        clear_list(&self.candidates);
+
+        for (id, display_name, username) in users {
+            let row = adw::ActionRow::builder()
+                .title(glib::markup_escape_text(&display_name))
+                .subtitle(glib::markup_escape_text(&username))
+                .build();
+
+            let button = gtk::Button::builder()
+                .label("Add")
+                .valign(gtk::Align::Center)
+                .build();
+            button.add_css_class("suggested-action");
+            button.connect_clicked({
+                let on_add = self.on_add.clone();
+                move |button| {
+                    button.set_sensitive(false);
+                    button.set_label("Added");
+                    on_add(id.clone());
+                }
+            });
+            row.add_suffix(&button);
+
+            self.candidates.append(&row);
+        }
+    }
+}
+
+/// Teams you could join, filled in by [`Self::set_teams`].
+///
+/// There is no search: an account sees the teams it is allowed to join and
+/// that list is short enough to read.
+pub struct TeamBrowser {
+    list: gtk::ListBox,
+    on_join: Rc<dyn Fn(String)>,
+}
+
+impl TeamBrowser {
+    pub fn present(parent: &impl IsA<gtk::Window>, on_join: impl Fn(String) + 'static) -> Self {
+        let list = empty_list("network-workgroup-symbolic", "No teams to join");
+        list_window(parent, "Browse teams", &list).present();
+
+        TeamBrowser {
+            list,
+            on_join: Rc::new(on_join),
+        }
+    }
+
+    /// `teams` is (id, display_name, description, already_member).
+    pub fn set_teams(&self, teams: Vec<(String, String, String, bool)>) {
+        clear_list(&self.list);
+
+        for (id, display_name, description, already_member) in teams {
+            let row = adw::ActionRow::builder()
+                .title(glib::markup_escape_text(&display_name))
+                .build();
+            if !description.is_empty() {
+                row.set_subtitle(&glib::markup_escape_text(&description));
+                row.set_subtitle_lines(2);
+            }
+
+            if already_member {
+                let joined = gtk::Label::new(Some("Joined"));
+                joined.add_css_class("dim-label");
+                row.add_suffix(&joined);
+            } else {
+                let button = gtk::Button::builder()
+                    .label("Join")
+                    .valign(gtk::Align::Center)
+                    .build();
+                button.add_css_class("suggested-action");
+                button.connect_clicked({
+                    let on_join = self.on_join.clone();
+                    move |button| {
+                        button.set_sensitive(false);
+                        button.set_label("Joined");
+                        on_join(id.clone());
+                    }
+                });
+                row.add_suffix(&button);
+            }
+
+            self.list.append(&row);
+        }
+    }
+}
+
+/// A channel's bookmarks, filled in by [`Self::set_bookmarks`].
+///
+/// Adding one is a form in the same window rather than a second dialog: it is
+/// two fields, and you usually add several in a row.
+pub struct BookmarkList {
+    list: gtk::ListBox,
+    on_open: Rc<dyn Fn(String)>,
+    on_delete: Rc<dyn Fn(String)>,
+}
+
+impl BookmarkList {
+    pub fn present(
+        parent: &impl IsA<gtk::Window>,
+        on_add: impl Fn(String, String) + 'static,
+        on_open: impl Fn(String) + 'static,
+        on_delete: impl Fn(String) + 'static,
+    ) -> Self {
+        let list = empty_list("bookmark-new-symbolic", "No bookmarks yet");
+        let list_group = adw::PreferencesGroup::builder().title("Bookmarks").build();
+        list_group.add(&list);
+
+        let name = adw::EntryRow::builder().title("Name (optional)").build();
+        let link = adw::EntryRow::builder().title("Link").build();
+
+        let add = gtk::Button::builder()
+            .label("Add")
+            .valign(gtk::Align::Center)
+            // A bookmark without a link is nothing to save; the name can be
+            // filled in from the page by whoever handles this.
+            .sensitive(false)
+            .build();
+        add.add_css_class("suggested-action");
+        link.connect_changed({
+            let add = add.clone();
+            move |link| add.set_sensitive(!link.text().trim().is_empty())
+        });
+        add.connect_clicked({
+            let name = name.clone();
+            let link = link.clone();
+            move |_| {
+                on_add(
+                    name.text().trim().to_string(),
+                    link.text().trim().to_string(),
+                );
+                // Ready for the next one, and emptying the link disables the
+                // button again through the handler above.
+                name.set_text("");
+                link.set_text("");
+            }
+        });
+
+        let form = adw::PreferencesGroup::builder()
+            .title("Add a bookmark")
+            .build();
+        form.set_header_suffix(Some(&add));
+        form.add(&name);
+        form.add(&link);
+
+        let content = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(18)
+            .build();
+        content.append(&list_group);
+        content.append(&form);
+
+        list_window(parent, "Bookmarks", &content).present();
+
+        BookmarkList {
+            list,
+            on_open: Rc::new(on_open),
+            on_delete: Rc::new(on_delete),
+        }
+    }
+
+    /// `bookmarks` is (id, display_name, link_url).
+    pub fn set_bookmarks(&self, bookmarks: Vec<(String, String, String)>) {
+        clear_list(&self.list);
+
+        for (id, display_name, link_url) in bookmarks {
+            let row = adw::ActionRow::builder()
+                .title(glib::markup_escape_text(&display_name))
+                .subtitle(glib::markup_escape_text(&link_url))
+                .activatable(true)
+                .build();
+            // The whole row opens it, which is what a bookmark is for; the
+            // button beside it is the only other thing you can do.
+            row.connect_activated({
+                let on_open = self.on_open.clone();
+                let link_url = link_url.clone();
+                move |_| on_open(link_url.clone())
+            });
+
+            let delete = gtk::Button::builder()
+                .icon_name("user-trash-symbolic")
+                .tooltip_text("Remove bookmark")
+                .valign(gtk::Align::Center)
+                .build();
+            delete.add_css_class("flat");
+            delete.connect_clicked({
+                let on_delete = self.on_delete.clone();
+                move |button| {
+                    button.set_sensitive(false);
+                    on_delete(id.clone());
+                }
+            });
+            row.add_suffix(&delete);
+
+            self.list.append(&row);
+        }
+    }
+}
+
+/// Confirm removing someone from a channel.
+pub fn confirm_remove_member(
+    parent: &impl IsA<gtk::Window>,
+    name: &str,
+    on_remove: impl Fn() + 'static,
+) {
+    let dialog = adw::MessageDialog::new(
+        Some(parent),
+        Some(&format!("Remove {name}?")),
+        Some("They will stop receiving its messages. You can add them back later."),
+    );
+    dialog.add_responses(&[("cancel", "Cancel"), ("remove", "Remove")]);
+    dialog.set_response_appearance("remove", adw::ResponseAppearance::Destructive);
+    dialog.set_default_response(Some("cancel"));
+    dialog.set_close_response("cancel");
+
+    dialog.connect_response(None, move |dialog, response| {
+        dialog.close();
+        if response == "remove" {
+            on_remove();
+        }
+    });
+    dialog.present();
+}
+
+/// A boxed list that says why it is empty instead of leaving a blank gap.
+/// GtkListBox shows the placeholder only while there are no rows, which covers
+/// both "nothing loaded yet" and "nothing matched".
+fn empty_list(icon: &str, title: &str) -> gtk::ListBox {
+    let list = gtk::ListBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
+        .valign(gtk::Align::Start)
+        .build();
+    list.add_css_class("boxed-list");
+
+    let empty = adw::StatusPage::builder()
+        .icon_name(icon)
+        .title(title)
+        .build();
+    empty.add_css_class("compact");
+    list.set_placeholder(Some(&empty));
+    list
+}
+
+fn clear_list(list: &gtk::ListBox) {
+    while let Some(child) = list.first_child() {
+        list.remove(&child);
+    }
+}
+
+/// The window the lists above live in: a plain header and a scrolling clamp,
+/// same shape as [`ChannelBrowser`] minus the search box in the title.
+fn list_window(
+    parent: &impl IsA<gtk::Window>,
+    title: &str,
+    content: &impl IsA<gtk::Widget>,
+) -> adw::Window {
+    let clamp = adw::Clamp::builder()
+        .maximum_size(560)
+        .margin_start(12)
+        .margin_end(12)
+        .margin_top(12)
+        .margin_bottom(12)
+        .child(content)
+        .build();
+    let scroller = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vexpand(true)
+        .child(&clamp)
+        .build();
+
+    let view = adw::ToolbarView::new();
+    view.add_top_bar(&adw::HeaderBar::new());
+    view.set_content(Some(&scroller));
+
+    let window = adw::Window::builder()
+        .title(title)
+        .default_width(460)
+        .default_height(620)
+        .modal(true)
+        .build();
+    window.set_transient_for(Some(parent));
+    window.set_content(Some(&view));
+    window
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

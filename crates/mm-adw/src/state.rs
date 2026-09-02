@@ -211,6 +211,12 @@ pub struct ActiveCall {
     pub muted_users: std::collections::HashSet<String>,
     /// Raised hands, oldest first — the order is the queue.
     pub hands: Vec<String>,
+    /// Whose call this is. The host can mute people, end the call and hand the
+    /// role on; everyone else sees none of those controls.
+    pub host_id: String,
+    /// Media session ids by user, needed because host controls address a
+    /// *session* rather than a person.
+    pub sessions: std::collections::HashMap<String, String>,
 }
 
 pub type SharedState = Rc<RefCell<AppState>>;

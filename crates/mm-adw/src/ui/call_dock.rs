@@ -11,14 +11,24 @@
 //! separator and background come free, and it survives navigation because it
 //! sits outside the content stack.
 
+use std::rc::Rc;
+
 use adw::prelude::*;
 
 use crate::avatars::Avatars;
 use crate::state::SharedState;
 
+/// What the host can do to somebody else in the call.
+#[derive(Debug, Clone, Copy)]
+pub enum HostAction {
+    Mute,
+    Remove,
+}
+
 pub struct CallDock {
     pub widget: gtk::Box,
     roster: gtk::Box,
+    on_host: Rc<dyn Fn(String, HostAction)>,
     avatar: adw::Avatar,
     title: gtk::Label,
     subtitle: gtk::Label,
@@ -39,6 +49,7 @@ impl CallDock {
         on_record: impl Fn() + 'static,
         on_hand: impl Fn() + 'static,
         on_leave: impl Fn() + 'static,
+        on_host: impl Fn(String, HostAction) + 'static,
     ) -> Self {
         let avatar = adw::Avatar::builder().size(28).build();
 
@@ -150,6 +161,7 @@ impl CallDock {
         CallDock {
             widget,
             roster,
+            on_host: Rc::new(on_host),
             avatar,
             title,
             subtitle,
@@ -329,6 +341,41 @@ impl CallDock {
                 muted.set_tooltip_text(Some("Muted"));
                 row.append(&muted);
             }
+            // Host controls, on the people they apply to. Shown only to the
+            // host, and never against the host's own row: muting yourself is
+            // the button already in the dock.
+            let i_am_host = call.host_id == st.me.id;
+            if i_am_host && user_id != &st.me.id {
+                if let Some(session_id) = call.sessions.get(user_id) {
+                    for (icon, tooltip, action) in [
+                        (
+                            "microphone-disabled-symbolic",
+                            "Mute them",
+                            HostAction::Mute,
+                        ),
+                        (
+                            "list-remove-symbolic",
+                            "Remove from call",
+                            HostAction::Remove,
+                        ),
+                    ] {
+                        let button = gtk::Button::builder()
+                            .icon_name(icon)
+                            .tooltip_text(tooltip)
+                            .valign(gtk::Align::Center)
+                            .build();
+                        button.add_css_class("flat");
+                        button.add_css_class("circular");
+                        button.connect_clicked({
+                            let on_host = self.on_host.clone();
+                            let session_id = session_id.clone();
+                            move |_| on_host(session_id.clone(), action)
+                        });
+                        row.append(&button);
+                    }
+                }
+            }
+
             if call.sharing.contains(user_id) {
                 let sharing = gtk::Image::from_icon_name("video-display-symbolic");
                 sharing.add_css_class("accent");

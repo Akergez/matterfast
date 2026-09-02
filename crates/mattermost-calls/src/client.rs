@@ -336,6 +336,8 @@ async fn apply_ice(pc: &Arc<RTCPeerConnection>, candidate: IceCandidateInit) {
 /// A joined call.
 pub struct CallSession {
     signaling: Arc<Signaling>,
+    /// Kept for the host controls, which the plugin serves over REST only.
+    client: Client,
     updates: broadcast::Sender<CallUpdate>,
     session_id: String,
     channel_id: String,
@@ -533,6 +535,7 @@ impl CallSession {
 
         let session = Arc::new(CallSession {
             signaling: signaling.clone(),
+            client: client.clone(),
             updates: updates.clone(),
             session_id: session_id.clone(),
             channel_id: opts.channel_id.clone(),
@@ -686,6 +689,98 @@ impl CallSession {
             StringPayload { data: json },
         )?;
         Ok(())
+    }
+
+    // ------------------------------------------------------------- host
+    //
+    // These do not go over the websocket: the plugin has no
+    // `custom_com.mattermost.calls_host_*` action, only
+    // `POST /calls/{call_id}/host/{action}`. They still live here because they
+    // are per-call, and because the call id they need is only known once the
+    // roster has arrived — see [`call_id`](CallSession::call_id).
+    //
+    // Every one of them is *advisory*: the server relays a `host_*` event to
+    // the target and expects it to comply. A client that ignores `host_mute`
+    // keeps being heard, so never update local UI from the request alone —
+    // wait for the `user_muted` / `user_screen_off` echo.
+
+    /// Asks one participant to mute. Host only.
+    pub async fn host_mute(&self, session_id: &str) -> Result<()> {
+        self.host_control(
+            protocol::host_route::MUTE,
+            serde_json::json!({ "session_id": session_id }),
+        )
+        .await
+    }
+
+    /// Asks everyone *except us* to mute. Host only.
+    ///
+    /// Takes no target: the plugin picks the exempt session from the caller's
+    /// own, so there is no way to spare a third party.
+    pub async fn host_mute_others(&self) -> Result<()> {
+        self.host_control(protocol::host_route::MUTE_OTHERS, serde_json::json!({}))
+            .await
+    }
+
+    /// Stops one participant's screen share. Host only.
+    pub async fn host_screen_off(&self, session_id: &str) -> Result<()> {
+        self.host_control(
+            protocol::host_route::SCREEN_OFF,
+            serde_json::json!({ "session_id": session_id }),
+        )
+        .await
+    }
+
+    /// Lowers one participant's hand. Host only.
+    pub async fn host_lower_hand(&self, session_id: &str) -> Result<()> {
+        self.host_control(
+            protocol::host_route::LOWER_HAND,
+            serde_json::json!({ "session_id": session_id }),
+        )
+        .await
+    }
+
+    /// Removes one participant from the call. Host only.
+    ///
+    /// Unlike the others this is broadcast (`host_removed`), because everyone
+    /// has to drop the removed session from their roster.
+    pub async fn host_remove(&self, session_id: &str) -> Result<()> {
+        self.host_control(
+            protocol::host_route::REMOVE,
+            serde_json::json!({ "session_id": session_id }),
+        )
+        .await
+    }
+
+    /// Hands the host role to someone else. Host only.
+    ///
+    /// Takes a **user** id, not a session id — the host is a user, so all of
+    /// their sessions become host at once. Map with
+    /// [`CallState::user_for_session`](crate::protocol::CallState::user_for_session).
+    pub async fn host_make(&self, new_host_id: &str) -> Result<()> {
+        self.host_control(
+            protocol::host_route::MAKE,
+            serde_json::json!({ "new_host_id": new_host_id }),
+        )
+        .await
+    }
+
+    /// Ends the call for everyone. Host only.
+    pub async fn host_end_call(&self) -> Result<()> {
+        self.host_control(protocol::host_route::END, serde_json::json!({}))
+            .await
+    }
+
+    async fn host_control(&self, route: &str, body: serde_json::Value) -> Result<()> {
+        let call_id = self.call_id();
+        if call_id.is_empty() {
+            // The routes are keyed by call id, and an empty one would just be a
+            // 404 from a URL with an empty path segment.
+            return Err(CallsError::Protocol(
+                "host controls need the call id, which no roster has provided yet".into(),
+            ));
+        }
+        crate::config::host_control(&self.client, &call_id, route, body).await
     }
 
     /// Announces a screen share.

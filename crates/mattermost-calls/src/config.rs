@@ -262,6 +262,49 @@ pub async fn set_recording(client: &Client, channel_id: &str, on: bool) -> Resul
     Ok(())
 }
 
+/// Runs one host-control route: `POST /calls/{call_id}/host/{action}`.
+///
+/// Host controls have **no websocket action** — unlike everything else a
+/// participant does, they are HTTP only. The plugin replies by emitting the
+/// matching `host_*` event to the target, and that is the whole enforcement:
+/// the SFU keeps relaying the audio of a client that ignores `host_mute`
+/// (`server/host_controls.go:103-107`).
+///
+/// The **call** id here, not the channel id — the opposite of
+/// [`set_recording`] and [`dismiss_notification`], which is the plugin's own
+/// inconsistency and not a typo.
+pub async fn host_control(
+    client: &Client,
+    call_id: &str,
+    action: &str,
+    body: serde_json::Value,
+) -> Result<()> {
+    let url = client.plugin_url(PLUGIN_ID, &format!("/calls/{call_id}/host/{action}"));
+    let _: serde_json::Value = client
+        .post_url(&url, Some(&body), "call host control")
+        .await?;
+    Ok(())
+}
+
+/// Marks the ringing notification for a channel's call as seen.
+///
+/// Ringing has no protocol messages of its own: it is `call_start` plus
+/// client-side `EnableRinging` behaviour, and this route is how it is called
+/// off. The resulting `user_dismissed_notification` event goes to the
+/// dismissing user *only*, which is what silences their other sessions.
+///
+/// Channel id, like [`set_recording`], despite the `/calls/{id}/` prefix.
+pub async fn dismiss_notification(client: &Client, channel_id: &str) -> Result<()> {
+    let url = client.plugin_url(
+        PLUGIN_ID,
+        &format!("/calls/{channel_id}/dismiss-notification"),
+    );
+    let _: serde_json::Value = client
+        .post_url(&url, Option::<&()>::None, "dismiss call notification")
+        .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

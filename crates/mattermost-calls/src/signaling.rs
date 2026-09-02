@@ -135,6 +135,13 @@ pub enum CallsEvent {
         session_id: String,
         user_id: String,
     },
+    /// Someone dismissed the incoming-call notification. The plugin sends this
+    /// to the dismissing user alone, so in practice it is how our *other*
+    /// sessions tell us to stop ringing.
+    UserDismissedNotification {
+        user_id: String,
+        call_id: String,
+    },
     /// A Calls event we do not model.
     Unhandled {
         name: String,
@@ -298,6 +305,10 @@ fn parse_named(name: &str, d: &Data, b: &Broadcast) -> CallsEvent {
                 .and_then(|v| serde_json::from_value(v.clone()).ok())
                 .unwrap_or_default(),
         },
+        ev::USER_DISMISSED_NOTIFICATION => CallsEvent::UserDismissedNotification {
+            user_id,
+            call_id: s(d, "callID"),
+        },
         ev::HOST_MUTE => CallsEvent::HostMuteRequest { session_id },
         ev::HOST_SCREEN_OFF => CallsEvent::HostScreenOffRequest { session_id },
         ev::HOST_LOWER_HAND => CallsEvent::HostLowerHandRequest { session_id },
@@ -441,6 +452,23 @@ mod tests {
         {
             CallsEvent::UserRaisedHand { raised_at, .. } => assert_eq!(raised_at, 0),
             other => panic!("expected UserRaisedHand, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dismissed_notification_carries_the_call_id() {
+        // Note the casing: `userID` and `callID`, and no session at all.
+        match ev(
+            r#"{"event":"custom_com.mattermost.calls_user_dismissed_notification",
+                    "data":{"userID":"u1","callID":"call1"},"broadcast":{},"seq":10}"#,
+        )
+        .unwrap()
+        {
+            CallsEvent::UserDismissedNotification { user_id, call_id } => {
+                assert_eq!(user_id, "u1");
+                assert_eq!(call_id, "call1");
+            }
+            other => panic!("expected UserDismissedNotification, got {other:?}"),
         }
     }
 

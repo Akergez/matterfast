@@ -82,7 +82,9 @@ impl ChannelSidebar {
         let menu = gtk::gio::Menu::new();
         let channels_section = gtk::gio::Menu::new();
         channels_section.append(Some("Jump to…"), Some("win.quick-switch"));
+        channels_section.append(Some("Scheduled Messages"), Some("win.scheduled-posts"));
         channels_section.append(Some("New Channel…"), Some("win.new-channel"));
+        channels_section.append(Some("Browse Teams…"), Some("win.browse-teams"));
         channels_section.append(Some("Browse Channels…"), Some("win.browse-channels"));
         menu.append_section(None, &channels_section);
         let account_section = gtk::gio::Menu::new();

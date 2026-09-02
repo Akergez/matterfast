@@ -78,6 +78,10 @@ enum MenuAction {
     CustomStatus,
     QuickSwitch,
     SignOut,
+    ScheduledPosts,
+    ChannelMembers,
+    ChannelBookmarks,
+    BrowseTeams,
     ChannelNotifications,
     LeaveChannel,
     PinnedPosts,
@@ -139,6 +143,8 @@ enum Action {
     SetStatus(String),
     /// Raise or lower your hand in the call.
     ToggleHand,
+    /// Do something to another participant, as the call's host.
+    HostControl(String, call_dock::HostAction),
     /// Drop an uploaded file before it is sent.
     DropAttachment(String),
     /// Files arrived by drag and drop.
@@ -525,6 +531,12 @@ fn build_session_ui(
                 let _ = tx.send_blocking(Action::ToggleCall);
             }
         },
+        {
+            let tx = tx.clone();
+            move |session_id, action| {
+                let _ = tx.send_blocking(Action::HostControl(session_id, action));
+            }
+        },
     ));
 
     // --- pane 1: channels, with the team switcher in its header
@@ -674,6 +686,10 @@ fn build_session_ui(
         ("edit-profile", MenuAction::EditProfile),
         ("quick-switch", MenuAction::QuickSwitch),
         ("sign-out", MenuAction::SignOut),
+        ("scheduled-posts", MenuAction::ScheduledPosts),
+        ("channel-members", MenuAction::ChannelMembers),
+        ("channel-bookmarks", MenuAction::ChannelBookmarks),
+        ("browse-teams", MenuAction::BrowseTeams),
         ("custom-status", MenuAction::CustomStatus),
         ("channel-notifications", MenuAction::ChannelNotifications),
         ("leave-channel", MenuAction::LeaveChannel),
@@ -857,6 +873,28 @@ impl Ui {
             // updated server-side too; nothing left to do.
             StreamUpdate::Done { .. } | StreamUpdate::Ignored => {}
         }
+    }
+
+    /// Applies a host control. These are HTTP routes rather than websocket
+    /// messages — the one part of the calls protocol that is.
+    fn host_control(self: &Rc<Self>, session_id: String, what: call_dock::HostAction) {
+        let Some(session) = self.state.borrow().call.as_ref().map(|c| c.session.clone()) else {
+            return;
+        };
+        let ui = self.clone();
+        runtime::spawn(
+            async move {
+                match what {
+                    call_dock::HostAction::Mute => session.host_mute(&session_id).await,
+                    call_dock::HostAction::Remove => session.host_remove(&session_id).await,
+                }
+            },
+            move |result| {
+                if let Err(e) = result {
+                    ui.toast(&format!("Could not do that: {e}"));
+                }
+            },
+        );
     }
 
     /// Raises or lowers your own hand. The SFU echoes it back as
@@ -1126,6 +1164,10 @@ impl Ui {
             MenuAction::EditProfile => self.edit_profile(),
             MenuAction::QuickSwitch => self.quick_switch(),
             MenuAction::SignOut => self.sign_out(),
+            MenuAction::ScheduledPosts => self.scheduled_posts(),
+            MenuAction::ChannelMembers => self.channel_members(),
+            MenuAction::ChannelBookmarks => self.channel_bookmarks(),
+            MenuAction::BrowseTeams => self.browse_teams(),
             MenuAction::CustomStatus => self.custom_status(),
             MenuAction::ChannelNotifications => self.channel_notifications(),
             MenuAction::LeaveChannel => self.leave_channel(),
@@ -1338,6 +1380,406 @@ impl Ui {
                 },
             );
         });
+    }
+
+    /// Who is in this channel, and a way to add or remove people.
+    fn channel_members(self: &Rc<Self>) {
+        let (client, channel_id, name, team_id) = {
+            let st = self.state.borrow();
+            let Some(channel_id) = st.current_channel.clone() else {
+                return;
+            };
+            let name = st
+                .channel(&channel_id)
+                .map(|c| st.channel_title(c))
+                .unwrap_or_default();
+            (
+                st.client.clone(),
+                channel_id,
+                name,
+                st.current_team.clone().unwrap_or_default(),
+            )
+        };
+
+        let holder: Rc<RefCell<Option<Rc<dialogs::MemberList>>>> = Rc::new(RefCell::new(None));
+        let search_holder = holder.clone();
+        let search_client = client.clone();
+        let search_channel = channel_id.clone();
+        let search_ui = self.clone();
+        let add_ui = self.clone();
+        let add_client = client.clone();
+        let add_channel = channel_id.clone();
+        let remove_ui = self.clone();
+        let remove_channel = channel_id.clone();
+
+        let opened = Rc::new(dialogs::MemberList::present(
+            &self.window,
+            &name,
+            move |term| {
+                if term.trim().is_empty() {
+                    return;
+                }
+                let client = search_client.clone();
+                let team_id = team_id.clone();
+                let channel_id = search_channel.clone();
+                let holder = search_holder.clone();
+                let state = search_ui.state.clone();
+                runtime::spawn(
+                    // Not-in-channel only: offering someone already here is an
+                    // add that does nothing.
+                    async move { client.search_users(&term, &team_id, "", &channel_id).await },
+                    move |result| {
+                        let Ok(users) = result else { return };
+                        let display = state.borrow().teammate_name_display().to_string();
+                        let rows = users
+                            .into_iter()
+                            .map(|u| {
+                                (
+                                    u.id.clone(),
+                                    u.display_name(&display),
+                                    format!("@{}", u.username),
+                                )
+                            })
+                            .collect();
+                        if let Some(list) = holder.borrow().as_ref() {
+                            list.set_candidates(rows);
+                        }
+                    },
+                );
+            },
+            move |user_id| {
+                let client = add_client.clone();
+                let channel_id = add_channel.clone();
+                let ui = add_ui.clone();
+                runtime::spawn(
+                    async move { client.join_channel(&channel_id, &user_id).await },
+                    move |result| match result {
+                        Ok(_) => ui.toast("Added."),
+                        Err(e) => ui.toast(&format!("Could not add them: {e}")),
+                    },
+                );
+            },
+            move |user_id| {
+                // Removing someone is not undoable and is visible to them, so
+                // it asks first.
+                let ui = remove_ui.clone();
+                let name = ui.user_name(&user_id);
+                let client = client.clone();
+                let channel_id = remove_channel.clone();
+                dialogs::confirm_remove_member(&ui.window.clone(), &name, move || {
+                    let client = client.clone();
+                    let channel_id = channel_id.clone();
+                    let user_id = user_id.clone();
+                    let ui = ui.clone();
+                    runtime::spawn(
+                        async move { client.leave_channel(&channel_id, &user_id).await },
+                        move |result| match result {
+                            Ok(()) => ui.toast("Removed."),
+                            Err(e) => ui.toast(&format!("Could not remove them: {e}")),
+                        },
+                    );
+                });
+            },
+        ));
+        *holder.borrow_mut() = Some(opened.clone());
+
+        // Fill the current members in.
+        let ui = self.clone();
+        let fill_client = self.state.borrow().client.clone();
+        runtime::spawn(
+            async move {
+                let members = fill_client.channel_members(&channel_id, 0, 200).await?;
+                let ids: Vec<String> = members.iter().map(|m| m.user_id.clone()).collect();
+                let users = fill_client.users_by_ids(&ids).await?;
+                Ok::<_, mattermost_api::Error>((members, users))
+            },
+            move |result| {
+                let Ok((members, users)) = result else { return };
+                let display = ui.state.borrow().teammate_name_display().to_string();
+                let rows = users
+                    .into_iter()
+                    .map(|user| {
+                        let admin = members
+                            .iter()
+                            .find(|m| m.user_id == user.id)
+                            .is_some_and(|m| m.roles.contains("channel_admin"));
+                        let name = user.display_name(&display);
+                        (user.id, name, format!("@{}", user.username), admin)
+                    })
+                    .collect();
+                opened.set_members(rows);
+            },
+        );
+    }
+
+    /// A channel's bookmarks. Servers older than 9.4 have no such route, so a
+    /// failure here says the feature is missing rather than that it broke.
+    fn channel_bookmarks(self: &Rc<Self>) {
+        let (client, channel_id) = {
+            let st = self.state.borrow();
+            (st.client.clone(), st.current_channel.clone())
+        };
+        let Some(channel_id) = channel_id else { return };
+
+        let holder: Rc<RefCell<Option<Rc<dialogs::BookmarkList>>>> = Rc::new(RefCell::new(None));
+        let refill = {
+            let holder = holder.clone();
+            let client = client.clone();
+            let channel_id = channel_id.clone();
+            let ui = self.clone();
+            move || {
+                let holder = holder.clone();
+                let client = client.clone();
+                let channel_id = channel_id.clone();
+                let ui = ui.clone();
+                runtime::spawn(
+                    async move { client.list_bookmarks(&channel_id).await },
+                    move |result| match result {
+                        Ok(bookmarks) => {
+                            let rows = bookmarks
+                                .into_iter()
+                                .map(|b| (b.id, b.display_name, b.link_url))
+                                .collect();
+                            if let Some(list) = holder.borrow().as_ref() {
+                                list.set_bookmarks(rows);
+                            }
+                        }
+                        Err(e) => ui.toast(&format!("Bookmarks are not available here: {e}")),
+                    },
+                );
+            }
+        };
+
+        let add_client = client.clone();
+        let add_channel = channel_id.clone();
+        let add_refill = refill.clone();
+        let delete_refill = refill.clone();
+        let ui = self.clone();
+        let opened = Rc::new(dialogs::BookmarkList::present(
+            &self.window,
+            move |display_name, link_url| {
+                let bookmark = mattermost_api::models::ChannelBookmark {
+                    channel_id: add_channel.clone(),
+                    display_name: if display_name.is_empty() {
+                        link_url.clone()
+                    } else {
+                        display_name
+                    },
+                    link_url,
+                    r#type: "link".into(),
+                    ..Default::default()
+                };
+                let client = add_client.clone();
+                let channel_id = add_channel.clone();
+                let refill = add_refill.clone();
+                runtime::spawn(
+                    async move { client.create_bookmark(&channel_id, &bookmark).await },
+                    move |_| refill(),
+                );
+            },
+            move |link_url| {
+                let _ = gtk::gio::AppInfo::launch_default_for_uri(
+                    &link_url,
+                    None::<&gtk::gio::AppLaunchContext>,
+                );
+            },
+            move |bookmark_id| {
+                let client = client.clone();
+                let channel_id = channel_id.clone();
+                let refill = delete_refill.clone();
+                let ui = ui.clone();
+                runtime::spawn(
+                    async move { client.delete_bookmark(&channel_id, &bookmark_id).await },
+                    move |result| {
+                        if let Err(e) = result {
+                            ui.toast(&format!("Could not remove it: {e}"));
+                        }
+                        refill();
+                    },
+                );
+            },
+        ));
+        *holder.borrow_mut() = Some(opened);
+        refill();
+    }
+
+    /// Teams on this server you are not in yet.
+    fn browse_teams(self: &Rc<Self>) {
+        let (client, me) = {
+            let st = self.state.borrow();
+            (st.client.clone(), st.me.id.clone())
+        };
+
+        let join_client = client.clone();
+        let ui = self.clone();
+        let browser = Rc::new(dialogs::TeamBrowser::present(
+            &self.window,
+            move |team_id| {
+                let client = join_client.clone();
+                let me = me.clone();
+                let ui = ui.clone();
+                runtime::spawn(
+                    async move { client.join_team(&team_id, &me).await },
+                    move |result| match result {
+                        Ok(member) => {
+                            ui.reload_teams();
+                            ui.dispatch(Action::SelectTeam(member.team_id));
+                        }
+                        Err(e) => ui.toast(&format!("Could not join: {e}")),
+                    },
+                );
+            },
+        ));
+
+        let mine = self.state.borrow().teams.clone();
+        runtime::spawn(
+            async move { client.all_teams(0, 100).await },
+            move |result| {
+                let Ok(teams) = result else { return };
+                let rows = teams
+                    .into_iter()
+                    .filter(|t| t.delete_at == 0)
+                    .map(|team| {
+                        let member = mine.iter().any(|m| m.id == team.id);
+                        (team.id, team.display_name, team.description, member)
+                    })
+                    .collect();
+                browser.set_teams(rows);
+            },
+        );
+    }
+
+    /// Messages waiting to be sent later, with a way to call them off.
+    ///
+    /// The response is a bucket map keyed by team, plus a separate one for
+    /// direct messages, so this walks the values rather than assuming a shape.
+    fn scheduled_posts(self: &Rc<Self>) {
+        let (client, team) = {
+            let st = self.state.borrow();
+            (st.client.clone(), st.current_team.clone())
+        };
+        let Some(team_id) = team else { return };
+
+        let ui = self.clone();
+        runtime::spawn(
+            async move { client.scheduled_posts_for_team(&team_id).await },
+            move |result| match result {
+                Ok(value) => ui.show_scheduled(value),
+                Err(e) => ui.toast(&format!("Could not load them: {e}")),
+            },
+        );
+    }
+
+    fn show_scheduled(self: &Rc<Self>, value: serde_json::Value) {
+        let mut posts: Vec<mattermost_api::models::ScheduledPost> = Vec::new();
+        if let Some(buckets) = value.as_object() {
+            for bucket in buckets.values() {
+                if let Ok(mut found) = serde_json::from_value::<
+                    Vec<mattermost_api::models::ScheduledPost>,
+                >(bucket.clone())
+                {
+                    posts.append(&mut found);
+                }
+            }
+        }
+        posts.sort_by_key(|p| p.scheduled_at);
+
+        let list = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(6)
+            .margin_top(12)
+            .margin_bottom(12)
+            .margin_start(12)
+            .margin_end(12)
+            .build();
+
+        if posts.is_empty() {
+            list.append(
+                &adw::StatusPage::builder()
+                    .icon_name("alarm-symbolic")
+                    .title("Nothing scheduled")
+                    .description("Messages you send later wait here.")
+                    .css_classes(["compact"])
+                    .build(),
+            );
+        }
+
+        for scheduled in posts {
+            let when = gtk::Label::builder()
+                .label(format!(
+                    "{} {}",
+                    message::format_day(scheduled.scheduled_at),
+                    message::format_time(scheduled.scheduled_at)
+                ))
+                .xalign(0.0)
+                .build();
+            when.add_css_class("message-timestamp");
+
+            let text = gtk::Label::builder()
+                .label(&scheduled.post.message)
+                .xalign(0.0)
+                .wrap(true)
+                .hexpand(true)
+                .build();
+
+            let cancel = gtk::Button::builder()
+                .icon_name("user-trash-symbolic")
+                .tooltip_text("Cancel")
+                .valign(gtk::Align::Center)
+                .build();
+            cancel.add_css_class("flat");
+            cancel.add_css_class("circular");
+            cancel.connect_clicked({
+                let ui = self.clone();
+                let id = scheduled.post.id.clone();
+                move |button| {
+                    button.set_sensitive(false);
+                    let client = ui.state.borrow().client.clone();
+                    let id = id.clone();
+                    let ui = ui.clone();
+                    runtime::spawn(
+                        async move { client.delete_scheduled_post(&id).await },
+                        move |result| match result {
+                            Ok(()) => ui.toast("Cancelled."),
+                            Err(e) => ui.toast(&format!("Could not cancel it: {e}")),
+                        },
+                    );
+                }
+            });
+
+            let body = gtk::Box::builder()
+                .orientation(gtk::Orientation::Vertical)
+                .hexpand(true)
+                .build();
+            body.append(&when);
+            body.append(&text);
+
+            let row = gtk::Box::builder()
+                .orientation(gtk::Orientation::Horizontal)
+                .spacing(8)
+                .build();
+            row.append(&body);
+            row.append(&cancel);
+            list.append(&row);
+        }
+
+        let window = adw::Window::builder()
+            .title("Scheduled messages")
+            .transient_for(&self.window)
+            .modal(true)
+            .default_width(520)
+            .default_height(440)
+            .build();
+        let view = adw::ToolbarView::new();
+        view.add_top_bar(&adw::HeaderBar::new());
+        view.set_content(Some(
+            &gtk::ScrolledWindow::builder()
+                .hscrollbar_policy(gtk::PolicyType::Never)
+                .child(&list)
+                .build(),
+        ));
+        window.set_content(Some(&view));
+        window.present();
     }
 
     /// Signs out of this server, forgetting its token and its cached
@@ -2836,6 +3278,7 @@ impl Ui {
             Action::SummariseUnreads => self.summarise_unreads(),
             Action::SetStatus(status) => self.set_status(status),
             Action::ToggleHand => self.toggle_hand(),
+            Action::HostControl(session_id, what) => self.host_control(session_id, what),
             Action::DropAttachment(file_id) => {
                 self.state
                     .borrow_mut()
@@ -3404,6 +3847,8 @@ impl Ui {
             roster: HashMap::new(),
             speaking: Vec::new(),
             sharing: Vec::new(),
+            host_id: String::new(),
+            sessions: HashMap::new(),
             muted_users: HashSet::new(),
             hands: Vec::new(),
             screen: None,
@@ -3686,6 +4131,14 @@ impl Ui {
                 }
                 self.refresh_call_ui();
             }
+            CallUpdate::Participant(mattermost_calls::CallsEvent::HostChanged {
+                host_id, ..
+            }) => {
+                if let Some(call) = self.state.borrow_mut().call.as_mut() {
+                    call.host_id = host_id;
+                }
+                self.refresh_call_ui();
+            }
             CallUpdate::Participant(mattermost_calls::CallsEvent::UserMuted {
                 user_id,
                 muted,
@@ -3734,6 +4187,12 @@ impl Ui {
                 let mut st = self.state.borrow_mut();
                 if let Some(call) = st.call.as_mut() {
                     call.recording = is_running(state.recording.as_ref());
+                    call.host_id = state.host_id.clone();
+                    call.sessions = state
+                        .sessions
+                        .iter()
+                        .map(|s| (s.user_id.clone(), s.session_id.clone()))
+                        .collect();
                     call.muted_users = state
                         .sessions
                         .iter()
