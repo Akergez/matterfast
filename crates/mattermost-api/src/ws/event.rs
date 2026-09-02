@@ -205,6 +205,9 @@ pub enum Event {
     /// A draft you wrote on another device. Both create and update arrive as
     /// `draft_created` — `draft_updated` exists in the server's enum but is
     /// never published.
+    /// A message shown only to you and never stored — how slash commands and
+    /// plugins answer.
+    EphemeralMessage(Box<Post>),
     DraftCreated(Box<Draft>),
     DraftDeleted(Box<Draft>),
     /// Anything we do not model, including every `custom_<plugin>_<name>`
@@ -235,6 +238,12 @@ impl Event {
             },
             "draft_deleted" => match extract(d, "draft") {
                 Some(draft) => Event::DraftDeleted(Box::new(draft)),
+                None => Event::other(frame),
+            },
+            // A slash command's answer to you alone. It is a post, but one
+            // the server never stores, so it arrives under its own name.
+            "ephemeral_message" => match extract(d, "post") {
+                Some(post) => Event::EphemeralMessage(Box::new(post)),
                 None => Event::other(frame),
             },
             "post_edited" => match extract(d, "post") {

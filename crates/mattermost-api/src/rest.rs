@@ -1578,6 +1578,23 @@ impl Client {
         .await
     }
 
+    /// `POST /api/v4/commands/execute` — runs a slash command.
+    ///
+    /// The command's own output comes back as a post or an ephemeral message,
+    /// not in this response, so the interesting part of the reply is usually
+    /// `goto_location` and nothing else.
+    pub async fn execute_command(
+        &self,
+        channel_id: &str,
+        command: &str,
+    ) -> Result<serde_json::Value> {
+        let mut body = std::collections::HashMap::new();
+        body.insert("channel_id", channel_id);
+        body.insert("command", command);
+        self.post_json("/commands/execute", &body, "execute command")
+            .await
+    }
+
     /// `GET /api/v4/emoji/{id}/image` — a custom emoji's picture.
     pub async fn emoji_image_bytes(&self, emoji_id: &str) -> Result<Vec<u8>> {
         let resp = self

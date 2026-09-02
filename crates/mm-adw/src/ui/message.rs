@@ -432,12 +432,81 @@ fn attachment(
         return open.upcast();
     }
 
+    // Everything that is not an image: a name, a size, and a way to get it.
     let label = gtk::Label::builder()
-        .label(format!("📎 {}  ·  {}", file.name, file.human_size()))
+        .label(format!("{}  ·  {}", file.name, file.human_size()))
         .xalign(0.0)
+        .hexpand(true)
+        .ellipsize(gtk::pango::EllipsizeMode::Middle)
         .build();
-    label.add_css_class("dim-label");
-    label.upcast()
+
+    let save = gtk::Button::builder()
+        .icon_name("document-save-symbolic")
+        .tooltip_text("Save")
+        .valign(gtk::Align::Center)
+        .build();
+    save.add_css_class("flat");
+    save.add_css_class("circular");
+    save.connect_clicked({
+        let state = state.clone();
+        let file = file.clone();
+        move |button| save_attachment(&state, &file, button)
+    });
+
+    let row = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(6)
+        .build();
+    row.add_css_class("dim-label");
+    row.append(&gtk::Image::from_icon_name("mail-attachment-symbolic"));
+    row.append(&label);
+    row.append(&save);
+    row.upcast()
+}
+
+/// Downloads an attachment to wherever the person says.
+///
+/// The file is behind the session token, so it is fetched and written here
+/// rather than handed to anything else as a URL.
+fn save_attachment(
+    state: &SharedState,
+    file: &mattermost_api::models::FileInfo,
+    anchor: &gtk::Button,
+) {
+    let dialog = gtk::FileDialog::builder()
+        .title("Save attachment")
+        .initial_name(&file.name)
+        .build();
+    let parent = anchor.root().and_downcast::<gtk::Window>();
+    let client = state.borrow().client.clone();
+    let file_id = file.id.clone();
+
+    dialog.save(
+        parent.as_ref(),
+        None::<&gtk::gio::Cancellable>,
+        move |result| {
+            let Ok(target) = result else { return };
+            let Some(path) = target.path() else { return };
+            let client = client.clone();
+            let file_id = file_id.clone();
+            crate::runtime::spawn(
+                async move {
+                    let bytes = client
+                        .download_file(&file_id)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    tokio::fs::write(&path, bytes)
+                        .await
+                        .map_err(|e| e.to_string())
+                },
+                |result| {
+                    if let Err(e) = result {
+                        tracing::warn!(error = %e, "could not save the attachment");
+                    }
+                },
+            );
+        },
+    );
 }
 
 /// Opens the full-size image in its own window. The original is behind the

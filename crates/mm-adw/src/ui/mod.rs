@@ -3091,6 +3091,34 @@ impl Ui {
         );
     }
 
+    /// Runs a slash command. Its output arrives as a post or an ephemeral
+    /// message, so there is usually nothing to show from the response itself.
+    fn run_command(self: &Rc<Self>, channel_id: String, command: String) {
+        let client = self.state.borrow().client.clone();
+        self.chat.set_composer_text("");
+        let ui = self.clone();
+        runtime::spawn(
+            async move { client.execute_command(&channel_id, &command).await },
+            move |result| match result {
+                Ok(response) => {
+                    // Some commands answer with somewhere to go rather than
+                    // something to say.
+                    if let Some(location) = response
+                        .get("goto_location")
+                        .and_then(|v| v.as_str())
+                        .filter(|l| !l.is_empty())
+                    {
+                        let _ = gtk::gio::AppInfo::launch_default_for_uri(
+                            location,
+                            None::<&gtk::gio::AppLaunchContext>,
+                        );
+                    }
+                }
+                Err(e) => ui.toast(&format!("That command failed: {e}")),
+            },
+        );
+    }
+
     /// Fetches the page of messages before the oldest one we hold.
     ///
     /// Only one at a time, and never past the beginning: reaching the top of a
@@ -4041,6 +4069,13 @@ impl Ui {
         if text.trim().is_empty() && file_ids.is_empty() {
             return;
         }
+        // A slash command is an instruction to the server, not a message. It
+        // was being posted as literal text, which is how "/away" ended up in
+        // channels as a joke about the client.
+        if text.starts_with('/') && !text.starts_with("//") && file_ids.is_empty() {
+            self.run_command(channel_id, text);
+            return;
+        }
         let priority = self.chat.priority();
         self.chat.reset_priority();
         self.refresh_attachments();
@@ -4771,6 +4806,13 @@ impl Ui {
                     ) {
                         notify_about = Some(posted);
                     }
+                }
+                // Ephemeral posts are shown like any other, but the server
+                // will never mention them again — no edit, no delete, and
+                // they are gone on the next fetch. That is the intent.
+                Event::EphemeralMessage(post) => {
+                    st.apply_post(*post);
+                    redraw_messages = true;
                 }
                 Event::PostEdited(post) => {
                     st.apply_post(post);

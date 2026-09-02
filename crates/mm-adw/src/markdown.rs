@@ -62,7 +62,7 @@ pub fn parse(message: &str) -> Vec<Block> {
             }
             Event::Text(t) => match code.as_mut() {
                 Some((_, body)) => body.push_str(&t),
-                None => text.push_str(&escape(&t)),
+                None => text.push_str(&inline(&t)),
             },
             // Inline code is a span, not a block: it belongs in the sentence.
             Event::Code(t) => {
@@ -119,6 +119,19 @@ pub fn parse(message: &str) -> Vec<Block> {
                 }
                 text.push('\n');
             }
+            // Tables have no Pango equivalent, so they are laid out as text:
+            // cells separated, rows on their own lines. Losing the grid is
+            // better than losing the content, which is what dropping the tags
+            // did — every cell ran together into one line.
+            Event::Start(Tag::TableCell) => {}
+            Event::End(TagEnd::TableCell) => text.push_str("  │  "),
+            Event::End(TagEnd::TableHead) | Event::End(TagEnd::TableRow) => {
+                // Trim the separator the last cell just added.
+                while text.ends_with([' ', '│']) {
+                    text.pop();
+                }
+                text.push('\n');
+            }
             Event::SoftBreak | Event::HardBreak => text.push('\n'),
             Event::Rule => text.push_str("\n──────\n"),
             // Tables, footnotes, HTML: rendered as their own text rather than
@@ -129,6 +142,70 @@ pub fn parse(message: &str) -> Vec<Block> {
     }
     flush(&mut text, &mut blocks);
     blocks
+}
+
+/// Escapes for Pango, then substitutes the things Mattermost writes as text
+/// but means as something else: `:shortcode:` emoji and `@name` mentions.
+///
+/// Done after escaping, because both replacements *emit* markup and would
+/// otherwise be escaped along with everything else.
+fn inline(text: &str) -> String {
+    let escaped = escape(text);
+    let mut out = String::with_capacity(escaped.len());
+    let mut rest = escaped.as_str();
+
+    while let Some(start) = rest.find([':', '@']) {
+        out.push_str(&rest[..start]);
+        let sigil = rest.as_bytes()[start];
+        let after = &rest[start + 1..];
+
+        let end = match sigil {
+            b':' => after.find(':').filter(|end| {
+                // A shortcode has no spaces in it; "10:30 and" is not one.
+                let name = &after[..*end];
+                !name.is_empty()
+                    && name
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '+' || c == '-')
+            }),
+            _ => Some(
+                after
+                    .find(|c: char| !(c.is_alphanumeric() || matches!(c, '.' | '-' | '_')))
+                    .unwrap_or(after.len()),
+            ),
+        };
+
+        match (sigil, end) {
+            (b':', Some(end)) => {
+                let name = &after[..end];
+                match crate::emoji::resolve(name) {
+                    crate::emoji::Rendered::Unicode(glyph) => out.push_str(glyph),
+                    // A custom emoji has no glyph to substitute, so the
+                    // shortcode stays — it is at least readable.
+                    crate::emoji::Rendered::Custom => {
+                        out.push(':');
+                        out.push_str(name);
+                        out.push(':');
+                    }
+                }
+                rest = &after[end + 1..];
+            }
+            (b'@', Some(end)) if end > 0 => {
+                // Tinted, not linked: a mention is a highlight, and making it
+                // clickable would promise a profile card this does not have.
+                out.push_str("<span foreground=\"#3584e4\">@");
+                out.push_str(&after[..end]);
+                out.push_str("</span>");
+                rest = &after[end..];
+            }
+            _ => {
+                out.push(sigil as char);
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Escapes the five characters Pango treats as markup.
@@ -217,6 +294,27 @@ mod tests {
     fn lists_are_indented_by_depth() {
         assert_eq!(text_of("- one\n- two"), "• one\n• two");
         assert_eq!(text_of("- one\n    - deep"), "• one\n    • deep");
+    }
+
+    #[test]
+    fn shortcodes_become_emoji_and_mentions_are_tinted() {
+        assert_eq!(text_of("nice :tada:"), "nice 🎉");
+        assert!(text_of("hi @anna").contains("<span foreground=\"#3584e4\">@anna</span>"));
+    }
+
+    #[test]
+    fn colons_that_are_not_shortcodes_are_left_alone() {
+        // A time, a ratio and an unknown name must all survive as written.
+        assert_eq!(text_of("at 10:30 sharp"), "at 10:30 sharp");
+        assert_eq!(text_of("ratio 4:3"), "ratio 4:3");
+        assert_eq!(text_of(":not_an_emoji:"), ":not_an_emoji:");
+    }
+
+    #[test]
+    fn a_table_keeps_its_cells_on_their_rows() {
+        let rendered = text_of("| a | b |\n| - | - |\n| 1 | 2 |");
+        assert!(rendered.contains("a  │  b"), "got {rendered:?}");
+        assert!(rendered.contains("1  │  2"), "got {rendered:?}");
     }
 
     #[test]
