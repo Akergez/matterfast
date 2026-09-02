@@ -31,6 +31,9 @@ pub struct Candidate {
     pub secondary: String,
     /// Already-loaded picture, when there is one. Emoji rows have none.
     pub image: Option<gtk::gdk::Texture>,
+    /// Whose picture this is, so a redraw can look one up again later.
+    /// `None` for rows with no avatar to fetch, such as emoji and groups.
+    pub user_id: Option<String>,
 }
 
 pub struct Autocomplete {

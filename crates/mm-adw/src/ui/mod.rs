@@ -50,6 +50,11 @@ use sidebar::{ChannelSidebar, RowAction};
 
 /// The websocket prefix of <https://github.com/Toxblh/mattermost-reactions-notify-plugin>,
 /// which notifies you about reactions to your own posts.
+/// How long the server is left out of a burst of typing. Short enough that
+/// the extra names arrive while the eye is still on the list, long enough
+/// that a whole word costs one request.
+const MENTION_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(180);
+
 const REACTION_NOTIFY_PREFIX: &str = "custom_ru.toxblh.reactions-notify_";
 
 /// Mentions answerable from memory: anyone whose handle or name *contains*
@@ -60,8 +65,10 @@ const REACTION_NOTIFY_PREFIX: &str = "custom_ru.toxblh.reactions-notify_";
 /// prefix matches still come first, because when the prefix is what was meant
 /// it is nearly always the one wanted.
 ///
-/// The scan is linear over the directory and does no allocation for the
-/// common miss: it lowercases only when a cheap ASCII check cannot decide.
+/// The scan is linear over the directory: username, nickname, first and last
+/// name are each lowercased and searched independently, because the server's
+/// teammate-name-display setting only picks what is *shown* — a server set to
+/// show bare usernames still has to be searchable by surname.
 /// `picture` is asked for a face only for the handful of people that survive
 /// the filter — it is a side effect (a missing avatar starts a download), so
 /// it must not run for the whole directory, and tests pass one that does
@@ -83,19 +90,29 @@ fn local_mentions<'a>(
     let mut found: Vec<(Rank, String, &User)> = Vec::new();
     for user in users {
         let handle = user.username.to_lowercase();
-        let name = user.display_name(display);
-        let name_lowered = name.to_lowercase();
+        let nickname = user.nickname.to_lowercase();
+        let first = user.first_name.to_lowercase();
+        let last = user.last_name.to_lowercase();
+        // What the row shows respects the display setting; what it is found
+        // by does not.
+        let shown = user.display_name(display);
+
+        let name_prefix = nickname.starts_with(lowered)
+            || first.starts_with(lowered)
+            || last.starts_with(lowered);
+        let name_contains =
+            nickname.contains(lowered) || first.contains(lowered) || last.contains(lowered);
 
         let rank = if handle.starts_with(lowered) {
             Rank::HandlePrefix
-        } else if name_lowered.starts_with(lowered) {
+        } else if name_prefix {
             Rank::NamePrefix
-        } else if handle.contains(lowered) || name_lowered.contains(lowered) {
+        } else if handle.contains(lowered) || name_contains {
             Rank::Contains
         } else {
             continue;
         };
-        found.push((rank, name, user));
+        found.push((rank, shown, user));
     }
 
     // Sorted rather than truncated early: a substring match found first must
@@ -109,6 +126,7 @@ fn local_mentions<'a>(
             primary: name,
             secondary: format!("@{}", user.username),
             image: picture(&user.id),
+            user_id: Some(user.id.clone()),
         })
         .collect()
 }
@@ -179,7 +197,7 @@ mod mention_tests {
 
     #[test]
     fn matches_inside_a_name_not_just_the_start() {
-        let users = vec![
+        let users = [
             User {
                 id: "u1".into(),
                 username: "fomchenkovsv".into(),
@@ -204,6 +222,27 @@ mod mention_tests {
         // A prefix match outranks a substring one even when it is found later.
         let found = local_mentions(users.iter(), "fe", "full_name", &|_| None);
         assert_eq!(found[0].insert, "@fedorov");
+    }
+
+    #[test]
+    fn finds_by_surname_even_when_the_server_shows_usernames() {
+        let users = [User {
+            id: "u1".into(),
+            username: "ivan42".into(),
+            first_name: "Семён".into(),
+            last_name: "Фомченко".into(),
+            ..Default::default()
+        }];
+
+        // The handle has nothing in common with the surname, and the display
+        // setting is "username" — so a full_name search would have found
+        // nothing, and only searching first/last name directly finds this.
+        let found = local_mentions(users.iter(), "фомче", "username", &|_| None);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].insert, "@ivan42");
+        // The row still shows the configured display (username), not the
+        // field it was actually found by.
+        assert_eq!(found[0].primary, "ivan42");
     }
 
     #[test]
@@ -869,6 +908,9 @@ fn build_session_ui(
         store: RefCell::new(None),
         typing_sent_recently: std::cell::Cell::new(false),
         completion_generation: std::cell::Cell::new(0),
+        mention_query_pending: std::cell::Cell::new(false),
+        mention_query: RefCell::new(None),
+        last_completions: RefCell::new(Vec::new()),
         dock_in_chat: std::cell::Cell::new(false),
         dock_visible: std::cell::Cell::new(false),
         tx: tx.clone(),
@@ -1029,15 +1071,16 @@ fn build_session_ui(
         }
     }
 
-    // A picture arriving is a reason to redraw the messages, and nothing else.
+    // A picture arriving is a reason to redraw wherever a face is showing.
     avatars.connect_loaded({
         let ui = ui.clone();
         // The sidebar draws faces too now, so a landed texture has to repaint
         // it as well — otherwise DM rows keep their initials until the next
-        // unrelated refresh.
+        // unrelated refresh. Same for the mention popover, if one is open.
         move || {
             ui.refresh_messages();
             ui.channels.refresh(&ui.state, &ui.avatars);
+            ui.refresh_completion_avatars();
         }
     });
 
@@ -1106,6 +1149,15 @@ struct Ui {
     /// person has already typed past is discarded rather than replacing the
     /// list under them.
     completion_generation: std::cell::Cell<u64>,
+    /// Set while a debounced `@mention` network lookup is scheduled; further
+    /// keystrokes just overwrite `mention_query` instead of scheduling again.
+    mention_query_pending: std::cell::Cell<bool>,
+    /// The term/team/channel/client the pending lookup above will use — always
+    /// the latest keystroke's, not the one that started the debounce.
+    mention_query: RefCell<Option<(String, String, String, mattermost_api::Client)>>,
+    /// The candidates currently shown in the completion popover, kept around
+    /// so a picture landing later can redraw them without asking again.
+    last_completions: RefCell<Vec<autocomplete::Candidate>>,
     dock_in_chat: std::cell::Cell<bool>,
     dock_visible: std::cell::Cell<bool>,
     tx: async_channel::Sender<Action>,
@@ -1118,6 +1170,38 @@ impl Ui {
 
     fn dispatch(&self, action: Action) {
         let _ = self.tx.send_blocking(action);
+    }
+
+    /// Answers an outstanding completion query, and remembers the answer so a
+    /// picture landing later can redraw the popover without re-querying it.
+    fn set_completions(&self, items: Vec<autocomplete::Candidate>) {
+        *self.last_completions.borrow_mut() = items.clone();
+        self.chat.set_completions(items);
+    }
+
+    /// A picture that finished downloading after the popover opened belongs
+    /// to one of the rows already drawn — redraw it with whatever pictures
+    /// are available now. No query, no network: same candidates, same order.
+    fn refresh_completion_avatars(&self) {
+        let mut items = self.last_completions.borrow().clone();
+        if items.is_empty() {
+            return;
+        }
+        let mut changed = false;
+        for item in &mut items {
+            if item.image.is_some() {
+                continue;
+            }
+            if let Some(id) = &item.user_id {
+                if let Some(texture) = self.avatars.texture(id) {
+                    item.image = Some(texture);
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            self.set_completions(items);
+        }
     }
 
     /// The callbacks a message row needs. Rebuilt per redraw, which is cheap —
@@ -1156,6 +1240,15 @@ impl Ui {
     fn refresh_messages(self: &Rc<Self>) {
         let actions = self.message_actions();
         self.chat.refresh(&self.state, &self.avatars, &actions);
+        self.right.refresh(&self.state, &self.avatars, &actions);
+    }
+
+    /// Redraws only the thread panel — used when a thread's own data changes,
+    /// which has nothing to do with the channel feed behind it. The feed's
+    /// "N replies" footer is kept live separately, by the ordinary post-apply
+    /// path that already runs on every incoming reply.
+    fn refresh_thread_panel(self: &Rc<Self>) {
+        let actions = self.message_actions();
         self.right.refresh(&self.state, &self.avatars, &actions);
     }
 
@@ -3269,7 +3362,12 @@ impl Ui {
     fn complete(self: &Rc<Self>, query: Option<autocomplete::Query>) {
         use autocomplete::Query;
         let Some(query) = query else {
-            self.chat.set_completions(Vec::new());
+            // Closing the list has to cancel what is in flight as well, or a
+            // late answer reopens it over a composer nobody is completing in.
+            self.completion_generation
+                .set(self.completion_generation.get() + 1);
+            self.mention_query.borrow_mut().take();
+            self.set_completions(Vec::new());
             return;
         };
 
@@ -3284,6 +3382,7 @@ impl Ui {
                             primary: format!("{}  :{name}:", e.as_str()),
                             secondary: String::new(),
                             image: None,
+                            user_id: None,
                         })
                     })
                     .take(COMPLETIONS)
@@ -3293,7 +3392,7 @@ impl Ui {
                 items.sort_by_key(|candidate| {
                     !candidate.insert.trim_start_matches(':').starts_with(&term)
                 });
-                self.chat.set_completions(items.clone());
+                self.set_completions(items.clone());
 
                 // The server's own emoji are in no local table, so they have
                 // to be asked for — after the instant ones are already up, and
@@ -3317,9 +3416,10 @@ impl Ui {
                                 primary: format!(":{}:", emoji.name),
                                 secondary: "custom".to_string(),
                                 image: None,
+                                user_id: None,
                             }
                         }));
-                        ui.chat.set_completions(items);
+                        ui.set_completions(items);
                     },
                 );
             }
@@ -3344,89 +3444,120 @@ impl Ui {
                         local,
                     )
                 };
-                self.chat.set_completions(local.clone());
+                self.set_completions(local.clone());
 
                 if channel_id.is_empty() {
                     return;
                 }
 
-                // The server knows who else is in the channel, and about
-                // groups. That answer is allowed to be late; it replaces the
-                // local list when it lands, and only if the person is still
-                // typing the same thing.
+                // Every keystroke invalidates whatever is already in flight.
                 self.completion_generation
                     .set(self.completion_generation.get() + 1);
-                let generation = self.completion_generation.get();
-                let ui = self.clone();
-                let groups_client = client.clone();
-                let group_term = term.clone();
-                let group_ui = self.clone();
-                runtime::spawn(
-                    async move {
-                        client
-                            .autocomplete_users(&term, &team_id, &channel_id)
-                            .await
-                    },
-                    move |result| {
-                        if ui.completion_generation.get() != generation {
-                            return;
-                        }
-                        let Ok(found) = result else { return };
-                        let display = ui.state.borrow().teammate_name_display().to_string();
-                        // People in the channel first; the server already
-                        // separates them, and suggesting someone who is not
-                        // here would post a mention that notifies nobody.
-                        let items: Vec<autocomplete::Candidate> = found
-                            .users
-                            .iter()
-                            .chain(found.out_of_channel.iter())
-                            .take(COMPLETIONS)
-                            .map(|user| autocomplete::Candidate {
-                                insert: format!("@{}", user.username),
-                                // The name first: it is what somebody is
-                                // looking for, and the handle is how the
-                                // account is spelled.
-                                primary: user.display_name(&display),
-                                secondary: format!("@{}", user.username),
-                                image: ui.avatars.texture(&user.id),
-                            })
-                            .collect();
-                        if items.is_empty() {
-                            return;
-                        }
-                        ui.chat.set_completions(items.clone());
 
-                        runtime::spawn(
-                            async move { groups_client.mentionable_groups(&group_term).await },
-                            move |result| {
-                                if group_ui.completion_generation.get() != generation {
-                                    return;
-                                }
-                                let Ok(groups) = result else { return };
-                                if groups.is_empty() {
-                                    return;
-                                }
-                                let mut items = items;
-                                items.extend(groups.into_iter().map(|group| {
-                                    autocomplete::Candidate {
-                                        insert: format!("@{}", group.name),
-                                        primary: format!("@{}", group.name),
-                                        secondary: match group.member_count {
-                                            Some(n) => {
-                                                format!("{} · {n} people", group.display_name)
-                                            }
-                                            None => group.display_name,
-                                        },
-                                        image: None,
-                                    }
-                                }));
-                                group_ui.chat.set_completions(items);
-                            },
-                        );
-                    },
-                );
+                // Only the last keystroke of a burst is asked about. Typing a
+                // name is half a dozen letters, and the server is answering
+                // the word, not each letter of it — without this, six round
+                // trips race each other and five of them are thrown away.
+                // The local list is already on screen, so the wait costs
+                // nothing anyone can see.
+                *self.mention_query.borrow_mut() = Some((term, team_id, channel_id, client));
+                if self.mention_query_pending.get() {
+                    return;
+                }
+                self.mention_query_pending.set(true);
+                let ui = self.clone();
+                glib::timeout_add_local_once(MENTION_DEBOUNCE, move || {
+                    ui.mention_query_pending.set(false);
+                    // Whatever the latest keystroke left behind, not the one
+                    // that started the timer.
+                    let pending = ui.mention_query.borrow_mut().take();
+                    if let Some((term, team_id, channel_id, client)) = pending {
+                        ui.fetch_mentions(term, team_id, channel_id, client);
+                    }
+                });
             }
         }
+    }
+
+    /// The server's half of `@mention` completion: everyone in the channel
+    /// this client has never heard of, plus the groups. Debounced by its
+    /// caller, so this runs once per typed word rather than once per letter.
+    fn fetch_mentions(
+        self: &Rc<Self>,
+        term: String,
+        team_id: String,
+        channel_id: String,
+        client: mattermost_api::Client,
+    ) {
+        let generation = self.completion_generation.get();
+        let ui = self.clone();
+        let groups_client = client.clone();
+        let group_term = term.clone();
+        let group_ui = self.clone();
+        runtime::spawn(
+            async move {
+                client
+                    .autocomplete_users(&term, &team_id, &channel_id)
+                    .await
+            },
+            move |result| {
+                if ui.completion_generation.get() != generation {
+                    return;
+                }
+                let Ok(found) = result else { return };
+                let display = ui.state.borrow().teammate_name_display().to_string();
+                // People in the channel first; the server already
+                // separates them, and suggesting someone who is not
+                // here would post a mention that notifies nobody.
+                let items: Vec<autocomplete::Candidate> = found
+                    .users
+                    .iter()
+                    .chain(found.out_of_channel.iter())
+                    .take(COMPLETIONS)
+                    .map(|user| autocomplete::Candidate {
+                        insert: format!("@{}", user.username),
+                        // The name first: it is what somebody is
+                        // looking for, and the handle is how the
+                        // account is spelled.
+                        primary: user.display_name(&display),
+                        secondary: format!("@{}", user.username),
+                        image: ui.avatars.texture(&user.id),
+                        user_id: Some(user.id.clone()),
+                    })
+                    .collect();
+                if items.is_empty() {
+                    return;
+                }
+                ui.set_completions(items.clone());
+
+                runtime::spawn(
+                    async move { groups_client.mentionable_groups(&group_term).await },
+                    move |result| {
+                        if group_ui.completion_generation.get() != generation {
+                            return;
+                        }
+                        let Ok(groups) = result else { return };
+                        if groups.is_empty() {
+                            return;
+                        }
+                        let mut items = items;
+                        items.extend(groups.into_iter().map(|group| autocomplete::Candidate {
+                            insert: format!("@{}", group.name),
+                            primary: format!("@{}", group.name),
+                            secondary: match group.member_count {
+                                Some(n) => {
+                                    format!("{} · {n} people", group.display_name)
+                                }
+                                None => group.display_name,
+                            },
+                            image: None,
+                            user_id: None,
+                        }));
+                        group_ui.set_completions(items);
+                    },
+                );
+            },
+        );
     }
 
     /// Asks for files and uploads them straight away.
@@ -5169,7 +5300,6 @@ impl Ui {
         self.right.set_mode(PanelMode::Thread(root_id.clone()));
         self.refresh_panel_mode();
         self.overlay.set_show_sidebar(true);
-        self.refresh_messages();
         self.restore_thread_draft();
         let following = {
             let st = self.state.borrow();
@@ -5222,7 +5352,7 @@ impl Ui {
                 }
             }
         }
-        self.refresh_messages();
+        self.refresh_thread_panel();
 
         // Always refetch. A thread we opened earlier may have grown, and the
         // root's reply count is not enough to tell which replies we hold.
@@ -5248,6 +5378,9 @@ impl Ui {
                         st.apply_statuses(statuses);
                         st.threads.insert(root_id, ChannelFeed::from_list(&list));
                     }
+                    // Both panes here: a fetched thread can change the reply
+                    // footer in the feed behind it. Off the click's critical
+                    // path, so the cost does not show.
                     ui.refresh_messages();
                     ui.right.focus_composer();
                 }
