@@ -823,7 +823,7 @@ fn save_attachment(
         .title("Save attachment")
         .initial_name(&file.name)
         .build();
-    let parent = anchor.root().and_downcast::<gtk::Window>();
+    let parent = anchor.root().and_downcast::<adw::ApplicationWindow>();
     let client = state.borrow().client.clone();
     let file_id = file.id.clone();
 
@@ -861,7 +861,7 @@ fn open_image(state: &SharedState, file: &mattermost_api::models::FileInfo, anch
     let client = state.borrow().client.clone();
     let file_id = file.id.clone();
     let title = file.name.clone();
-    let parent = anchor.root().and_downcast::<gtk::Window>();
+    let parent = anchor.root().and_downcast::<adw::ApplicationWindow>();
 
     crate::runtime::spawn(
         async move { client.download_file(&file_id).await },
@@ -871,21 +871,12 @@ fn open_image(state: &SharedState, file: &mattermost_api::models::FileInfo, anch
             else {
                 return;
             };
-            let picture = gtk::Picture::for_paintable(&texture);
-            picture.set_content_fit(gtk::ContentFit::ScaleDown);
-
-            let window = adw::Window::builder()
-                .title(&title)
-                .default_width(900)
-                .default_height(640)
-                .modal(false)
-                .build();
-            window.set_transient_for(parent.as_ref());
-            let view = adw::ToolbarView::new();
-            view.add_top_bar(&adw::HeaderBar::new());
-            view.set_content(Some(&picture));
-            window.set_content(Some(&view));
-            window.present();
+            let Some(parent) = parent else { return };
+            // A lightbox rather than a second window: a picture is something
+            // you glance at and dismiss, not something to manage in the window
+            // list. Escape, a click outside it, or the close button put it
+            // away, and it can be copied or saved from there.
+            super::lightbox::show(&parent, &title, &texture);
         },
     );
 }

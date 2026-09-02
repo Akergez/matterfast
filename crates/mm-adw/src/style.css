@@ -169,6 +169,14 @@
   font-size: 0.85rem;
 }
 
+/* ── lightbox ──────────────────────────────────────────────────────────
+   The backdrop behind a full-size image. Deliberately not a themed colour:
+   it covers the whole window and its one job is to drop everything behind
+   the picture out of the way. */
+.lightbox {
+  background-color: alpha(black, 0.8);
+}
+
 /* Where reading stopped. Accent-coloured because it is a landmark you are
    looking for, not a separator you read past. */
 .unread-line separator {

@@ -14,6 +14,7 @@ mod call_dock;
 mod chat;
 mod dialogs;
 mod interactive;
+mod lightbox;
 mod login;
 mod media;
 mod message;
