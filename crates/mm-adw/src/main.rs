@@ -50,6 +50,12 @@ fn main() -> gtk::glib::ExitCode {
     // HANDLES_OPEN is what makes the `mattermost-dev://` SSO callback work: the
     // browser launches a second copy of this binary with the URI, GIO hands it
     // to the already-running one over D-Bus, and it arrives in `connect_open`.
+    // Before anything can reach rustls. Two providers are in the tree —
+    // aws-lc-rs through reqwest, ring through webrtc's DTLS — so rustls
+    // refuses to pick one, and the thread that first needs TLS panics rather
+    // than the process failing visibly.
+    mattermost_api::tls::install_crypto_provider();
+
     let app = adw::Application::builder()
         .application_id(APP_ID)
         .flags(gio::ApplicationFlags::HANDLES_OPEN)
