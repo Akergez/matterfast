@@ -1352,28 +1352,40 @@ fn reaction_strip(
     Some(strip.upcast())
 }
 
-/// A join, a leave, a rename. The server writes these with `@username` in the
-/// text — the raw handle, not the name anyone recognises — so they are swapped
-/// for display names before drawing, the same way a mention is elsewhere.
+/// A join, a leave, a rename.
+///
+/// The server writes the raw handle into the text — "sin joined the channel",
+/// not the name anyone recognises — and names the people involved in `props`
+/// under `username`, `addedUsername` and `removedUsername`. Those are what
+/// gets swapped, rather than scanning the sentence for anything that looks
+/// like a name: the wording is localised, so pattern-matching it would work in
+/// English and nowhere else.
 fn system_row(post: &Post, state: &SharedState) -> gtk::Widget {
     let text = {
         let st = state.borrow();
         let display = st.teammate_name_display().to_string();
-        // Longest handle first: without it "@ann" would be substituted inside
-        // "@anna" and leave the remainder dangling.
-        let mut people: Vec<(&String, String)> = st
-            .users
-            .values()
-            .map(|u| (&u.username, u.display_name(&display)))
-            .collect();
-        people.sort_by_key(|(username, _)| std::cmp::Reverse(username.len()));
-
         let mut text = post.message.clone();
-        for (username, name) in people {
-            if name.is_empty() || &name == username {
+
+        for (key, value) in &post.props {
+            if !key.to_lowercase().ends_with("username") {
                 continue;
             }
-            text = text.replace(&format!("@{username}"), &name);
+            let Some(handle) = value.as_str().filter(|h| !h.is_empty()) else {
+                continue;
+            };
+            let Some(name) = st
+                .users
+                .values()
+                .find(|u| u.username == handle)
+                .map(|u| u.display_name(&display))
+                .filter(|name| !name.is_empty() && name != handle)
+            else {
+                continue;
+            };
+            // The `@` form first, or replacing the bare handle would leave a
+            // stray `@` in front of the display name.
+            text = text.replace(&format!("@{handle}"), &name);
+            text = replace_word(&text, handle, &name);
         }
         text
     };
@@ -1421,6 +1433,34 @@ pub fn plural(n: i64, one: &'static str, many: &'static str) -> &'static str {
 }
 
 /// Mattermost timestamps are Unix **milliseconds**.
+/// Replaces whole-word occurrences only, so a handle that happens to be a
+/// substring of another word is left alone.
+fn replace_word(text: &str, word: &str, with: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(word) {
+        let before_ok = rest[..at]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !c.is_alphanumeric() && c != '_');
+        let after = &rest[at + word.len()..];
+        let after_ok = after
+            .chars()
+            .next()
+            .is_none_or(|c| !c.is_alphanumeric() && c != '_');
+
+        out.push_str(&rest[..at]);
+        if before_ok && after_ok {
+            out.push_str(with);
+        } else {
+            out.push_str(word);
+        }
+        rest = after;
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Someone's custom status as a small chip: the emoji, with the text on
 /// hover. The text goes in the tooltip rather than the row because a status
 /// can be a sentence and the author line is not the place for one.
@@ -1520,6 +1560,23 @@ pub fn format_relative(millis: Millis) -> String {
             .format("%e %b")
             .map(|s| s.trim().to_string())
             .unwrap_or_default(),
+    }
+}
+
+#[cfg(test)]
+mod word_tests {
+    use super::replace_word;
+
+    #[test]
+    fn replaces_whole_words_only() {
+        assert_eq!(replace_word("sin joined", "sin", "Anna"), "Anna joined");
+        // A handle inside another word is not that person.
+        assert_eq!(
+            replace_word("sinner joined", "sin", "Anna"),
+            "sinner joined"
+        );
+        assert_eq!(replace_word("ask sin.", "sin", "Anna"), "ask Anna.");
+        assert_eq!(replace_word("sin_bot left", "sin", "Anna"), "sin_bot left");
     }
 }
 
