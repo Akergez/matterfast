@@ -2866,7 +2866,34 @@ impl Ui {
                 items.sort_by_key(|(insert, _, _)| {
                     !insert.trim_start_matches(':').starts_with(&term)
                 });
-                self.chat.set_completions(items);
+                self.chat.set_completions(items.clone());
+
+                // The server's own emoji are in no local table, so they have
+                // to be asked for — after the instant ones are already up, and
+                // only once there is something to search with.
+                if term.is_empty() {
+                    return;
+                }
+                let client = self.state.borrow().client.clone();
+                let ui = self.clone();
+                runtime::spawn(
+                    async move { client.search_emoji(&term).await },
+                    move |result| {
+                        let Ok(custom) = result else { return };
+                        if custom.is_empty() {
+                            return;
+                        }
+                        let mut items = items;
+                        items.extend(custom.into_iter().take(COMPLETIONS).map(|emoji| {
+                            (
+                                format!(":{}:", emoji.name),
+                                format!(":{}:", emoji.name),
+                                "custom".to_string(),
+                            )
+                        }));
+                        ui.chat.set_completions(items);
+                    },
+                );
             }
             Query::Mention(term) => {
                 let (client, team_id, channel_id) = {
@@ -2881,6 +2908,9 @@ impl Ui {
                     return;
                 }
                 let ui = self.clone();
+                let groups_client = client.clone();
+                let group_term = term.clone();
+                let group_ui = self.clone();
                 runtime::spawn(
                     async move {
                         client
@@ -2893,7 +2923,7 @@ impl Ui {
                         // People in the channel first; the server already
                         // separates them, and suggesting someone who is not
                         // here would post a mention that notifies nobody.
-                        let items = found
+                        let items: Vec<(String, String, String)> = found
                             .users
                             .iter()
                             .chain(found.out_of_channel.iter())
@@ -2906,7 +2936,34 @@ impl Ui {
                                 )
                             })
                             .collect();
-                        ui.chat.set_completions(items);
+                        ui.chat.set_completions(items.clone());
+
+                        // Groups last, and only where the server has them: an
+                        // unlicensed server answers 501, which is the same as
+                        // having none.
+                        runtime::spawn(
+                            async move { groups_client.mentionable_groups(&group_term).await },
+                            move |result| {
+                                let Ok(groups) = result else { return };
+                                if groups.is_empty() {
+                                    return;
+                                }
+                                let mut items = items;
+                                items.extend(groups.into_iter().map(|group| {
+                                    (
+                                        format!("@{}", group.name),
+                                        format!("@{}", group.name),
+                                        match group.member_count {
+                                            Some(n) => {
+                                                format!("{} · {n} people", group.display_name)
+                                            }
+                                            None => group.display_name,
+                                        },
+                                    )
+                                }));
+                                group_ui.chat.set_completions(items);
+                            },
+                        );
                     },
                 );
             }
