@@ -91,6 +91,8 @@ enum Action {
     SummariseUnreads,
     /// Set your own presence.
     SetStatus(String),
+    /// Raise or lower your hand in the call.
+    ToggleHand,
     /// Drop an uploaded file before it is sent.
     DropAttachment(String),
 }
@@ -380,6 +382,12 @@ fn build_session_ui(
             let tx = tx.clone();
             move || {
                 let _ = tx.send_blocking(Action::ToggleRecording);
+            }
+        },
+        {
+            let tx = tx.clone();
+            move || {
+                let _ = tx.send_blocking(Action::ToggleHand);
             }
         },
         {
@@ -682,6 +690,28 @@ impl Ui {
             // updated server-side too; nothing left to do.
             StreamUpdate::Done { .. } | StreamUpdate::Ignored => {}
         }
+    }
+
+    /// Raises or lowers your own hand. The SFU echoes it back as
+    /// `user_raise_hand`, which is what actually updates the roster.
+    fn toggle_hand(self: &Rc<Self>) {
+        let (session, raise) = {
+            let st = self.state.borrow();
+            let Some(call) = st.call.as_ref() else { return };
+            (
+                call.session.clone(),
+                !call.hands.iter().any(|id| id == &st.me.id),
+            )
+        };
+        let ui = self.clone();
+        runtime::spawn(
+            async move { session.raise_hand(raise).await },
+            move |result| {
+                if let Err(e) = result {
+                    ui.toast(&format!("Could not do that: {e}"));
+                }
+            },
+        );
     }
 
     /// Sets your own presence, showing it immediately: the server echoes it
@@ -1579,6 +1609,7 @@ impl Ui {
             Action::PickAttachment => self.pick_attachment(),
             Action::SummariseUnreads => self.summarise_unreads(),
             Action::SetStatus(status) => self.set_status(status),
+            Action::ToggleHand => self.toggle_hand(),
             Action::DropAttachment(file_id) => {
                 self.state
                     .borrow_mut()
@@ -2110,6 +2141,8 @@ impl Ui {
             roster: HashMap::new(),
             speaking: Vec::new(),
             sharing: Vec::new(),
+            muted_users: HashSet::new(),
+            hands: Vec::new(),
             screen: None,
             camera: None,
             audio,
@@ -2298,6 +2331,15 @@ impl Ui {
     }
 
     /// Who a media session belongs to, as far as the roster knows.
+    /// A person's display name, or something honest when we do not have them.
+    fn user_name(&self, user_id: &str) -> String {
+        let st = self.state.borrow();
+        st.users
+            .get(user_id)
+            .map(|user| st.display_name(user))
+            .unwrap_or_else(|| "Someone".to_string())
+    }
+
     fn speaker_name(&self, session_id: &str) -> String {
         let st = self.state.borrow();
         st.call
@@ -2381,6 +2423,42 @@ impl Ui {
                 }
                 self.refresh_call_ui();
             }
+            CallUpdate::Participant(mattermost_calls::CallsEvent::UserMuted {
+                user_id, muted, ..
+            }) => {
+                if let Some(call) = self.state.borrow_mut().call.as_mut() {
+                    if muted {
+                        call.muted_users.insert(user_id);
+                    } else {
+                        call.muted_users.remove(&user_id);
+                    }
+                }
+                self.refresh_call_ui();
+            }
+            CallUpdate::Participant(mattermost_calls::CallsEvent::UserRaisedHand {
+                user_id,
+                raised_at,
+                ..
+            }) => {
+                if let Some(call) = self.state.borrow_mut().call.as_mut() {
+                    call.hands.retain(|id| id != &user_id);
+                    // Zero means the hand went back down.
+                    if raised_at > 0 {
+                        // Appended, not prepended: the queue is who asked
+                        // first.
+                        call.hands.push(user_id.clone());
+                    }
+                }
+                self.refresh_call_ui();
+            }
+            CallUpdate::Participant(mattermost_calls::CallsEvent::UserReacted {
+                user_id,
+                reaction,
+                ..
+            }) => {
+                let who = self.user_name(&user_id);
+                self.toast(&format!("{who} reacted {}", reaction.literal));
+            }
             CallUpdate::MuteChanged { muted } => {
                 if let Some(call) = self.state.borrow_mut().call.as_mut() {
                     call.muted = muted;
@@ -2391,6 +2469,21 @@ impl Ui {
                 let mut st = self.state.borrow_mut();
                 if let Some(call) = st.call.as_mut() {
                     call.recording = is_running(state.recording.as_ref());
+                    call.muted_users = state
+                        .sessions
+                        .iter()
+                        .filter(|s| !s.unmuted)
+                        .map(|s| s.user_id.clone())
+                        .collect();
+                    call.hands = state
+                        .sessions
+                        .iter()
+                        .filter(|s| s.raised_hand > 0)
+                        .map(|s| (s.raised_hand, s.user_id.clone()))
+                        .collect::<std::collections::BTreeSet<_>>()
+                        .into_iter()
+                        .map(|(_, id)| id)
+                        .collect();
                     call.roster = state
                         .sessions
                         .iter()

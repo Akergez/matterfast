@@ -187,6 +187,11 @@ pub struct ActiveCall {
     pub speaking: Vec<String>,
     /// Who is sharing a screen right now, by user id.
     pub sharing: Vec<String>,
+    /// Who has their microphone off. The SFU reports mute per session, and
+    /// silence is the default, so absence from this set means unmuted.
+    pub muted_users: std::collections::HashSet<String>,
+    /// Raised hands, oldest first — the order is the queue.
+    pub hands: Vec<String>,
 }
 
 pub type SharedState = Rc<RefCell<AppState>>;

@@ -18,6 +18,7 @@ use crate::state::SharedState;
 
 pub struct CallDock {
     pub widget: gtk::Box,
+    roster: gtk::Box,
     avatar: adw::Avatar,
     title: gtk::Label,
     subtitle: gtk::Label,
@@ -25,6 +26,7 @@ pub struct CallDock {
     screen: gtk::Button,
     camera: gtk::Button,
     record: gtk::Button,
+    hand: gtk::Button,
 }
 
 impl CallDock {
@@ -35,6 +37,7 @@ impl CallDock {
         on_screen: impl Fn() + 'static,
         on_camera: impl Fn() + 'static,
         on_record: impl Fn() + 'static,
+        on_hand: impl Fn() + 'static,
         on_leave: impl Fn() + 'static,
     ) -> Self {
         let avatar = adw::Avatar::builder().size(28).build();
@@ -72,10 +75,45 @@ impl CallDock {
         let summary = gtk::Button::builder()
             .child(&summary_box)
             .tooltip_text("Go to the call")
+            .hexpand(true)
             .build();
         summary.add_css_class("flat");
         summary.add_css_class("call-dock-summary");
         summary.connect_clicked(move |_| on_open());
+
+        // Who is actually in there, with their hands and microphones. A count
+        // answers "is it worth joining"; the list answers "who is that".
+        let roster = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(2)
+            .width_request(240)
+            .build();
+        let people = gtk::MenuButton::builder()
+            .icon_name("system-users-symbolic")
+            .tooltip_text("Who is in the call")
+            .popover(
+                &gtk::Popover::builder()
+                    .child(
+                        &gtk::ScrolledWindow::builder()
+                            .hscrollbar_policy(gtk::PolicyType::Never)
+                            .propagate_natural_height(true)
+                            .max_content_height(280)
+                            .child(&roster)
+                            .build(),
+                    )
+                    .build(),
+            )
+            .valign(gtk::Align::Center)
+            .build();
+        people.add_css_class("flat");
+        people.add_css_class("circular");
+
+        let summary_row = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(2)
+            .build();
+        summary_row.append(&summary);
+        summary_row.append(&people);
 
         let controls = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
@@ -86,7 +124,8 @@ impl CallDock {
         let screen = icon_button("video-display-symbolic", "Share your screen", on_screen);
         let camera = icon_button("camera-web-symbolic", "Turn the camera on", on_camera);
         let record = icon_button("media-record-symbolic", "Record the call", on_record);
-        for button in [&mute, &screen, &camera, &record] {
+        let hand = icon_button("view-sort-descending-symbolic", "Raise your hand", on_hand);
+        for button in [&mute, &screen, &camera, &hand, &record] {
             controls.append(button);
         }
 
@@ -105,11 +144,12 @@ impl CallDock {
             .margin_end(6)
             .build();
         widget.add_css_class("call-dock");
-        widget.append(&summary);
+        widget.append(&summary_row);
         widget.append(&controls);
 
         CallDock {
             widget,
+            roster,
             avatar,
             title,
             subtitle,
@@ -117,6 +157,7 @@ impl CallDock {
             screen,
             camera,
             record,
+            hand,
         }
     }
 
@@ -158,6 +199,8 @@ impl CallDock {
         self.subtitle
             .set_text(&format!("{channel} · {people} in the call{sharing}"));
 
+        self.refresh_roster(&st, avatars, call);
+
         set_state(
             &self.mute,
             !call.muted,
@@ -194,6 +237,22 @@ impl CallDock {
             ),
             "suggested-action",
         );
+        // Your own hand: the button reflects whether it is up, since you
+        // cannot see yourself in the roster otherwise.
+        let my_hand = call.hands.iter().any(|id| id == &st.me.id);
+        set_state(
+            &self.hand,
+            my_hand,
+            (
+                "view-sort-descending-symbolic",
+                if my_hand {
+                    "Lower your hand"
+                } else {
+                    "Raise your hand"
+                },
+            ),
+            "suggested-action",
+        );
         set_state(
             &self.record,
             call.recording,
@@ -208,6 +267,77 @@ impl CallDock {
             "destructive-action",
         );
         true
+    }
+}
+
+impl CallDock {
+    /// Redraws the participant list: face, name, and whatever is true of them
+    /// right now — talking, hand up, muted.
+    fn refresh_roster(
+        &self,
+        st: &crate::state::AppState,
+        avatars: &Avatars,
+        call: &crate::state::ActiveCall,
+    ) {
+        while let Some(child) = self.roster.first_child() {
+            self.roster.remove(&child);
+        }
+
+        let people = st
+            .active_calls
+            .get(&call.channel_id)
+            .cloned()
+            .unwrap_or_default();
+        for user_id in &people {
+            let name = st
+                .users
+                .get(user_id)
+                .map(|u| u.display_name(st.teammate_name_display()))
+                .unwrap_or_else(|| "Someone".to_string());
+
+            let avatar = adw::Avatar::builder().size(24).build();
+            avatars.apply(&avatar, user_id, &name);
+
+            let label = gtk::Label::builder()
+                .label(&name)
+                .xalign(0.0)
+                .hexpand(true)
+                .ellipsize(gtk::pango::EllipsizeMode::End)
+                .build();
+
+            let row = gtk::Box::builder()
+                .orientation(gtk::Orientation::Horizontal)
+                .spacing(8)
+                .build();
+            row.append(&avatar);
+            row.append(&label);
+
+            // A raised hand is a request and outranks the rest.
+            if let Some(place) = call.hands.iter().position(|id| id == user_id) {
+                let hand = gtk::Label::new(Some(&format!("✋{}", place + 1)));
+                hand.set_tooltip_text(Some("Wants to speak"));
+                row.append(&hand);
+            }
+            if call.speaking.first() == Some(user_id) {
+                let speaking = gtk::Image::from_icon_name("audio-input-microphone-symbolic");
+                speaking.add_css_class("success");
+                speaking.set_tooltip_text(Some("Talking"));
+                row.append(&speaking);
+            } else if call.muted_users.contains(user_id) {
+                let muted = gtk::Image::from_icon_name("microphone-disabled-symbolic");
+                muted.add_css_class("dim-label");
+                muted.set_tooltip_text(Some("Muted"));
+                row.append(&muted);
+            }
+            if call.sharing.contains(user_id) {
+                let sharing = gtk::Image::from_icon_name("video-display-symbolic");
+                sharing.add_css_class("accent");
+                sharing.set_tooltip_text(Some("Sharing a screen"));
+                row.append(&sharing);
+            }
+
+            self.roster.append(&row);
+        }
     }
 }
 

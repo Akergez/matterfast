@@ -36,8 +36,9 @@ gap-fill resync when the server cannot replay.
 setting over account setting, DM counts as a mention, nothing for the channel
 you are reading while focused), clicking one opens the channel.
 
-**Calls** — join, leave, mute, screen share, camera, server-side recording,
-remote video, a dock that survives leaving the channel.
+**Calls** — join, leave, mute, screen share, camera, raise a hand, server-side
+recording, remote video, a participant list with who is talking, muted, queued
+to speak or sharing, and a dock that survives leaving the channel.
 
 **Plugins** — Agents (`mattermost-ai`): bot list, streamed answers, summarise
 thread, catch me up. Reactions-notify (`ru.toxblh.reactions-notify`): toasts
@@ -111,10 +112,6 @@ Ordered by how often it bites.
 Sixteen of the twenty-one `CallsEvent` variants are parsed and ignored. The
 ones that matter:
 
-- **Who is muted, and who has a hand up** — `UserMuted`, `UserRaisedHand`.
-  There is no participant list at all; the dock knows a count and who is
-  speaking.
-- **Call reactions** — `UserReacted`.
 - **Host controls** — `HostChanged`, `HostMuteRequest`, `HostRemoved` and the
   rest.
 - **Ringing and dismissal** — `POST /calls/{c}/dismiss-notification`, and no
