@@ -2173,6 +2173,39 @@ impl Ui {
                 .hexpand(true)
                 .build();
 
+            // Rescheduling rather than cancel-and-retype: the message is
+            // already written, and the usual reason to touch one of these is
+            // that the time was wrong.
+            let reschedule = gtk::Button::builder()
+                .icon_name("alarm-symbolic")
+                .tooltip_text("Change the time")
+                .valign(gtk::Align::Center)
+                .build();
+            reschedule.add_css_class("flat");
+            reschedule.add_css_class("circular");
+            reschedule.connect_clicked({
+                let ui = self.clone();
+                let scheduled = scheduled.clone();
+                move |_| {
+                    let ui = ui.clone();
+                    let scheduled = scheduled.clone();
+                    dialogs::schedule_message(&ui.window.clone(), move |when_ms| {
+                        let client = ui.state.borrow().client.clone();
+                        let mut updated = scheduled.clone();
+                        updated.scheduled_at = when_ms;
+                        let id = updated.post.id.clone();
+                        let ui = ui.clone();
+                        runtime::spawn(
+                            async move { client.update_scheduled_post(&id, &updated).await },
+                            move |result| match result {
+                                Ok(_) => ui.toast("Rescheduled."),
+                                Err(e) => ui.toast(&format!("Could not reschedule it: {e}")),
+                            },
+                        );
+                    });
+                }
+            });
+
             let cancel = gtk::Button::builder()
                 .icon_name("user-trash-symbolic")
                 .tooltip_text("Cancel")
@@ -2210,6 +2243,7 @@ impl Ui {
                 .spacing(8)
                 .build();
             row.append(&body);
+            row.append(&reschedule);
             row.append(&cancel);
             list.append(&row);
         }
