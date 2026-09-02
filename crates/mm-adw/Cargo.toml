@@ -21,6 +21,6 @@ mattermost-api = { version = "0.1.0", path = "../mattermost-api" }
 mattermost-calls = { version = "0.1.0", path = "../mattermost-calls" }
 opus = "0.3.1"
 serde_json.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "fs"] }
 tracing.workspace = true
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
