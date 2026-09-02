@@ -234,12 +234,6 @@ impl Store {
         // `posts()` exactly, so pruning can never drop a post that a read of
         // the same size would have returned.
         //
-        // No VACUUM after this. Measured on a store pruned from 20k posts to
-        // 1k: the file does not shrink either way until VACUUM rewrites it,
-        // and the pages the delete frees are reused by the posts that arrive
-        // next — so the file settles at its high-water mark instead of growing.
-        // VACUUM would buy back that one-off difference in exchange for
-        // rewriting the whole database while the app holds the only connection.
         let n = conn.execute(
             "DELETE FROM posts WHERE id IN (
                  SELECT id FROM (
@@ -251,6 +245,24 @@ impl Store {
             params![keep_per_channel as i64],
         )?;
         tracing::debug!(pruned = n, keep_per_channel, "trimmed the post cache");
+
+        // A delete never shrinks the file, it only puts pages on the free list,
+        // and the next posts to arrive reuse them — so in the steady state, a
+        // pass that trims a few percent off each channel wants no VACUUM at
+        // all, and running one would rewrite the whole database for nothing.
+        //
+        // Measured, 20 channels x 1000 posts, ~21 MB: trimming to 100 per
+        // channel freed 4622 of 5183 pages and left the file at 21 MB; VACUUM
+        // brought it to 2.1 MB; refilling it grew back to 21 MB and no further.
+        // So it is worth exactly one case — the first prune on a file that grew
+        // before there was a cap — and that case announces itself on the free
+        // list. Vacuum when most of the file is holes, not on a schedule.
+        let free: i64 = conn.query_row("PRAGMA freelist_count", [], |r| r.get(0))?;
+        let total: i64 = conn.query_row("PRAGMA page_count", [], |r| r.get(0))?;
+        if free * 2 > total {
+            tracing::info!(free, total, "post cache is mostly free space, vacuuming");
+            conn.execute_batch("VACUUM")?;
+        }
         Ok(())
     }
 
@@ -556,49 +568,37 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// The one case VACUUM is there for: a file that grew before there was a
+    /// cap, trimmed hard the first time a pruning build runs.
     #[tokio::test]
-    async fn zzz_vacuum_probe() {
-        let dir = temp_dir("vacuum-probe");
+    async fn a_big_trim_gives_the_disk_space_back() {
+        let dir = temp_dir("prune-size");
         let store = Store::open_at(&dir, "example.com").unwrap();
-        let mut all = Vec::new();
-        for c in 0..20 {
-            for i in 0..1000i64 {
-                let mut p = post(&format!("c{c}p{i}"), &format!("ch{c}"), i);
+        let posts: Vec<Post> = (0..2000)
+            .map(|i| {
+                let mut p = post(&format!("p{i}"), "c1", i);
                 p.message = "x".repeat(600);
-                all.push(p);
-            }
-        }
-        store.save_posts(all).await.unwrap();
+                p
+            })
+            .collect();
+        store.save_posts(posts).await.unwrap();
         let path = db_path(&dir, "example.com");
-        let size = |p: &PathBuf| fs::metadata(p).map(|m| m.len()).unwrap_or(0);
-        println!("PROBE full: {}", size(&path));
-        store.prune(1000).await.unwrap();
-        println!("PROBE after no-op prune: {}", size(&path));
-        store.prune(100).await.unwrap();
-        println!("PROBE after prune to 100: {}", size(&path));
-        {
-            let conn = store.conn.lock().await;
-            let free: i64 = conn
-                .query_row("PRAGMA freelist_count", [], |r| r.get(0))
-                .unwrap();
-            let total: i64 = conn
-                .query_row("PRAGMA page_count", [], |r| r.get(0))
-                .unwrap();
-            println!("PROBE freelist {free} of {total} pages");
-            conn.execute_batch("VACUUM").unwrap();
-        }
-        println!("PROBE after vacuum: {}", size(&path));
-        // refill and see whether it grows past the high-water mark
-        let mut more = Vec::new();
-        for c in 0..20 {
-            for i in 1000..1900i64 {
-                let mut p = post(&format!("c{c}q{i}"), &format!("ch{c}"), i);
-                p.message = "x".repeat(600);
-                more.push(p);
-            }
-        }
-        store.save_posts(more).await.unwrap();
-        println!("PROBE refilled after vacuum: {}", size(&path));
+        let size = |p: &PathBuf| fs::metadata(p).unwrap().len();
+        let before = size(&path);
+
+        store.prune(10).await.unwrap();
+        assert!(
+            size(&path) < before / 2,
+            "pruned 99% of the rows and the file is still {} of {before} bytes",
+            size(&path)
+        );
+
+        // ...and the steady state does not: a pass that takes nothing leaves
+        // the file alone rather than rewriting it every time.
+        let settled = size(&path);
+        store.prune(10).await.unwrap();
+        assert_eq!(size(&path), settled);
+
         let _ = fs::remove_dir_all(&dir);
     }
 

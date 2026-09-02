@@ -8,6 +8,10 @@
 //!
 //! The two `cpal` streams live on the GTK thread inside [`AudioIo`] — dropping
 //! it stops both devices, which is exactly what leaving a call should do.
+//!
+//! Incoming RTP passes through a per-speaker de-jitter buffer ([`Jitter`])
+//! before it reaches the output queue, so frames play in sequence order rather
+//! than arrival order.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -27,10 +31,20 @@ const SAMPLE_RATE: u32 = 48_000;
 const FRAME: usize = 960;
 /// The most audio one Opus packet can decode to (120 ms).
 const MAX_DECODED: usize = FRAME * 6;
-/// ponytail: no jitter buffer — packets play in arrival order, and a queue that
-/// runs more than 200 ms ahead is dropped rather than left to drift. Add a
-/// reorder window if anyone reports choppy audio on a lossy link.
+/// A queue that has run more than 200 ms ahead of the speakers is dropped
+/// rather than left to drift.
 const MAX_QUEUE: usize = SAMPLE_RATE as usize / 5;
+/// How many frames [`Jitter`] will hold while waiting for a missing sequence
+/// number before it gives up on it.
+///
+/// Three frames is 60 ms: enough to undo the usual single swap or a short
+/// burst, short enough that the added mouth-to-ear delay goes unnoticed. It is
+/// a ceiling and not a fixed delay — a frame that arrives in order is released
+/// the moment it is decoded, so a clean link pays nothing for it.
+const JITTER_DEPTH: usize = 3;
+/// Further ahead than this (2 s) is a restarted stream rather than loss, so
+/// resync instead of concealing a hundred frames one at a time.
+const MAX_GAP: u16 = 100;
 
 /// The sample formats the streams below can convert, best first. ALSA offers
 /// every format it can emulate — including `u8` for a mono device — so the
@@ -94,6 +108,8 @@ impl AudioIo {
                 }
             };
             let mut pcm = vec![0f32; MAX_DECODED];
+            let mut jitter = Jitter::default();
+            let mut ready: Vec<f32> = Vec::with_capacity(MAX_DECODED);
             let mut packets = 0u64;
             while let Ok((packet, _)) = track.read_rtp().await {
                 if packet.payload.is_empty() {
@@ -102,12 +118,31 @@ impl AudioIo {
                 let Ok(n) = decoder.decode_float(&packet.payload, &mut pcm, false) else {
                     continue;
                 };
+                let released = jitter.push(packet.header.sequence_number, pcm[..n].to_vec());
+                if released.is_empty() {
+                    continue;
+                }
+                ready.clear();
+                for slot in released {
+                    match slot {
+                        Some(frame) => ready.extend_from_slice(&frame),
+                        // Opus hides a lost frame better than silence does: an
+                        // empty payload runs its concealer. The length of the
+                        // output buffer is how much it conceals, hence `FRAME`.
+                        None => match decoder.decode_float(&[], &mut pcm[..FRAME], false) {
+                            Ok(n) => ready.extend_from_slice(&pcm[..n]),
+                            Err(_) => ready.resize(ready.len() + FRAME, 0.0),
+                        },
+                    }
+                }
+                // The output callback wants this lock every few milliseconds,
+                // so decoding and reordering both happen outside it.
                 let mut queues = queues.lock().unwrap();
                 let queue = queues.entry(session_id.clone()).or_default();
                 if queue.len() > MAX_QUEUE {
                     queue.clear();
                 }
-                queue.extend(&pcm[..n]);
+                queue.extend(&ready);
                 packets += 1;
                 // One line a second is enough to see whether audio is flowing.
                 if packets % 50 == 0 {
@@ -121,6 +156,69 @@ impl AudioIo {
     /// Hands the capture loop the track to write into, after an unmute.
     pub fn set_track(&self, track: Arc<TrackLocalStaticSample>) {
         *self.track.lock().unwrap() = Some(track);
+    }
+}
+
+/// Reorders decoded frames by RTP sequence number, one of these per speaker.
+///
+/// RTP arrives out of order and unevenly spaced, and playing frames in arrival
+/// order turns a swapped pair into a warble. Frames go in keyed by sequence
+/// number and come out in sequence order, with a `None` standing in for every
+/// sequence number that never turned up.
+///
+/// Every comparison goes through `wrapping_sub`, because sequence numbers are
+/// 16 bits and wrap every 65536 frames — 22 minutes at 20 ms a frame. Treating
+/// the wrap as a backwards jump would stall the buffer for good.
+#[derive(Default)]
+struct Jitter {
+    /// The sequence number that plays next; `None` until the first frame
+    /// decides where the stream starts.
+    next: Option<u16>,
+    /// Frames that arrived early, in no particular order. Never more than
+    /// [`JITTER_DEPTH`] of them, so a linear scan is the whole index.
+    pending: Vec<(u16, Vec<f32>)>,
+}
+
+impl Jitter {
+    /// Takes one decoded frame and returns whatever is now playable, in order:
+    /// `Some(frame)` for a frame that arrived, `None` for one that is lost and
+    /// has to be concealed by the caller.
+    fn push(&mut self, seq: u16, frame: Vec<f32>) -> Vec<Option<Vec<f32>>> {
+        let mut next = *self.next.get_or_insert(seq);
+        if self.pending.iter().any(|(s, _)| *s == seq) {
+            return Vec::new(); // A duplicate; we already hold this frame.
+        }
+        // Distance from the slot we are waiting for. Half the sequence space
+        // away means the frame is behind us rather than ahead of us.
+        let ahead = seq.wrapping_sub(next);
+        if ahead >= 0x8000 {
+            // Its slot has already played. Playing it now, out of place, would
+            // sound worse than the gap it left.
+            return Vec::new();
+        }
+        if ahead > MAX_GAP {
+            self.pending.clear();
+            next = seq;
+        }
+        self.pending.push((seq, frame));
+
+        let mut out = Vec::new();
+        loop {
+            while let Some(i) = self.pending.iter().position(|(s, _)| *s == next) {
+                out.push(Some(self.pending.swap_remove(i).1));
+                next = next.wrapping_add(1);
+            }
+            if self.pending.len() < JITTER_DEPTH {
+                break;
+            }
+            // `next` has had the whole window to show up. Conceal it and move
+            // on; stalling the stream for a frame that is not coming costs
+            // more than the frame is worth.
+            out.push(None);
+            next = next.wrapping_add(1);
+        }
+        self.next = Some(next);
+        out
     }
 }
 
@@ -311,6 +409,80 @@ fn level_dbov(frame: &[f32]) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One-sample frames stand in for 20 ms of audio: the buffer never looks
+    /// inside a frame, so the tests do not need real ones.
+    fn push(jitter: &mut Jitter, seq: u16) -> Vec<Option<u16>> {
+        jitter
+            .push(seq, vec![seq as f32])
+            .into_iter()
+            .map(|slot| slot.map(|frame| frame[0] as u16))
+            .collect()
+    }
+
+    #[test]
+    fn frames_in_order_play_without_being_held() {
+        let mut jitter = Jitter::default();
+        for seq in 100..110u16 {
+            assert_eq!(push(&mut jitter, seq), vec![Some(seq)]);
+        }
+    }
+
+    #[test]
+    fn a_swapped_pair_is_put_back_in_order() {
+        let mut jitter = Jitter::default();
+        assert_eq!(push(&mut jitter, 0), vec![Some(0)]);
+        assert!(push(&mut jitter, 2).is_empty(), "2 waits for 1");
+        assert_eq!(push(&mut jitter, 1), vec![Some(1), Some(2)]);
+    }
+
+    #[test]
+    fn a_lost_frame_is_concealed_rather_than_stalling() {
+        let mut jitter = Jitter::default();
+        assert_eq!(push(&mut jitter, 0), vec![Some(0)]);
+        assert!(push(&mut jitter, 2).is_empty());
+        assert!(push(&mut jitter, 3).is_empty());
+        // Three frames waiting is the whole window: 1 is not coming.
+        assert_eq!(
+            push(&mut jitter, 4),
+            vec![None, Some(2), Some(3), Some(4)],
+            "the buffer should give up on 1 and drain"
+        );
+        assert_eq!(push(&mut jitter, 5), vec![Some(5)]);
+    }
+
+    #[test]
+    fn a_frame_whose_slot_already_played_is_dropped() {
+        let mut jitter = Jitter::default();
+        for seq in 0..4u16 {
+            push(&mut jitter, seq);
+        }
+        assert!(push(&mut jitter, 1).is_empty(), "1 played three frames ago");
+        assert_eq!(push(&mut jitter, 4), vec![Some(4)], "and 4 still plays");
+    }
+
+    #[test]
+    fn sequence_numbers_wrap_without_stalling() {
+        let mut jitter = Jitter::default();
+        assert_eq!(push(&mut jitter, u16::MAX - 1), vec![Some(u16::MAX - 1)]);
+        // A swap straddling the wrap: 0 comes before 65535 does.
+        assert!(push(&mut jitter, 0).is_empty());
+        assert_eq!(push(&mut jitter, u16::MAX), vec![Some(u16::MAX), Some(0)]);
+        assert_eq!(push(&mut jitter, 1), vec![Some(1)]);
+        // And loss just past the wrap: 2 never arrives.
+        assert!(push(&mut jitter, 3).is_empty());
+        assert!(push(&mut jitter, 4).is_empty());
+        assert_eq!(push(&mut jitter, 5), vec![None, Some(3), Some(4), Some(5)]);
+        // A pre-wrap frame is 7 frames old, not 65529 frames early.
+        assert!(push(&mut jitter, u16::MAX).is_empty());
+    }
+
+    #[test]
+    fn a_restarted_stream_resyncs_instead_of_concealing_its_way_there() {
+        let mut jitter = Jitter::default();
+        push(&mut jitter, 0);
+        assert_eq!(push(&mut jitter, 5_000), vec![Some(5_000)]);
+    }
 
     #[test]
     fn level_runs_from_silence_to_full_scale() {

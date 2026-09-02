@@ -1111,6 +1111,62 @@ impl Ui {
         );
     }
 
+    /// Quietly fetches the channels most likely to be opened next.
+    ///
+    /// Switching to a channel that has never been read waits on the network;
+    /// the ones with something unread are exactly the ones about to be
+    /// clicked, so their first page is fetched before it is asked for. Three
+    /// of them, because this is a guess and a wrong guess should be cheap.
+    fn preload_unread(self: &Rc<Self>) {
+        const PRELOAD: usize = 3;
+
+        let (client, crt, wanted) = {
+            let st = self.state.borrow();
+            let wanted: Vec<String> = st
+                .sidebar_groups()
+                .into_iter()
+                .flat_map(|(_, channels)| channels)
+                .map(|c| c.id)
+                .filter(|id| st.unread(id).is_unread() && !st.feeds.contains_key(id))
+                .take(PRELOAD)
+                .collect();
+            (st.client.clone(), st.crt_enabled, wanted)
+        };
+
+        for channel_id in wanted {
+            let client = client.clone();
+            let ui = self.clone();
+            runtime::spawn(
+                async move {
+                    let posts = client
+                        .posts_for_channel(&channel_id, 0, INITIAL_POSTS, crt)
+                        .await?;
+                    let (authors, statuses) = hydrate_authors(&client, &posts).await;
+                    Ok::<_, mattermost_api::Error>((channel_id, posts, authors, statuses))
+                },
+                move |result| {
+                    let Ok((channel_id, posts, authors, statuses)) = result else {
+                        return;
+                    };
+                    {
+                        let mut st = ui.state.borrow_mut();
+                        for user in authors {
+                            st.users.insert(user.id.clone(), user);
+                        }
+                        st.apply_statuses(statuses);
+                        // Only if it is still absent: the person may have
+                        // opened it while this was in flight, and that copy is
+                        // the one being read.
+                        st.feeds
+                            .entry(channel_id)
+                            .or_insert_with(|| ChannelFeed::from_list(&posts));
+                    }
+                    ui.store_posts(posts.chronological().into_iter().cloned().collect());
+                },
+            );
+        }
+    }
+
     /// Files posts in the local store. Fire and forget: a failure costs a
     /// slower next launch and nothing on this one.
     fn store_posts(&self, posts: Vec<Post>) {
@@ -1185,6 +1241,12 @@ impl Ui {
                 }
                 if let Err(e) = store.save_posts(posts).await {
                     tracing::warn!(error = %e, "could not store the messages");
+                }
+                // Trim afterwards rather than on a timer: this is the one
+                // moment we know the writing has stopped, and the cost is a
+                // single statement.
+                if let Err(e) = store.prune(crate::store::DEFAULT_KEEP_PER_CHANNEL).await {
+                    tracing::warn!(error = %e, "could not trim the store");
                 }
             },
             |_| {},
@@ -6197,6 +6259,7 @@ fn bootstrap(ui: Rc<Ui>) {
             ui.load_drafts();
             ui.load_bots();
             ui.load_team_unreads();
+            ui.preload_unread();
 
             if let Some(id) = initial_channel {
                 ui.dispatch(Action::SelectChannel(id));

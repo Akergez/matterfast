@@ -442,6 +442,14 @@ pub struct PostSearchResults {
 /// it. The server stores it separately and only creates the real post at
 /// `scheduled_at`.
 ///
+/// On the wire the Go type embeds `model.Draft`, not `model.Post`, so what
+/// arrives is a strict subset of the fields below: `id`, `create_at`,
+/// `update_at`, `delete_at`, `user_id`, `channel_id`, `root_id`, `message`,
+/// `type`, `props`, `file_ids`, `metadata`. The rest of [`Post`] stays at its
+/// default — in particular `reply_count` and `is_pinned` mean nothing here.
+/// Draft also carries a top-level `priority` object where a post keeps it under
+/// `metadata`, so [`Post::priority`] reads `None` on one of these.
+///
 /// `error_code` is filled in when a send *later* failed (`channel_archived`,
 /// `no_channel_permission`, `unknown`): the scheduled post stays in the list
 /// with the error on it rather than disappearing, so the client can show why.
@@ -454,4 +462,129 @@ pub struct ScheduledPost {
     pub scheduled_at: Millis,
     #[serde(default)]
     pub error_code: String,
+}
+
+/// `GET /posts/scheduled/team/{team_id}` — the scheduled posts of one team,
+/// bucketed.
+///
+/// The body is a flat object of `bucket -> [ScheduledPost]`, built by hand in
+/// the handler rather than by a named Go type: `response[teamId]` always, plus
+/// `response["directChannels"]` when the request carried
+/// `?includeDirectChannels=true` (`server/channels/api4/scheduled_post.go:147`).
+/// Nothing else is ever put in it, and the team bucket is present even when it
+/// is empty — the app layer turns a nil slice into `[]` before it gets here
+/// (`server/channels/app/scheduled_post.go:65`).
+///
+/// So the shape does not vary and no `untagged` union is needed. Checked
+/// against server 11.10 source, `Client4.GetUserScheduledPosts` (which declares
+/// exactly `map[string][]*ScheduledPost`) and the published spec for the route,
+/// whose minimum server version is 10.3 — the release that added it.
+///
+/// Kept as the map it is, because the keys are the two named above and a
+/// caller that iterates them as if they were all team ids would count DMs as a
+/// team. Reach for the buckets by name.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(transparent)]
+pub struct TeamScheduledPosts(pub HashMap<String, Vec<ScheduledPost>>);
+
+impl TeamScheduledPosts {
+    /// The one key in the response that is not a team id.
+    pub const DIRECT_CHANNELS: &'static str = "directChannels";
+
+    pub fn for_team(&self, team_id: &str) -> &[ScheduledPost] {
+        self.0.get(team_id).map_or(&[], Vec::as_slice)
+    }
+
+    /// Only ever populated when the request asked for it.
+    pub fn direct_channels(&self) -> &[ScheduledPost] {
+        self.0.get(Self::DIRECT_CHANNELS).map_or(&[], Vec::as_slice)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A response body with both buckets, field for field as the Go structs
+    /// tag them (`model.ScheduledPost` embedding `model.Draft`).
+    #[test]
+    fn a_team_scheduled_post_response_parses() {
+        let body = r#"{
+            "4bfx3k1jstyupfmtwmxbwaqrwh": [
+                {
+                    "id": "hxr1zmb3xtdppmsfcqbdyfhz9r",
+                    "create_at": 1700000000000,
+                    "update_at": 1700000000000,
+                    "delete_at": 0,
+                    "user_id": "kzjm6dkpppfj7cw1j5pnfjqxxy",
+                    "channel_id": "5b3zgc9dabnj9mymkecux3q7wc",
+                    "root_id": "",
+                    "message": "morning",
+                    "type": "",
+                    "props": {},
+                    "file_ids": ["ycq4kh8y8jd8xrdpmmb7hyyaqe"],
+                    "metadata": {"files": [{"id": "ycq4kh8y8jd8xrdpmmb7hyyaqe", "name": "plan.pdf"}]},
+                    "priority": {"priority": "urgent", "requested_ack": true},
+                    "scheduled_at": 1800000000000,
+                    "processed_at": 0,
+                    "error_code": ""
+                },
+                {
+                    "id": "z7uwqf1fjigt5cqozcqrfarbzh",
+                    "create_at": 1700000001000,
+                    "update_at": 1700000001000,
+                    "delete_at": 0,
+                    "user_id": "kzjm6dkpppfj7cw1j5pnfjqxxy",
+                    "channel_id": "j4d7yezcsjnhipp9zebmqfsr9h",
+                    "root_id": "",
+                    "message": "this one failed",
+                    "type": "",
+                    "props": {},
+                    "scheduled_at": 1800000001000,
+                    "processed_at": 1800000002000,
+                    "error_code": "channel_archived"
+                }
+            ],
+            "directChannels": [
+                {
+                    "id": "mkbdcstm93fsjfhmpsjxjtwrmw",
+                    "create_at": 1700000002000,
+                    "update_at": 1700000002000,
+                    "delete_at": 0,
+                    "user_id": "kzjm6dkpppfj7cw1j5pnfjqxxy",
+                    "channel_id": "wgdmwnnrbtn19jd4hhkgmnypia",
+                    "root_id": "atqagxu5wpn6zrrww8ttrx1n1c",
+                    "message": "see you then",
+                    "type": "",
+                    "props": {},
+                    "scheduled_at": 1800000003000,
+                    "processed_at": 0,
+                    "error_code": ""
+                }
+            ]
+        }"#;
+        let team = "4bfx3k1jstyupfmtwmxbwaqrwh";
+        let got: TeamScheduledPosts = serde_json::from_str(body).unwrap();
+
+        let scheduled = got.for_team(team);
+        assert_eq!(scheduled.len(), 2);
+        assert_eq!(scheduled[0].post.id, "hxr1zmb3xtdppmsfcqbdyfhz9r");
+        assert_eq!(scheduled[0].post.message, "morning");
+        assert_eq!(scheduled[0].scheduled_at, 1800000000000);
+        assert_eq!(scheduled[0].post.files().len(), 1);
+        assert_eq!(scheduled[1].error_code, "channel_archived");
+
+        // The bucket that is not a team.
+        let dms = got.direct_channels();
+        assert_eq!(dms.len(), 1);
+        assert!(dms[0].post.is_reply());
+        assert_eq!(got.for_team("no such team").len(), 0);
+
+        // Without `includeDirectChannels` the key is simply absent, and the
+        // team's own bucket is `[]` rather than missing when it has nothing.
+        let empty: TeamScheduledPosts =
+            serde_json::from_str(&format!("{{\"{team}\": []}}")).unwrap();
+        assert!(empty.for_team(team).is_empty());
+        assert!(empty.direct_channels().is_empty());
+    }
 }
