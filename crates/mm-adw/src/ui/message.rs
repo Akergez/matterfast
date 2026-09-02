@@ -80,6 +80,8 @@ pub fn build(
     let author_name = st.author_name(post);
     let author_id = post.user_id.clone();
     let presence = st.presence(&author_id);
+    // Read while the borrow is open; the row is built after it closes.
+    let custom_status = st.users.get(&author_id).and_then(|u| u.custom_status());
     drop(st);
 
     if post.is_system() {
@@ -155,6 +157,14 @@ pub fn build(
             .spacing(6)
             .build();
         meta.append(&name);
+
+        // Somebody's custom status — the palm tree, the house — next to their
+        // name, which is where it answers the question it exists to answer:
+        // are they actually around.
+        if let Some(chip) = custom_status.as_ref().and_then(custom_status_chip) {
+            meta.append(&chip);
+        }
+
         meta.append(&time);
 
         if let Some(priority) = post.priority() {
@@ -1411,6 +1421,35 @@ pub fn plural(n: i64, one: &'static str, many: &'static str) -> &'static str {
 }
 
 /// Mattermost timestamps are Unix **milliseconds**.
+/// Someone's custom status as a small chip: the emoji, with the text on
+/// hover. The text goes in the tooltip rather than the row because a status
+/// can be a sentence and the author line is not the place for one.
+fn custom_status_chip(status: &mattermost_api::models::CustomStatus) -> Option<gtk::Widget> {
+    if status.emoji.is_empty() && status.text.is_empty() {
+        return None;
+    }
+    // Expired statuses stay on the user object until the server clears them,
+    // so an old "on holiday" would otherwise sit next to someone's name for
+    // weeks after they came back.
+    if let Some(expiry) = status.expires_at.as_deref().filter(|e| !e.is_empty()) {
+        if let Ok(when) = glib::DateTime::from_iso8601(expiry, None) {
+            if when.to_unix() < glib::real_time() / 1_000_000 {
+                return None;
+            }
+        }
+    }
+
+    let label = gtk::Label::new(Some(&crate::emoji::label(&status.emoji)));
+    label.add_css_class("custom-status");
+    let tooltip = if status.text.is_empty() {
+        format!(":{}:", status.emoji)
+    } else {
+        status.text.clone()
+    };
+    label.set_tooltip_text(Some(&tooltip));
+    Some(label.upcast())
+}
+
 /// The "new messages" landmark: a rule with a label, drawn where reading
 /// stopped.
 pub fn unread_line() -> gtk::Widget {

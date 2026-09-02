@@ -163,6 +163,12 @@
   transition: background-color 600ms ease-out;
 }
 
+/* Somebody's custom status beside their name. Small: it is context, not the
+   message. */
+.custom-status {
+  font-size: 0.85rem;
+}
+
 /* Where reading stopped. Accent-coloured because it is a landmark you are
    looking for, not a separator you read past. */
 .unread-line separator {

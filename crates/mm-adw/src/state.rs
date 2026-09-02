@@ -158,6 +158,10 @@ pub struct AppState {
     /// Unsent text, keyed by channel id. Mirrors what the server has, so the
     /// same half-written message is waiting on every device.
     pub drafts: HashMap<String, String>,
+    /// The account's preferences, as the server holds them. Kept whole rather
+    /// than picked apart: several features read one key each, and the list is
+    /// small.
+    pub preferences: Vec<Preference>,
     /// When the user map was last refreshed wholesale, so a resync can ask
     /// only for what changed since.
     pub users_fetched_at: Millis,
@@ -260,6 +264,7 @@ impl AppState {
             drafts: HashMap::new(),
             thread_drafts: HashMap::new(),
             drafts_synced: true,
+            preferences: Vec::new(),
             users_fetched_at: 0,
             ringing: Vec::new(),
             team_unreads: HashMap::new(),

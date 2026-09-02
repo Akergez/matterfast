@@ -213,7 +213,14 @@ impl ChannelSidebar {
                 let icon = channel
                     .dm_teammate_id(&st.me.id)
                     .map(|user_id| dm_avatar(avatars, user_id, &title, st.presence(user_id)));
-                let row = channel_row(&channel, &title, icon, avatars, &st);
+                // A DM is a person, and their status says whether writing to
+                // them is worth doing now.
+                let status = channel
+                    .dm_teammate_id(&st.me.id)
+                    .and_then(|id| st.users.get(id))
+                    .and_then(|user| user.custom_status())
+                    .filter(|status| !status.emoji.is_empty());
+                let row = channel_row(&channel, &title, icon, status, avatars, &st);
                 unsafe { row.set_data("channel-id", channel.id.clone()) };
                 attach_row_menu(&row, &channel.id, &st, &self.categories);
                 self.list.append(&row);
@@ -409,6 +416,7 @@ fn channel_row(
     channel: &Channel,
     title: &str,
     icon: Option<gtk::Widget>,
+    status: Option<mattermost_api::models::CustomStatus>,
     avatars: &Avatars,
     state: &crate::state::AppState,
 ) -> gtk::ListBoxRow {
@@ -452,6 +460,17 @@ fn channel_row(
         .build();
     row_box.append(&icon);
     row_box.append(&label);
+
+    if let Some(status) = status {
+        let chip = gtk::Label::new(Some(&crate::emoji::label(&status.emoji)));
+        chip.add_css_class("custom-status");
+        chip.set_tooltip_text(Some(if status.text.is_empty() {
+            &status.emoji
+        } else {
+            &status.text
+        }));
+        row_box.append(&chip);
+    }
 
     // A call in this channel matters more than an unread badge, so it goes
     // first and is always shown.

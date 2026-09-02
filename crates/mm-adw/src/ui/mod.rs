@@ -2808,12 +2808,32 @@ impl Ui {
             )
         };
 
+        // The last few, which the server keeps as a preference so every client
+        // offers the same list.
+        let recents: Vec<(String, String)> = self
+            .state
+            .borrow()
+            .preferences
+            .iter()
+            .find(|p| p.category == "custom_status" && p.name == "recentCustomStatuses")
+            .and_then(|p| serde_json::from_str::<Vec<serde_json::Value>>(&p.value).ok())
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|entry| {
+                let emoji = entry.get("emoji")?.as_str()?.to_string();
+                let text = entry.get("text")?.as_str()?.to_string();
+                (!emoji.is_empty() || !text.is_empty()).then_some((emoji, text))
+            })
+            .take(5)
+            .collect();
+
         let set_client = client.clone();
         let set_ui = self.clone();
         let clear_ui = self.clone();
         account::custom_status(
             &self.window,
             current,
+            recents,
             move |emoji, text, expires_at| {
                 let status = mattermost_api::models::CustomStatus {
                     emoji,
@@ -6326,6 +6346,7 @@ fn bootstrap(ui: Rc<Ui>) {
                 // Saved posts are preferences, and the startup sequence has
                 // already fetched those — asking again would be a second
                 // request for something we are holding.
+                st.preferences = boot.preferences.clone();
                 st.saved_posts = boot
                     .preferences
                     .iter()

@@ -13,6 +13,16 @@ use gtk::glib;
 
 /// The clear-after choices, in menu order. The index into this table is what
 /// [`expires_at`] reads; index 0 never expires.
+/// What the other clients offer, with the timeout each one carries: emoji,
+/// its shortcode, the wording, and an index into [`DURATIONS`].
+const SUGGESTIONS: &[(&str, &str, &str, u32)] = &[
+    ("📅", "calendar", "In a meeting", 2),
+    ("🍔", "hamburger", "At lunch", 1),
+    ("🤒", "face_with_thermometer", "Out sick", 4),
+    ("🏠", "house", "Working from home", 4),
+    ("🌴", "palm_tree", "On holiday", 5),
+];
+
 const DURATIONS: [&str; 6] = [
     "Don't clear",
     "30 minutes",
@@ -181,6 +191,7 @@ pub fn edit_profile(
 pub fn custom_status(
     parent: &impl IsA<gtk::Window>,
     current: (String, String),
+    recents: Vec<(String, String)>,
     on_set: impl Fn(String, String, i64) + 'static,
     on_clear: impl Fn() + 'static,
 ) {
@@ -205,8 +216,69 @@ pub fn custom_status(
     group.add(&text);
     group.add(&duration);
 
+    // The ones people actually pick, with the timeout each one implies —
+    // "in a meeting" is an hour, "on holiday" is a week. Typing that out every
+    // time is the reason nobody sets a status.
+    let suggestions = adw::PreferencesGroup::builder()
+        .title("Suggestions")
+        .build();
+    for (glyph, shortcode, label, choice) in SUGGESTIONS {
+        let row = adw::ActionRow::builder()
+            .title(glib::markup_escape_text(label).as_str())
+            .subtitle(DURATIONS[*choice as usize])
+            .activatable(true)
+            .build();
+        row.add_prefix(&gtk::Label::new(Some(glyph)));
+        row.connect_activated({
+            let emoji = emoji.clone();
+            let text = text.clone();
+            let duration = duration.clone();
+            let shortcode = shortcode.to_string();
+            let label = label.to_string();
+            let choice = *choice;
+            // Filling the fields rather than submitting: the wording is often
+            // nearly right, and editing it beats retyping it.
+            move |_| {
+                emoji.set_text(&shortcode);
+                text.set_text(&label);
+                duration.set_selected(choice);
+            }
+        });
+        suggestions.add(&row);
+    }
+
+    let recents_group = adw::PreferencesGroup::builder().title("Recent").build();
+    for (recent_emoji, recent_text) in &recents {
+        let row = adw::ActionRow::builder()
+            .title(glib::markup_escape_text(recent_text).as_str())
+            .activatable(true)
+            .build();
+        row.add_prefix(&gtk::Label::new(Some(&crate::emoji::label(recent_emoji))));
+        row.connect_activated({
+            let emoji = emoji.clone();
+            let text = text.clone();
+            let recent_emoji = recent_emoji.clone();
+            let recent_text = recent_text.clone();
+            move |_| {
+                emoji.set_text(&recent_emoji);
+                text.set_text(&recent_text);
+            }
+        });
+        recents_group.add(&row);
+    }
+
+    let content = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(12)
+        .build();
+    content.append(&group);
+    if !recents.is_empty() {
+        content.append(&recents_group);
+    }
+    content.append(&suggestions);
+
     let dialog = adw::MessageDialog::new(Some(parent), Some("Set a status"), None);
-    dialog.set_extra_child(Some(&group));
+    dialog.set_extra_child(Some(&content));
     dialog.add_responses(&[("cancel", "Cancel"), ("set", "Set status")]);
     // Nothing to clear until there is a status, so the button is not offered.
     if is_set {
