@@ -277,6 +277,9 @@ fn acknowledgement(post: &Post, state: &SharedState, actions: &MessageActions) -
 
     let button = gtk::Button::builder()
         .label(if mine { "Acknowledged" } else { "Acknowledge" })
+        // The row is start-aligned, but a button inside a horizontal box
+        // still fills its allocation unless it says otherwise.
+        .halign(gtk::Align::Start)
         .build();
     button.add_css_class("pill");
     if mine {
