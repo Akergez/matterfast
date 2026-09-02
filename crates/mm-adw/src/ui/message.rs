@@ -917,10 +917,19 @@ fn attachment(
                 );
             })
         });
-        let widget = player.widget.clone();
-        // Tie the player's lifetime to the widget it drew.
-        unsafe { widget.set_data("player", player) };
-        return widget;
+        // The player has to be owned by something that will die, and it
+        // cannot be the widget inside it: an `Rc<Player>` hung on a widget the
+        // player itself holds is a cycle, so the widget is never finalized,
+        // the data attached to it is never dropped, and every row ever built
+        // stays in memory with its GStreamer pipeline still alive. A wrapper
+        // the player knows nothing about breaks it — when the row lets go of
+        // the wrapper, the wrapper's data goes, and the player with it.
+        let holder = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .build();
+        holder.append(&player.widget);
+        unsafe { holder.set_data("player", player) };
+        return holder.upcast();
     }
 
     // Everything that is not an image: a name, a size, and a way to get it.
@@ -1550,7 +1559,20 @@ fn reaction_picker(post: &Post, actions: &MessageActions) -> gtk::Popover {
             }
         }
     };
-    fill("");
+    // Not until somebody opens it. This table is a hundred and twenty
+    // buttons, it was built for every message in the channel whether or not
+    // anyone ever clicked react, and every redraw threw the lot away and
+    // built them again — which turned out to be most of the memory this app
+    // was using, and most of what it was doing with the processor.
+    popover.connect_show({
+        let fill = fill.clone();
+        let filled = std::cell::Cell::new(false);
+        move |_| {
+            if !filled.replace(true) {
+                fill("");
+            }
+        }
+    });
     search.connect_search_changed({
         let fill = fill.clone();
         move |entry| fill(&entry.text())

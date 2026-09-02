@@ -182,10 +182,15 @@ impl Avatars {
     /// Cached like everything else here, so scrolling a video row out of view
     /// and back does not repeat the request.
     pub fn video_head(&self, file_id: &str) -> Option<Rc<Vec<u8>>> {
-        if let Some(bytes) = self.inner.borrow().heads.get(file_id) {
+        // The prefix belongs in the lookup as well as the fetch. Without it
+        // the hit never happened: every redraw asked again, every answer
+        // redrew, and the two chased each other at the speed of the network
+        // while the feed was rebuilt from scratch each time round.
+        let key = format!("{VIDEO_HEAD_PREFIX}{file_id}");
+        if let Some(bytes) = self.inner.borrow().heads.get(&key) {
             return Some(bytes.clone());
         }
-        self.request(&format!("{VIDEO_HEAD_PREFIX}{file_id}"));
+        self.request(&key);
         None
     }
 
