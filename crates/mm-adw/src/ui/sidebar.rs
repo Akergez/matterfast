@@ -15,6 +15,8 @@ use crate::state::SharedState;
 pub enum RowAction {
     SetMuted(bool),
     MoveTo(String),
+    RenameCategory,
+    DeleteCategory,
 }
 
 pub struct ChannelSidebar {
@@ -93,7 +95,9 @@ impl ChannelSidebar {
         channels_section.append(Some("Jump to…"), Some("win.quick-switch"));
         channels_section.append(Some("Scheduled Messages"), Some("win.scheduled-posts"));
         channels_section.append(Some("New Channel…"), Some("win.new-channel"));
+        channels_section.append(Some("New Category…"), Some("win.new-category"));
         channels_section.append(Some("Browse Teams…"), Some("win.browse-teams"));
+        channels_section.append(Some("Leave This Team"), Some("win.leave-team"));
         channels_section.append(Some("Browse Channels…"), Some("win.browse-channels"));
         menu.append_section(None, &channels_section);
         let account_section = gtk::gio::Menu::new();
@@ -181,7 +185,14 @@ impl ChannelSidebar {
         self.title.set_text(&team_name);
 
         for (category, channels) in st.sidebar_groups() {
-            self.list.append(&category_header(&category.display_name));
+            let header = category_header(&category.display_name);
+            // Custom categories can be renamed and deleted; the built-in ones
+            // (Favourites, Channels, Direct Messages) cannot, and offering it
+            // would only produce a server error.
+            if category.r#type == mattermost_api::models::CategoryType::Custom {
+                attach_category_menu(&header, &category.id, &self.categories);
+            }
+            self.list.append(&header);
 
             for channel in channels {
                 let title = st.channel_title(&channel);
@@ -215,6 +226,44 @@ fn presence_dot(size: i32) -> gtk::Box {
         .build();
     dot.add_css_class("presence-badge");
     dot
+}
+
+/// The right-click menu on a category heading.
+fn attach_category_menu(
+    row: &gtk::ListBoxRow,
+    category_id: &str,
+    on_action: &Rc<dyn Fn(String, RowAction)>,
+) {
+    let menu = gtk::gio::Menu::new();
+    let group = gtk::gio::SimpleActionGroup::new();
+
+    for (label, name, action) in [
+        ("Rename…", "rename", RowAction::RenameCategory),
+        ("Delete", "delete", RowAction::DeleteCategory),
+    ] {
+        let item = gtk::gio::SimpleAction::new(name, None);
+        item.connect_activate({
+            let on_action = on_action.clone();
+            let category_id = category_id.to_string();
+            let action = action.clone();
+            move |_, _| on_action(category_id.clone(), action.clone())
+        });
+        group.add_action(&item);
+        menu.append(Some(label), Some(&format!("category.{name}")));
+    }
+
+    let popover = gtk::PopoverMenu::from_model(Some(&menu));
+    popover.set_parent(row);
+    popover.set_has_arrow(false);
+    row.insert_action_group("category", Some(&group));
+
+    let click = gtk::GestureClick::new();
+    click.set_button(gtk::gdk::BUTTON_SECONDARY);
+    click.connect_pressed(move |_, _, x, y| {
+        popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+        popover.popup();
+    });
+    row.add_controller(click);
 }
 
 /// The right-click menu on a channel: mute it, favourite it, or file it under

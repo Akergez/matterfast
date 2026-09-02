@@ -82,6 +82,8 @@ enum MenuAction {
     ChannelMembers,
     ChannelBookmarks,
     BrowseTeams,
+    NewCategory,
+    LeaveTeam,
     EditChannel,
     ArchiveChannel,
     ChannelNotifications,
@@ -726,6 +728,8 @@ fn build_session_ui(
         ("channel-members", MenuAction::ChannelMembers),
         ("channel-bookmarks", MenuAction::ChannelBookmarks),
         ("browse-teams", MenuAction::BrowseTeams),
+        ("new-category", MenuAction::NewCategory),
+        ("leave-team", MenuAction::LeaveTeam),
         ("edit-channel", MenuAction::EditChannel),
         ("archive-channel", MenuAction::ArchiveChannel),
         ("custom-status", MenuAction::CustomStatus),
@@ -1275,6 +1279,8 @@ impl Ui {
             MenuAction::ChannelMembers => self.channel_members(),
             MenuAction::ChannelBookmarks => self.channel_bookmarks(),
             MenuAction::BrowseTeams => self.browse_teams(),
+            MenuAction::NewCategory => self.new_category(),
+            MenuAction::LeaveTeam => self.leave_team(),
             MenuAction::EditChannel => self.edit_channel(),
             MenuAction::ArchiveChannel => self.archive_channel(),
             MenuAction::CustomStatus => self.custom_status(),
@@ -1556,6 +1562,59 @@ impl Ui {
                     },
                 );
             }
+            RowAction::RenameCategory => {
+                let current = self
+                    .state
+                    .borrow()
+                    .categories
+                    .categories
+                    .iter()
+                    .find(|c| c.id == channel_id)
+                    .map(|c| c.display_name.clone())
+                    .unwrap_or_default();
+                let ui = self.clone();
+                dialogs::name_category(&self.window, "Rename category", &current, move |name| {
+                    let Some(mut category) = ui
+                        .state
+                        .borrow()
+                        .categories
+                        .categories
+                        .iter()
+                        .find(|c| c.id == channel_id)
+                        .cloned()
+                    else {
+                        return;
+                    };
+                    category.display_name = name;
+                    let client = ui.state.borrow().client.clone();
+                    let me = ui.state.borrow().me.id.clone();
+                    let team_id = ui.state.borrow().current_team.clone().unwrap_or_default();
+                    let ui = ui.clone();
+                    runtime::spawn(
+                        async move {
+                            client
+                                .update_categories(&me, &team_id, std::slice::from_ref(&category))
+                                .await
+                        },
+                        move |result| match result {
+                            Ok(_) => ui.schedule_sidebar_reload(),
+                            Err(e) => ui.toast(&format!("Could not rename it: {e}")),
+                        },
+                    );
+                });
+            }
+            RowAction::DeleteCategory => {
+                // The channels in it are not deleted — they fall back to the
+                // default category — so this needs no confirmation.
+                let ui = self.clone();
+                runtime::spawn(
+                    async move { client.delete_category(&me, &team_id, &channel_id).await },
+                    move |result| match result {
+                        Ok(()) => ui.schedule_sidebar_reload(),
+                        Err(e) => ui.toast(&format!("Could not delete it: {e}")),
+                    },
+                );
+            }
             RowAction::MoveTo(category_id) => {
                 // The categories route replaces membership wholesale, so both
                 // the old and the new category have to be sent together.
@@ -1576,6 +1635,74 @@ impl Ui {
                 );
             }
         }
+    }
+
+    fn new_category(self: &Rc<Self>) {
+        let ui = self.clone();
+        dialogs::name_category(&self.window, "New category", "", move |name| {
+            let (client, me, team_id) = {
+                let st = ui.state.borrow();
+                (
+                    st.client.clone(),
+                    st.me.id.clone(),
+                    st.current_team.clone().unwrap_or_default(),
+                )
+            };
+            let category = mattermost_api::models::SidebarCategory {
+                display_name: name,
+                team_id: team_id.clone(),
+                user_id: me.clone(),
+                r#type: mattermost_api::models::CategoryType::Custom,
+                ..Default::default()
+            };
+            let ui = ui.clone();
+            runtime::spawn(
+                async move { client.create_category(&me, &team_id, &category).await },
+                move |result| match result {
+                    Ok(_) => ui.schedule_sidebar_reload(),
+                    Err(e) => ui.toast(&format!("Could not create it: {e}")),
+                },
+            );
+        });
+    }
+
+    fn leave_team(self: &Rc<Self>) {
+        let (client, me, team_id, name) = {
+            let st = self.state.borrow();
+            let Some(team_id) = st.current_team.clone() else {
+                return;
+            };
+            let name = st
+                .teams
+                .iter()
+                .find(|t| t.id == team_id)
+                .map(|t| t.display_name.clone())
+                .unwrap_or_default();
+            (st.client.clone(), st.me.id.clone(), team_id, name)
+        };
+
+        let ui = self.clone();
+        dialogs::confirm_leave(&self.window, &name, move || {
+            let client = client.clone();
+            let me = me.clone();
+            let team_id = team_id.clone();
+            let ui = ui.clone();
+            runtime::spawn(
+                async move { client.leave_team(&team_id, &me).await },
+                move |result| match result {
+                    Ok(()) => {
+                        // Land somewhere real rather than on a team we just
+                        // left.
+                        ui.reload_teams();
+                        let next = ui.state.borrow().teams.first().map(|t| t.id.clone());
+                        if let Some(team_id) = next {
+                            ui.dispatch(Action::SelectTeam(team_id));
+                        }
+                    }
+                    Err(e) => ui.toast(&format!("Could not leave: {e}")),
+                },
+            );
+        });
     }
 
     /// The channel's name and topic.

@@ -882,6 +882,34 @@ pub fn confirm_archive(
     dialog.present();
 }
 
+/// Name a category, whether new or being renamed.
+pub fn name_category(
+    parent: &impl IsA<gtk::Window>,
+    heading: &str,
+    current: &str,
+    on_save: impl Fn(String) + 'static,
+) {
+    let entry = adw::EntryRow::builder().title("Name").build();
+    entry.set_text(current);
+    let group = adw::PreferencesGroup::builder().build();
+    group.add(&entry);
+
+    let dialog = adw::MessageDialog::new(Some(parent.as_ref()), Some(heading), None);
+    dialog.set_extra_child(Some(&group));
+    dialog.add_responses(&[("cancel", "Cancel"), ("save", "Save")]);
+    dialog.set_response_appearance("save", adw::ResponseAppearance::Suggested);
+    dialog.set_default_response(Some("save"));
+    dialog.set_close_response("cancel");
+    dialog.connect_response(None, move |dialog, response| {
+        dialog.close();
+        let name = entry.text().trim().to_string();
+        if response == "save" && !name.is_empty() {
+            on_save(name);
+        }
+    });
+    dialog.present();
+}
+
 /// Confirm removing someone from a channel.
 pub fn confirm_remove_member(
     parent: &impl IsA<gtk::Window>,
