@@ -188,9 +188,19 @@ pub fn build(
     // usernames, and the special ones the server resolves for everyone.
     let known = {
         let state = state.clone();
-        move |name: &str| {
-            matches!(name, "here" | "channel" | "all")
-                || state.borrow().users.values().any(|u| u.username == name)
+        move |handle: &str| -> Option<String> {
+            // The special ones address everybody and have no account behind
+            // them, so they stay as written.
+            if matches!(handle, "here" | "channel" | "all") {
+                return Some(handle.to_string());
+            }
+            let st = state.borrow();
+            let display = st.teammate_name_display().to_string();
+            st.users
+                .values()
+                .find(|u| u.username == handle)
+                .map(|u| u.display_name(&display))
+                .filter(|name| !name.is_empty())
         }
     };
     for block in crate::markdown::parse_with(&post.message, &known) {
@@ -242,6 +252,44 @@ pub fn build(
             post.reply_count,
             plural(post.reply_count, "reply", "replies")
         );
+        // Who replied, before the count: a thread is worth opening because of
+        // who is in it, and the faces answer that before the number does.
+        let faces = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(2)
+            .build();
+        {
+            let st = state.borrow();
+            let display = st.teammate_name_display().to_string();
+            let repliers: Vec<String> = st
+                .threads
+                .get(post.thread_root())
+                .map(|thread| {
+                    // Oldest first, skipping the root's own author — they are
+                    // already named above the message.
+                    let mut seen: Vec<String> = Vec::new();
+                    for reply in &thread.posts {
+                        if reply.id != post.id && !seen.contains(&reply.user_id) {
+                            seen.push(reply.user_id.clone());
+                        }
+                    }
+                    seen
+                })
+                .unwrap_or_default();
+
+            for user_id in repliers.iter().take(THREAD_FACES) {
+                let name = st
+                    .users
+                    .get(user_id)
+                    .map(|u| u.display_name(&display))
+                    .unwrap_or_default();
+                let face = adw::Avatar::builder().size(20).build();
+                avatars.apply(&face, user_id, &name);
+                face.set_tooltip_text(Some(&name));
+                faces.append(&face);
+            }
+        }
+
         let open = gtk::Button::builder()
             .label(&label)
             .halign(gtk::Align::Start)
@@ -253,13 +301,54 @@ pub fn build(
             let root = post.thread_root().to_string();
             move |_| (actions.open_thread)(root.clone())
         });
-        body.append(&open);
+
+        let footer = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(6)
+            .halign(gtk::Align::Start)
+            .build();
+        if faces.first_child().is_some() {
+            footer.append(&faces);
+        }
+        footer.append(&open);
+        body.append(&footer);
     }
     // A message with no replies gets no footer: starting a thread is the reply
     // button in the hover bar, and a permanent "Reply" under every message is
     // just noise.
 
     row.append(&body);
+
+    // Clicking the message opens its thread — the whole row, not just the
+    // reply count, which is what every other client does and what people try
+    // first. A secondary click is left alone so the context menu still works,
+    // and text selection is unaffected because this only fires on a click that
+    // did not become a drag.
+    {
+        let click = gtk::GestureClick::new();
+        click.set_button(gtk::gdk::BUTTON_PRIMARY);
+        click.connect_released({
+            let actions = actions.clone();
+            let root = post.thread_root().to_string();
+            let allow_thread = options.show_thread_footer;
+            move |gesture, presses, _, _| {
+                // A double click is somebody selecting a word.
+                if presses > 1 || !allow_thread {
+                    return;
+                }
+                // Not while text is selected: the click that ends a selection
+                // must not also navigate.
+                if let Some(widget) = gesture.widget() {
+                    if has_selection(&widget) {
+                        return;
+                    }
+                }
+                (actions.open_thread)(root.clone());
+            }
+        });
+        row.add_controller(click);
+    }
+
     let mine = post.user_id == state.borrow().me.id;
     let saved = state.borrow().saved_posts.contains(&post.id);
     row.append(&hover_actions(
@@ -1531,6 +1620,33 @@ fn expiry_phrase(expires_at: &str) -> Option<String> {
     };
     Some(phrase)
 }
+
+/// Whether anything inside this row has selected text. A click that ends a
+/// selection is a selection, not navigation.
+fn has_selection(widget: &gtk::Widget) -> bool {
+    if let Some(label) = widget.downcast_ref::<gtk::Label>() {
+        let (start, end) = label.selection_bounds().unwrap_or((0, 0));
+        if start != end {
+            return true;
+        }
+    }
+    if let Some(view) = widget.downcast_ref::<gtk::TextView>() {
+        if view.buffer().has_selection() {
+            return true;
+        }
+    }
+    let mut child = widget.first_child();
+    while let Some(node) = child {
+        if has_selection(&node) {
+            return true;
+        }
+        child = node.next_sibling();
+    }
+    false
+}
+
+/// How many repliers to show before the count speaks for itself.
+const THREAD_FACES: usize = 5;
 
 /// The "new messages" landmark: a rule with a label, drawn where reading
 /// stopped.

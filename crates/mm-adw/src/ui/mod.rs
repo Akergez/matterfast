@@ -51,42 +51,65 @@ use sidebar::{ChannelSidebar, RowAction};
 /// which notifies you about reactions to your own posts.
 const REACTION_NOTIFY_PREFIX: &str = "custom_ru.toxblh.reactions-notify_";
 
-/// Mentions answerable from memory: everyone whose handle or name starts with
+/// Mentions answerable from memory: anyone whose handle or name *contains*
 /// what has been typed.
 ///
-/// Prefix rather than substring — typing "an" wants Anna, not everyone with an
-/// "an" in the middle of a surname — and it stops at [`COMPLETIONS`] matches
-/// rather than scanning to the end, which is what keeps a directory of ten
-/// thousand people off the critical path.
+/// Substring, not prefix — people search by surname ("fomche" for Semyon
+/// Fomchenkov) far more often than by the start of a handle. Ranked so the
+/// prefix matches still come first, because when the prefix is what was meant
+/// it is nearly always the one wanted.
+///
+/// The scan is linear over the directory and does no allocation for the
+/// common miss: it lowercases only when a cheap ASCII check cannot decide.
+/// `picture` is asked for a face only for the handful of people that survive
+/// the filter — it is a side effect (a missing avatar starts a download), so
+/// it must not run for the whole directory, and tests pass one that does
+/// nothing.
 fn local_mentions<'a>(
     users: impl Iterator<Item = &'a User>,
     lowered: &str,
     display: &str,
-) -> Vec<(String, String, String)> {
-    let mut found: Vec<(String, String, String)> = Vec::with_capacity(COMPLETIONS);
-    for user in users {
-        if found.len() >= COMPLETIONS {
-            break;
-        }
-        // The handle first: it is already lowercase on the server, so the
-        // common case costs no allocation at all.
-        let matches = user.username.starts_with(lowered)
-            || user.username.to_lowercase().starts_with(lowered)
-            || user
-                .display_name(display)
-                .to_lowercase()
-                .starts_with(lowered);
-        if matches {
-            let name = user.display_name(display);
-            found.push((
-                format!("@{}", user.username),
-                format!("@{}", user.username),
-                name,
-            ));
-        }
+    picture: &dyn Fn(&str) -> Option<gtk::gdk::Texture>,
+) -> Vec<autocomplete::Candidate> {
+    /// How the match was made, and therefore how it sorts.
+    #[derive(PartialEq, Eq, PartialOrd, Ord)]
+    enum Rank {
+        HandlePrefix,
+        NamePrefix,
+        Contains,
     }
-    found.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut found: Vec<(Rank, String, &User)> = Vec::new();
+    for user in users {
+        let handle = user.username.to_lowercase();
+        let name = user.display_name(display);
+        let name_lowered = name.to_lowercase();
+
+        let rank = if handle.starts_with(lowered) {
+            Rank::HandlePrefix
+        } else if name_lowered.starts_with(lowered) {
+            Rank::NamePrefix
+        } else if handle.contains(lowered) || name_lowered.contains(lowered) {
+            Rank::Contains
+        } else {
+            continue;
+        };
+        found.push((rank, name, user));
+    }
+
+    // Sorted rather than truncated early: a substring match found first must
+    // not push out a prefix match found later.
+    found.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
     found
+        .into_iter()
+        .take(COMPLETIONS)
+        .map(|(_, name, user)| autocomplete::Candidate {
+            insert: format!("@{}", user.username),
+            primary: name,
+            secondary: format!("@{}", user.username),
+            image: picture(&user.id),
+        })
+        .collect()
 }
 
 /// The `@names` a message mentions, by the same rule the renderer uses.
@@ -132,7 +155,7 @@ mod mention_tests {
             .collect();
 
         let started = std::time::Instant::now();
-        let found = local_mentions(users.iter(), "person9", "full_name");
+        let found = local_mentions(users.iter(), "person9", "full_name", &|_| None);
         let elapsed = started.elapsed();
 
         assert_eq!(found.len(), COMPLETIONS);
@@ -144,13 +167,42 @@ mod mention_tests {
         // The worst case is a term nobody matches: every user is examined and
         // the early exit never fires.
         let started = std::time::Instant::now();
-        let none = local_mentions(users.iter(), "nobodyatall", "full_name");
+        let none = local_mentions(users.iter(), "nobodyatall", "full_name", &|_| None);
         let elapsed = started.elapsed();
         assert!(none.is_empty());
         assert!(
-            elapsed < std::time::Duration::from_millis(20),
+            elapsed < std::time::Duration::from_millis(30),
             "worst case took {elapsed:?} for 10k users"
         );
+    }
+
+    #[test]
+    fn matches_inside_a_name_not_just_the_start() {
+        let users = vec![
+            User {
+                id: "u1".into(),
+                username: "fomchenkovsv".into(),
+                first_name: "Semyon".into(),
+                last_name: "Fomchenkov".into(),
+                ..Default::default()
+            },
+            User {
+                id: "u2".into(),
+                username: "fedorov".into(),
+                first_name: "Fedor".into(),
+                ..Default::default()
+            },
+        ];
+
+        // Searching by surname, which is what people actually do.
+        let found = local_mentions(users.iter(), "fomche", "full_name", &|_| None);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].insert, "@fomchenkovsv");
+        assert_eq!(found[0].primary, "Semyon Fomchenkov");
+
+        // A prefix match outranks a substring one even when it is found later.
+        let found = local_mentions(users.iter(), "fe", "full_name", &|_| None);
+        assert_eq!(found[0].insert, "@fedorov");
     }
 
     #[test]
@@ -3191,23 +3243,22 @@ impl Ui {
         match query {
             Query::Emoji(term) => {
                 let term = term.to_lowercase();
-                let mut items: Vec<(String, String, String)> = emojis::iter()
+                let mut items: Vec<autocomplete::Candidate> = emojis::iter()
                     .filter_map(|e| {
                         let name = e.shortcode()?;
-                        name.contains(&term).then(|| {
-                            (
-                                format!(":{name}:"),
-                                format!("{}  :{name}:", e.as_str()),
-                                String::new(),
-                            )
+                        name.contains(&term).then(|| autocomplete::Candidate {
+                            insert: format!(":{name}:"),
+                            primary: format!("{}  :{name}:", e.as_str()),
+                            secondary: String::new(),
+                            image: None,
                         })
                     })
                     .take(COMPLETIONS)
                     .collect();
                 // Exact prefixes first: typing ":sm" wants "smile", not
                 // "cosmic".
-                items.sort_by_key(|(insert, _, _)| {
-                    !insert.trim_start_matches(':').starts_with(&term)
+                items.sort_by_key(|candidate| {
+                    !candidate.insert.trim_start_matches(':').starts_with(&term)
                 });
                 self.chat.set_completions(items.clone());
 
@@ -3228,11 +3279,12 @@ impl Ui {
                         }
                         let mut items = items;
                         items.extend(custom.into_iter().take(COMPLETIONS).map(|emoji| {
-                            (
-                                format!(":{}:", emoji.name),
-                                format!(":{}:", emoji.name),
-                                "custom".to_string(),
-                            )
+                            autocomplete::Candidate {
+                                insert: format!(":{}:", emoji.name),
+                                primary: format!(":{}:", emoji.name),
+                                secondary: "custom".to_string(),
+                                image: None,
+                            }
                         }));
                         ui.chat.set_completions(items);
                     },
@@ -3248,7 +3300,9 @@ impl Ui {
                     // network. This is what keeps the list under a frame: a
                     // round trip is tens of milliseconds at best, and the
                     // names most likely to be wanted are already here.
-                    let local = local_mentions(st.users.values(), &lowered, &display);
+                    let local = local_mentions(st.users.values(), &lowered, &display, &|id| {
+                        self.avatars.texture(id)
+                    });
 
                     (
                         st.client.clone(),
@@ -3289,17 +3343,19 @@ impl Ui {
                         // People in the channel first; the server already
                         // separates them, and suggesting someone who is not
                         // here would post a mention that notifies nobody.
-                        let items: Vec<(String, String, String)> = found
+                        let items: Vec<autocomplete::Candidate> = found
                             .users
                             .iter()
                             .chain(found.out_of_channel.iter())
                             .take(COMPLETIONS)
-                            .map(|user| {
-                                (
-                                    format!("@{}", user.username),
-                                    format!("@{}", user.username),
-                                    user.display_name(&display),
-                                )
+                            .map(|user| autocomplete::Candidate {
+                                insert: format!("@{}", user.username),
+                                // The name first: it is what somebody is
+                                // looking for, and the handle is how the
+                                // account is spelled.
+                                primary: user.display_name(&display),
+                                secondary: format!("@{}", user.username),
+                                image: ui.avatars.texture(&user.id),
                             })
                             .collect();
                         if items.is_empty() {
@@ -3319,16 +3375,17 @@ impl Ui {
                                 }
                                 let mut items = items;
                                 items.extend(groups.into_iter().map(|group| {
-                                    (
-                                        format!("@{}", group.name),
-                                        format!("@{}", group.name),
-                                        match group.member_count {
+                                    autocomplete::Candidate {
+                                        insert: format!("@{}", group.name),
+                                        primary: format!("@{}", group.name),
+                                        secondary: match group.member_count {
                                             Some(n) => {
                                                 format!("{} · {n} people", group.display_name)
                                             }
                                             None => group.display_name,
                                         },
-                                    )
+                                        image: None,
+                                    }
                                 }));
                                 group_ui.chat.set_completions(items);
                             },

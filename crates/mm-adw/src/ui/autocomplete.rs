@@ -19,6 +19,20 @@ pub enum Query {
     Emoji(String),
 }
 
+/// One row of the popover, with everything it needs to draw itself: the list
+/// does no lookups of its own, so a repaint can never turn into a fetch.
+#[derive(Clone)]
+pub struct Candidate {
+    /// What replaces the token when picked, e.g. "@anna".
+    pub insert: String,
+    /// The line people read: a display name, or the emoji glyph.
+    pub primary: String,
+    /// Dimmed, to the right: the @handle, or "custom".
+    pub secondary: String,
+    /// Already-loaded picture, when there is one. Emoji rows have none.
+    pub image: Option<gtk::gdk::Texture>,
+}
+
 pub struct Autocomplete {
     inner: Rc<Inner>,
 }
@@ -52,6 +66,9 @@ impl Autocomplete {
             .hscrollbar_policy(gtk::PolicyType::Never)
             .propagate_natural_height(true)
             .max_content_height(240)
+            // Wide enough for a name and a handle side by side; without it the
+            // popover shrinks to the caret and truncates both to a few letters.
+            .width_request(320)
             .child(&list)
             .build();
 
@@ -111,9 +128,8 @@ impl Autocomplete {
         Autocomplete { inner }
     }
 
-    /// Candidates for the outstanding query: (insert_text, display_label,
-    /// optional secondary label). An empty list closes the popover.
-    pub fn set_candidates(&self, items: Vec<(String, String, String)>) {
+    /// Candidates for the outstanding query. An empty list closes the popover.
+    pub fn set_candidates(&self, items: Vec<Candidate>) {
         let inner = &self.inner;
         inner.list.remove_all();
         inner.inserts.borrow_mut().clear();
@@ -123,17 +139,37 @@ impl Autocomplete {
             return;
         }
 
-        for (insert, label, secondary) in items {
-            let name = gtk::Label::builder().label(&label).xalign(0.0).build();
+        for item in items {
             let content = gtk::Box::builder()
                 .orientation(gtk::Orientation::Horizontal)
                 .spacing(8)
                 .build();
+
+            // A mention is a person and gets a face — initials until the
+            // picture lands, as everywhere else, so the rows stay aligned.
+            // An emoji is its own picture and gets none.
+            if item.insert.starts_with('@') {
+                let avatar = adw::Avatar::builder()
+                    .size(24)
+                    .show_initials(true)
+                    .text(&item.primary)
+                    .build();
+                if let Some(texture) = &item.image {
+                    avatar.set_custom_image(Some(texture));
+                }
+                content.append(&avatar);
+            }
+
+            let name = gtk::Label::builder()
+                .label(&item.primary)
+                .xalign(0.0)
+                .ellipsize(gtk::pango::EllipsizeMode::End)
+                .build();
             content.append(&name);
 
-            if !secondary.is_empty() {
+            if !item.secondary.is_empty() {
                 let hint = gtk::Label::builder()
-                    .label(&secondary)
+                    .label(&item.secondary)
                     .xalign(1.0)
                     .hexpand(true)
                     .ellipsize(gtk::pango::EllipsizeMode::End)
@@ -147,7 +183,7 @@ impl Autocomplete {
                 .can_focus(false)
                 .build();
             inner.list.append(&row);
-            inner.inserts.borrow_mut().push(insert);
+            inner.inserts.borrow_mut().push(item.insert);
         }
 
         // Something is always selected, so Enter and Tab never need a first

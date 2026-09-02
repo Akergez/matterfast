@@ -22,13 +22,15 @@ pub enum Block {
 
 /// Splits a message into blocks, translating inline Markdown into Pango markup.
 pub fn parse(message: &str) -> Vec<Block> {
-    // Everything resolves when nobody says otherwise — used by the tests and
-    // by callers with no roster to check against.
-    parse_with(message, &|_| true)
+    // Everything resolves to itself when nobody says otherwise — used by the
+    // tests and by callers with no roster to check against.
+    parse_with(message, &|handle| Some(handle.to_string()))
 }
 
 /// Parses a message, tinting only the mentions `known` recognises.
-pub fn parse_with(message: &str, known: &dyn Fn(&str) -> bool) -> Vec<Block> {
+/// `known` answers with the name to show for a handle, or `None` when it
+/// resolves to nobody.
+pub fn parse_with(message: &str, known: &dyn Fn(&str) -> Option<String>) -> Vec<Block> {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
     options.insert(Options::ENABLE_TABLES);
@@ -156,7 +158,7 @@ pub fn parse_with(message: &str, known: &dyn Fn(&str) -> bool) -> Vec<Block> {
 ///
 /// Done after escaping, because both replacements *emit* markup and would
 /// otherwise be escaped along with everything else.
-fn inline(text: &str, known: &dyn Fn(&str) -> bool) -> String {
+fn inline(text: &str, known: &dyn Fn(&str) -> Option<String>) -> String {
     let escaped = escape(text);
     let mut out = String::with_capacity(escaped.len());
     let mut rest = escaped.as_str();
@@ -202,14 +204,15 @@ fn inline(text: &str, known: &dyn Fn(&str) -> bool) -> String {
                 }
                 rest = &after[end + 1..];
             }
-            (b'@', Some(end)) if end > 0 && known(&after[..end]) => {
-                // Tinted, not linked: a mention is a highlight, and making it
-                // clickable would promise a profile card this does not have.
-                // Only when the name resolves — an unknown @word is somebody's
-                // typo or an email fragment, and tinting it would claim it
-                // reached someone.
+            (b'@', Some(end)) if end > 0 && known(&after[..end]).is_some() => {
+                // Shown as the name, not the handle: "@Anna Petrova" is who
+                // was addressed, and "@apetrova" is an implementation detail
+                // of the account. Tinted rather than linked — making it
+                // clickable would promise a profile card this does not open.
+                let handle = &after[..end];
+                let shown = known(handle).unwrap_or_else(|| handle.to_string());
                 out.push_str("<span foreground=\"#3584e4\">@");
-                out.push_str(&after[..end]);
+                out.push_str(&escape(&shown));
                 out.push_str("</span>");
                 rest = &after[end..];
             }
@@ -319,13 +322,19 @@ mod tests {
 
     #[test]
     fn an_unknown_mention_is_left_alone() {
-        let blocks = parse_with("hi @nobody and @anna", &|name| name == "anna");
+        let blocks = parse_with("hi @nobody and @anna", &|name| {
+            (name == "anna").then(|| "Anna Petrova".to_string())
+        });
         let Block::Text(rendered) = &blocks[0] else {
             panic!("expected text");
         };
         assert!(rendered.contains("@nobody"), "got {rendered:?}");
         assert!(!rendered.contains("#3584e4\">@nobody"), "got {rendered:?}");
-        assert!(rendered.contains("#3584e4\">@anna"), "got {rendered:?}");
+        // Shown by name, not by handle.
+        assert!(
+            rendered.contains("#3584e4\">@Anna Petrova</span>"),
+            "got {rendered:?}"
+        );
     }
 
     #[test]

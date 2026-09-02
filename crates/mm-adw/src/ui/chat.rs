@@ -736,7 +736,7 @@ impl ChatView {
     }
 
     /// Answers an outstanding completion query.
-    pub fn set_completions(&self, items: Vec<(String, String, String)>) {
+    pub fn set_completions(&self, items: Vec<super::autocomplete::Candidate>) {
         self.complete.set_candidates(items);
     }
 
