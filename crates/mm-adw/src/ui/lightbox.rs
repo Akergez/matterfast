@@ -166,6 +166,8 @@ pub fn show(parent: &adw::ApplicationWindow, title: &str, texture: &gtk::gdk::Te
 /// in one place pauses in both and the position never has to be handed over.
 pub fn show_media(parent: &adw::ApplicationWindow, title: &str, media: &gtk::MediaStream) {
     let video = gtk::Video::builder()
+        // Same reason as the row's own player; see `media::no_offload`.
+        .graphics_offload(gtk::GraphicsOffloadEnabled::Disabled)
         .media_stream(media)
         .autoplay(true)
         .tooltip_text(title)
@@ -231,20 +233,6 @@ fn png_name(title: &str) -> String {
         "image.png".to_string()
     } else {
         format!("{stem}.png")
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::png_name;
-
-    #[test]
-    fn suggested_name_is_always_a_png() {
-        assert_eq!(png_name("holiday.jpeg"), "holiday.png");
-        assert_eq!(png_name("screenshot.png"), "screenshot.png");
-        assert_eq!(png_name("no extension"), "no extension.png");
-        assert_eq!(png_name(""), "image.png");
-        assert_eq!(png_name(".hidden"), "image.png");
     }
 }
 
@@ -375,4 +363,18 @@ fn mount(
     dim.add_controller(click);
 
     (dismiss, keys)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::png_name;
+
+    #[test]
+    fn suggested_name_is_always_a_png() {
+        assert_eq!(png_name("holiday.jpeg"), "holiday.png");
+        assert_eq!(png_name("screenshot.png"), "screenshot.png");
+        assert_eq!(png_name("no extension"), "no extension.png");
+        assert_eq!(png_name(""), "image.png");
+        assert_eq!(png_name(".hidden"), "image.png");
+    }
 }

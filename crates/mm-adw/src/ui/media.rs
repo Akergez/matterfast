@@ -311,6 +311,7 @@ impl Player {
             let video = gtk::Video::for_media_stream(Some(&media));
             // We start it ourselves below, on the click that asked for it.
             video.set_autoplay(false);
+            no_offload(&video);
             video.set_height_request(MAX_HEIGHT);
             // A `GtkVideo` asks for the full size of whatever it is showing,
             // and a 1080p attachment would take the conversation with it. The
@@ -364,6 +365,23 @@ impl Player {
         self.play.set_visible(true);
         self.body.append(&note(message));
     }
+}
+
+/// Keeps the video frames inside this process instead of handing them to the
+/// compositor.
+///
+/// GTK's graphics offload passes the decoder's dmabuf straight through to a
+/// Wayland subsurface, so the buffer is imported by the compositor — and when
+/// that import goes wrong on a driver, what dies is the whole session rather
+/// than this window. That is what happened here on an Intel Arrow Lake i915;
+/// the cause is unproven, but with offload off the same fault can only take
+/// down the app.
+///
+/// ponytail: turned off everywhere rather than only where it misbehaves. The
+/// cost is a copy per frame for a video in a chat window. Revisit when the
+/// driver is known good.
+fn no_offload(video: &gtk::Video) {
+    video.set_graphics_offload(gtk::GraphicsOffloadEnabled::Disabled);
 }
 
 fn note(message: &str) -> gtk::Label {
