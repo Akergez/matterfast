@@ -30,6 +30,9 @@ pub struct MessageActions {
     pub show_profile: Rc<dyn Fn(String, gtk::Widget)>,
     /// Everything behind the "…" menu: post id and what to do with it.
     pub post_action: Rc<dyn Fn(String, PostAction)>,
+    /// A link to another message on this server: go there rather than to a
+    /// browser.
+    pub open_permalink: Rc<dyn Fn(String)>,
 }
 
 /// The overflow menu's entries. One enum rather than one callback each: they
@@ -204,7 +207,7 @@ pub fn build(
         }
     };
     for block in crate::markdown::parse_with(&post.message, &known) {
-        body.append(&render_block(block, avatars));
+        body.append(&render_block(block, avatars, actions));
     }
 
     if post.is_edited() {
@@ -216,7 +219,7 @@ pub fn build(
     // A webhook or plugin card. These usually come with an empty message, so
     // ignoring them renders nothing at all for the message.
     for card in post.attachments() {
-        body.append(&attachment_card(&card, avatars));
+        body.append(&attachment_card(&card, avatars, actions));
     }
 
     for file in post.files() {
@@ -436,6 +439,7 @@ fn acknowledgement(post: &Post, state: &SharedState, actions: &MessageActions) -
 fn attachment_card(
     card: &mattermost_api::models::MessageAttachment,
     avatars: &Avatars,
+    actions: &MessageActions,
 ) -> gtk::Widget {
     let content = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -478,7 +482,7 @@ fn attachment_card(
     }
     if !card.text.is_empty() {
         for block in crate::markdown::parse(&card.text) {
-            content.append(&render_block(block, avatars));
+            content.append(&render_block(block, avatars, actions));
         }
     }
 
@@ -692,7 +696,7 @@ fn permalink_preview(
     card.add_css_class("permalink-card");
     card.append(&header);
     for block in crate::markdown::parse(&quoted.message) {
-        card.append(&render_block(block, avatars));
+        card.append(&render_block(block, avatars, actions));
     }
 
     // Clicking it goes there, which is what the link would have done.
@@ -715,13 +719,20 @@ fn attachment(
     state: &SharedState,
 ) -> gtk::Widget {
     if file.is_image() {
+        // Big enough to actually look at. The other clients go to roughly
+        // this, and a thumbnail you have to open to see is a thumbnail that
+        // makes you open everything.
+        //
+        // Both bounds matter: capping height alone turns a wide screenshot
+        // into a strip, and capping width alone lets a tall photo run down
+        // the page.
+        let (width, height) = scaled_size(file.width, file.height);
         let picture = gtk::Picture::builder()
-            .content_fit(gtk::ContentFit::ScaleDown)
+            .content_fit(gtk::ContentFit::Contain)
             .halign(gtk::Align::Start)
             .can_shrink(true)
-            // Tall enough to recognise, short enough that an image does not
-            // push the rest of the conversation off the screen.
-            .height_request(180)
+            .width_request(width)
+            .height_request(height)
             .tooltip_text(&file.name)
             .build();
         picture.add_css_class("attachment-image");
@@ -748,7 +759,8 @@ fn attachment(
         // both die with the row. Its Drop removes the temp file it wrote.
         let player = Rc::new_cyclic(|weak: &std::rc::Weak<super::media::Player>| {
             let weak = weak.clone();
-            super::media::Player::new(file, move |file_id| {
+            // Video gets a still from the same thumbnail route images use.
+            super::media::Player::new(file, avatars.file_thumbnail(&file.id), move |file_id| {
                 let Some(player) = weak.upgrade() else { return };
                 let client = client.clone();
                 crate::runtime::spawn(
@@ -885,7 +897,11 @@ fn open_image(state: &SharedState, file: &mattermost_api::models::FileInfo, anch
 ///
 /// The exception is prose with a custom emoji in it, which no label can draw:
 /// that one block goes through [`rich_text`] instead.
-fn render_block(block: crate::markdown::Block, avatars: &Avatars) -> gtk::Widget {
+fn render_block(
+    block: crate::markdown::Block,
+    avatars: &Avatars,
+    actions: &MessageActions,
+) -> gtk::Widget {
     let label = gtk::Label::builder()
         .xalign(0.0)
         .wrap(true)
@@ -911,6 +927,19 @@ fn render_block(block: crate::markdown::Block, avatars: &Avatars) -> gtk::Widget
             }
             label.set_markup(&markup);
             label.add_css_class("message-body");
+            // A link to a message on this server is not a web page: following
+            // it in a browser would open the whole app again to show something
+            // already on screen. Anything else goes to the browser as usual.
+            label.connect_activate_link({
+                let actions = actions.clone();
+                move |_, url| match permalink(url) {
+                    Some(post_id) => {
+                        (actions.open_permalink)(post_id);
+                        glib::Propagation::Stop
+                    }
+                    None => glib::Propagation::Proceed,
+                }
+            });
             label.upcast()
         }
         crate::markdown::Block::Code { text, .. } => {
@@ -1479,12 +1508,31 @@ fn system_row(post: &Post, state: &SharedState) -> gtk::Widget {
         text
     };
 
+    // Rendered rather than printed: the names in it are mentions, and they
+    // should read like the ones in an ordinary message rather than as plain
+    // grey text.
+    let known = {
+        let state = state.clone();
+        move |handle: &str| -> Option<String> {
+            let st = state.borrow();
+            let display = st.teammate_name_display().to_string();
+            st.users
+                .values()
+                .find(|u| u.username == handle)
+                .map(|u| u.display_name(&display))
+                .filter(|name| !name.is_empty())
+        }
+    };
+
     let label = gtk::Label::builder()
-        .label(&text)
         .xalign(0.0)
         .wrap(true)
         .margin_start(52)
         .build();
+    match crate::markdown::parse_with(&text, &known).first() {
+        Some(crate::markdown::Block::Text(markup)) => label.set_markup(markup),
+        _ => label.set_text(&text),
+    }
     label.add_css_class("message-system");
     label.add_css_class("dim-label");
     label.upcast()
@@ -1645,6 +1693,41 @@ fn has_selection(widget: &gtk::Widget) -> bool {
     false
 }
 
+/// The size to draw an attached image at: its own proportions, fitted inside
+/// a box big enough to see and small enough to scroll past.
+///
+/// A file with no dimensions — some servers omit them — gets the full box and
+/// `Contain` sorts it out once the picture arrives.
+fn scaled_size(width: i32, height: i32) -> (i32, i32) {
+    const MAX_WIDTH: f64 = 420.0;
+    const MAX_HEIGHT: f64 = 350.0;
+
+    if width <= 0 || height <= 0 {
+        return (MAX_WIDTH as i32, MAX_HEIGHT as i32);
+    }
+    let scale = (MAX_WIDTH / width as f64)
+        .min(MAX_HEIGHT / height as f64)
+        // Never enlarge: a 64px sticker blown up to 420 is a blurry sticker.
+        .min(1.0);
+    (
+        ((width as f64 * scale).round() as i32).max(1),
+        ((height as f64 * scale).round() as i32).max(1),
+    )
+}
+
+/// The post id in a Mattermost permalink, if that is what this is.
+///
+/// The shape is `<site>/<team>/pl/<post id>`, and the team part is sometimes
+/// `_redirect` — which is why the match is on the `/pl/` segment rather than
+/// on the whole URL.
+fn permalink(url: &str) -> Option<String> {
+    let (_, tail) = url.split_once("/pl/")?;
+    let id = tail.split(['/', '?', '#']).next()?;
+    // Mattermost ids are 26 characters of lowercase alphanumerics; anything
+    // else is a different site that happens to have /pl/ in its path.
+    (id.len() == 26 && id.chars().all(|c| c.is_ascii_alphanumeric())).then(|| id.to_string())
+}
+
 /// How many repliers to show before the count speaks for itself.
 const THREAD_FACES: usize = 5;
 
@@ -1718,6 +1801,49 @@ pub fn format_relative(millis: Millis) -> String {
             .format("%e %b")
             .map(|s| s.trim().to_string())
             .unwrap_or_default(),
+    }
+}
+
+#[cfg(test)]
+mod size_tests {
+    use super::scaled_size;
+
+    #[test]
+    fn fits_the_box_without_enlarging() {
+        // A tall photo is bounded by height, a wide one by width.
+        assert_eq!(scaled_size(3000, 4000), (263, 350));
+        assert_eq!(scaled_size(4000, 1000), (420, 105));
+        // Smaller than the box: left alone.
+        assert_eq!(scaled_size(64, 64), (64, 64));
+        // Unknown: the full box, and Contain sorts it out.
+        assert_eq!(scaled_size(0, 0), (420, 350));
+    }
+}
+
+#[cfg(test)]
+mod permalink_tests {
+    use super::permalink;
+
+    #[test]
+    fn recognises_a_message_link() {
+        assert_eq!(
+            permalink("https://mm.example.com/team/pl/gedfji9g1pbjjehsngn9j17fzr").as_deref(),
+            Some("gedfji9g1pbjjehsngn9j17fzr")
+        );
+        // The double slash a reminder message produces, and _redirect.
+        assert_eq!(
+            permalink("https://mm.example.com//pl/gedfji9g1pbjjehsngn9j17fzr").as_deref(),
+            Some("gedfji9g1pbjjehsngn9j17fzr")
+        );
+        assert_eq!(
+            permalink("https://mm.example.com/_redirect/pl/gedfji9g1pbjjehsngn9j17fzr?x=1")
+                .as_deref(),
+            Some("gedfji9g1pbjjehsngn9j17fzr")
+        );
+
+        // Not ours.
+        assert_eq!(permalink("https://example.com/pl/short"), None);
+        assert_eq!(permalink("https://example.com/blog/post"), None);
     }
 }
 

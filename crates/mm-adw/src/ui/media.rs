@@ -92,6 +92,11 @@ fn is_audio(file: &FileInfo) -> bool {
 ///
 /// Drop it to clean up the temporary file the bytes were written to; the
 /// widget stops playing on its own when it leaves the window.
+/// The still shown before a video is played. Matches the size an image
+/// attachment is drawn at, so a channel of clips and photos reads evenly.
+const POSTER_WIDTH: i32 = 420;
+const POSTER_HEIGHT: i32 = 260;
+
 pub struct Player {
     pub widget: gtk::Widget,
     body: gtk::Box,
@@ -115,7 +120,14 @@ impl Drop for Player {
 impl Player {
     /// `on_load` is called with the file id when the user asks to play;
     /// answer it with [`Player::set_data`].
-    pub fn new(file: &FileInfo, on_load: impl Fn(String) + 'static) -> Player {
+    /// `poster_image` is the server's own thumbnail, when it has made one —
+    /// it does for video, and a still of the clip says far more about whether
+    /// to press play than a filename does.
+    pub fn new(
+        file: &FileInfo,
+        poster_image: Option<gtk::gdk::Texture>,
+        on_load: impl Fn(String) + 'static,
+    ) -> Player {
         let play = gtk::Button::builder()
             .icon_name("media-playback-start-symbolic")
             .tooltip_text("Play")
@@ -137,14 +149,46 @@ impl Player {
             .ellipsize(gtk::pango::EllipsizeMode::Middle)
             .build();
 
-        let poster = gtk::Box::builder()
+        let controls = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(6)
             .build();
-        poster.add_css_class("dim-label");
-        poster.append(&play);
-        poster.append(&spinner);
-        poster.append(&label);
+        controls.add_css_class("dim-label");
+        controls.append(&play);
+        controls.append(&spinner);
+        controls.append(&label);
+
+        // With a thumbnail the controls sit *over* the still, the way a video
+        // reads everywhere else. Without one they are all there is.
+        let poster: gtk::Widget = match &poster_image {
+            Some(texture) => {
+                let still = gtk::Picture::builder()
+                    .paintable(texture)
+                    .content_fit(gtk::ContentFit::Contain)
+                    .halign(gtk::Align::Start)
+                    .width_request(POSTER_WIDTH)
+                    .height_request(POSTER_HEIGHT)
+                    .build();
+                still.add_css_class("attachment-image");
+
+                play.set_halign(gtk::Align::Center);
+                play.set_valign(gtk::Align::Center);
+                play.add_css_class("osd");
+                play.add_css_class("circular");
+                spinner.set_halign(gtk::Align::Center);
+                spinner.set_valign(gtk::Align::Center);
+                label.set_valign(gtk::Align::End);
+                label.set_halign(gtk::Align::Start);
+                label.add_css_class("osd");
+
+                let overlay = gtk::Overlay::builder().child(&still).build();
+                overlay.add_overlay(&play);
+                overlay.add_overlay(&spinner);
+                overlay.add_overlay(&label);
+                overlay.upcast()
+            }
+            None => controls.upcast(),
+        };
 
         play.connect_clicked({
             let spinner = spinner.clone();

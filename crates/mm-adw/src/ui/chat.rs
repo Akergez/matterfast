@@ -982,6 +982,9 @@ impl ChatView {
         }
 
         let mut last_author: Option<String> = None;
+        // Whether the previous row was a system message, so a run of them
+        // draws as one block.
+        let mut last_was_system = false;
         let mut last_at: Millis = 0;
         let mut last_day: Option<String> = None;
 
@@ -1014,13 +1017,18 @@ impl ChatView {
             }
 
             if post.is_system() {
+                // Consecutive system messages are one event as far as anybody
+                // reading is concerned — three people invited in the same
+                // minute should not take three lines' worth of separation.
+                let grouped = last_was_system;
+                last_was_system = true;
                 self.messages.append(&message::build(
                     post,
                     state,
                     avatars,
                     actions,
                     RowOptions {
-                        grouped: false,
+                        grouped,
                         show_thread_footer: false,
                     },
                 ));
@@ -1032,6 +1040,7 @@ impl ChatView {
             let grouped = last_author.as_deref() == Some(author.as_str())
                 && post.create_at - last_at < message::GROUPING_WINDOW_MS;
 
+            last_was_system = false;
             self.messages.append(&message::build(
                 post,
                 state,

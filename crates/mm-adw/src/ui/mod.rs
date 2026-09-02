@@ -1133,6 +1133,10 @@ impl Ui {
                 let ui = self.clone();
                 Rc::new(move |post, what| ui.dispatch(Action::Post(post, what)))
             },
+            open_permalink: {
+                let ui = self.clone();
+                Rc::new(move |post_id| ui.open_permalink(post_id))
+            },
             show_profile: {
                 let ui = self.clone();
                 Rc::new(move |user_id, anchor| ui.show_profile(&user_id, &anchor))
@@ -4053,6 +4057,37 @@ impl Ui {
                     }
                 }
                 Err(e) => ui.toast(&format!("That command failed: {e}")),
+            },
+        );
+    }
+
+    /// Follows a link to another message on this server.
+    ///
+    /// The link names only the post, so the channel has to be looked up —
+    /// from what is loaded when possible, and from the server when not. A
+    /// reminder about a message in a channel you have not opened this session
+    /// is exactly the case that would otherwise fail.
+    fn open_permalink(self: &Rc<Self>, post_id: String) {
+        let (client, known) = {
+            let st = self.state.borrow();
+            (st.client.clone(), st.post(&post_id).map(|p| p.channel_id))
+        };
+        if let Some(channel_id) = known {
+            self.jump_to_post(channel_id, post_id);
+            return;
+        }
+
+        let ui = self.clone();
+        runtime::spawn(
+            async move { client.post(&post_id).await },
+            move |result| match result {
+                Ok(post) => {
+                    let channel_id = post.channel_id.clone();
+                    let post_id = post.id.clone();
+                    ui.state.borrow_mut().apply_post(post);
+                    ui.jump_to_post(channel_id, post_id);
+                }
+                Err(e) => ui.toast(&format!("Could not open that message: {e}")),
             },
         );
     }
