@@ -778,6 +778,7 @@ fn build_session_ui(
                     let Some(channel_id) = target.and_then(|t| t.get::<String>()) else {
                         return;
                     };
+                    ui.stop_ringing();
                     if join {
                         ui.window.set_visible(true);
                         ui.window.present();
@@ -984,6 +985,18 @@ impl Ui {
         // Keyed by channel, so a second call in the same DM replaces the first
         // rather than stacking two doorbells.
         app.send_notification(Some(&format!("call-{channel_id}")), &notification);
+        self.state.borrow_mut().ringing.push(channel_id.to_string());
+    }
+
+    /// Takes every incoming-call notification back down.
+    fn stop_ringing(&self) {
+        let ringing = std::mem::take(&mut self.state.borrow_mut().ringing);
+        let Some(app) = self.window.application() else {
+            return;
+        };
+        for channel_id in ringing {
+            app.withdraw_notification(&format!("call-{channel_id}"));
+        }
     }
 
     /// Applies a host control. These are HTTP routes rather than websocket
@@ -4023,6 +4036,12 @@ impl Ui {
         };
 
         self.chat.set_loading(!have_feed);
+        // A channel with unread messages opens *at* them rather than at the
+        // newest post — the same fetch the other clients use, so the page
+        // arrives centred on where reading stopped instead of needing a scroll
+        // back to find it.
+        let unread = self.state.borrow().unread(&channel_id).is_unread();
+
         if !have_feed {
             // Repaint now that the pane knows it is waiting; the fetch below
             // may take a while and the reader should not be looking at "this
@@ -4032,9 +4051,15 @@ impl Ui {
             let fetch_client = client.clone();
             runtime::spawn(
                 async move {
-                    let posts = fetch_client
-                        .posts_for_channel(&id, 0, INITIAL_POSTS, crt)
-                        .await?;
+                    let posts = if unread {
+                        fetch_client
+                            .posts_around_unread(&id, INITIAL_POSTS / 2, INITIAL_POSTS / 2, crt)
+                            .await?
+                    } else {
+                        fetch_client
+                            .posts_for_channel(&id, 0, INITIAL_POSTS, crt)
+                            .await?
+                    };
                     let (authors, statuses) = hydrate_authors(&fetch_client, &posts).await;
                     Ok::<_, mattermost_api::Error>((posts, authors, statuses))
                 },
@@ -5272,6 +5297,7 @@ impl Ui {
         use mattermost_calls::CallsEvent as Ev;
         let mut touched = true;
         let mut ring: Option<String> = None;
+        let mut stop_ringing = false;
         {
             let mut st = self.state.borrow_mut();
             match event {
@@ -5289,7 +5315,14 @@ impl Ui {
                 }
                 Ev::CallEnded { channel_id } => {
                     st.active_calls.remove(&channel_id);
+                    // Nothing left to answer.
+                    stop_ringing = true;
                 }
+                // Answered or dismissed on another device. It has to be
+                // handled here rather than in the joined-call path: while
+                // being rung there is no call of ours, and that path returns
+                // early when there is not.
+                Ev::UserDismissedNotification { .. } => stop_ringing = true,
                 // The server only sends a full roster to the joiner, so the
                 // list has to follow the individual comings and goings too —
                 // otherwise the banner keeps claiming a call we have left.
@@ -5327,6 +5360,9 @@ impl Ui {
                 }
                 _ => touched = false,
             }
+        }
+        if stop_ringing {
+            self.stop_ringing();
         }
         if let Some(channel_id) = ring {
             self.ring(&channel_id);

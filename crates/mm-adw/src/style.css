@@ -148,6 +148,19 @@
   margin: 12px 0 4px 0;
 }
 
+/* Where reading stopped. Accent-coloured because it is a landmark you are
+   looking for, not a separator you read past. */
+.unread-line separator {
+  background-color: @accent_color;
+  min-height: 1px;
+}
+
+.unread-line-label {
+  color: @accent_color;
+  font-size: 0.8rem;
+  font-weight: bold;
+}
+
 /* A quoted message behind a permalink. Bordered rather than tinted so it
    reads as "from somewhere else" instead of "highlighted". */
 .permalink-card {

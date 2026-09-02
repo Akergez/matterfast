@@ -987,6 +987,32 @@ pub fn plural(n: i64, one: &'static str, many: &'static str) -> &'static str {
 }
 
 /// Mattermost timestamps are Unix **milliseconds**.
+/// The "new messages" landmark: a rule with a label, drawn where reading
+/// stopped.
+pub fn unread_line() -> gtk::Widget {
+    let label = gtk::Label::new(Some("New messages"));
+    label.add_css_class("unread-line-label");
+
+    let row = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(8)
+        .margin_top(8)
+        .margin_bottom(4)
+        .build();
+    row.add_css_class("unread-line");
+    row.append(&rule());
+    row.append(&label);
+    row.append(&rule());
+    row.upcast()
+}
+
+fn rule() -> gtk::Separator {
+    let separator = gtk::Separator::new(gtk::Orientation::Horizontal);
+    separator.set_valign(gtk::Align::Center);
+    separator.set_hexpand(true);
+    separator
+}
+
 pub fn format_time(millis: Millis) -> String {
     glib::DateTime::from_unix_local(millis / 1000)
         .and_then(|dt| dt.format("%H:%M"))

@@ -158,6 +158,11 @@ pub struct AppState {
     /// Unsent text, keyed by channel id. Mirrors what the server has, so the
     /// same half-written message is waiting on every device.
     pub drafts: HashMap<String, String>,
+    /// Channels we have raised an incoming-call notification for, so it can
+    /// be taken back down when the call ends or is answered elsewhere. The
+    /// dismissal event names a *call*, not a channel, and we hold no mapping
+    /// between the two — so this is the mapping.
+    pub ringing: Vec<String>,
     /// Unread counts for teams other than the current one, so the switcher
     /// can say where something is waiting. Keyed by team id.
     pub team_unreads: HashMap<String, (i64, i64)>,
@@ -252,6 +257,7 @@ impl AppState {
             drafts: HashMap::new(),
             thread_drafts: HashMap::new(),
             drafts_synced: true,
+            ringing: Vec::new(),
             team_unreads: HashMap::new(),
             bots: Vec::new(),
             pending_files: Vec::new(),

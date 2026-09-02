@@ -57,11 +57,22 @@ pub fn should_notify(
         return false;
     }
 
+    // A muted channel is muted: the server stores that as
+    // mark_unread == "mention" and stops sending push for anything else, so a
+    // desktop toast for ordinary activity there would be the one client
+    // ignoring the setting.
+    let muted = membership.is_some_and(|m| m.is_muted());
+
     let level = membership
         .and_then(|m| Level::parse(m.notify_props.get("desktop").map(String::as_str)))
         .or_else(|| Level::parse(me.notify_props.get("desktop").map(String::as_str)))
         // The server's default is to notify on mentions.
         .unwrap_or(Level::Mention);
+    let level = if muted && level == Level::All {
+        Level::Mention
+    } else {
+        level
+    };
 
     match level {
         Level::None => false,
@@ -201,6 +212,29 @@ mod tests {
             &posted("them", "O", &[]),
             &loud,
             Some(&member("default")),
+            None
+        ));
+    }
+
+    #[test]
+    fn a_muted_channel_only_notifies_for_mentions() {
+        let mut muted = ChannelMember::default();
+        muted
+            .notify_props
+            .insert("mark_unread".into(), "mention".into());
+        muted.notify_props.insert("desktop".into(), "all".into());
+
+        // "Everything" in a muted channel still means "only me".
+        assert!(!should_notify(
+            &posted("them", "O", &[]),
+            &me(),
+            Some(&muted),
+            None
+        ));
+        assert!(should_notify(
+            &posted("them", "O", &["me"]),
+            &me(),
+            Some(&muted),
             None
         ));
     }

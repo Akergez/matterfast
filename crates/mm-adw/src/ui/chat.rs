@@ -873,6 +873,17 @@ impl ChatView {
         self.subtitle.set_text(&header_line);
         self.subtitle.set_visible(!header_line.is_empty());
 
+        // Only when something is actually unread: the line is a landmark, not
+        // a permanent divider, and it must not sit under every channel you
+        // have already read.
+        let unread_since = st
+            .memberships
+            .get(&channel_id)
+            .filter(|_| st.unread(&channel_id).is_unread())
+            .and_then(|m| m.last_viewed_at)
+            .filter(|at| *at > 0);
+        let mut unread_drawn = false;
+
         let empty = crate::state::ChannelFeed::default();
         let feed = st.feeds.get(&channel_id).unwrap_or(&empty);
         let posts = feed.posts.clone();
@@ -925,6 +936,16 @@ impl ChatView {
             // reading order.
             if crt && post.is_reply() {
                 continue;
+            }
+
+            // The line where reading stopped last time. Drawn once, above
+            // the first message newer than the last view — which is what
+            // makes "what did I miss" answerable without counting.
+            if let Some(at) = unread_since {
+                if post.create_at > at && !unread_drawn {
+                    self.messages.append(&message::unread_line());
+                    unread_drawn = true;
+                }
             }
 
             let day = message::format_day(post.create_at);
