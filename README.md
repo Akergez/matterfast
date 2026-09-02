@@ -50,16 +50,30 @@ for a bot, a CLI, or a different front end.
 - **Inbox**: recent mentions and followed threads, with a count on the header
   button
 - Sending messages, optimistically, with the server echo retiring the local copy
+- **Editing, deleting, pinning, saving and marking unread**, from each
+  message's own menu
+- **Markdown**: bold, italic, links, lists, inline code, and fenced code blocks
+  on their own panel
+- **Attachments**: files upload when picked, images draw themselves and open
+  full size
+- **Drafts**, synced through the server so the same unfinished message is
+  waiting on every device
+- **Search** across a team, with results in the right panel
+- **Desktop notifications** following the server's own rules, and a snapshot
+  cache so launching draws last session's channels immediately
+- **Calls**: join, mute, share a screen or camera, raise a hand, see who is in
+  the call, and a dock that stays put when you read somewhere else
+- **Plugins**: the Agents LLM module (streamed answers, thread summaries,
+  "catch me up") and reaction notifications
 - Live updates over the websocket, including a correct reliable-reconnect resync
 
 **Not done yet**
 
-- **Audio capture and playback.** `mattermost-calls` will negotiate a call and
-  hand you the remote tracks, but nothing feeds Opus into the outgoing track or
-  plays the incoming ones. This is the one piece between "signalling works" and
-  "you can talk". PipeWire via GStreamer is the intended route.
-- Search, file uploads from the UI, desktop notifications, local persistence,
-  screen-share capture, multi-server, message editing and deletion.
+The honest list lives in [docs/PARITY.md](docs/PARITY.md) — what is missing,
+ordered by how often it bites, with the routes that would close each gap. The
+short version: no channel management, no notification settings, no @-mention
+autocomplete, one server at a time, and a snapshot cache rather than a real
+local store.
 
 ## Single sign-on
 
