@@ -21,6 +21,8 @@ use crate::state::SharedState;
 /// What the host can do to somebody else in the call.
 #[derive(Debug, Clone, Copy)]
 pub enum HostAction {
+    MuteOthers,
+    EndCall,
     Mute,
     StopSharing,
     LowerHand,
@@ -33,6 +35,8 @@ pub struct CallDock {
     roster: gtk::Box,
     on_host: Rc<dyn Fn(String, HostAction)>,
     caption: gtk::Label,
+    mute_others: gtk::Button,
+    end_call: gtk::Button,
     avatar: adw::Avatar,
     title: gtk::Label,
     subtitle: gtk::Label,
@@ -54,6 +58,8 @@ impl CallDock {
         on_hand: impl Fn() + 'static,
         on_leave: impl Fn() + 'static,
         on_host: impl Fn(String, HostAction) + 'static,
+        on_host_all: impl Fn(HostAction) + 'static,
+        on_react: impl Fn(String, String) + 'static,
     ) -> Self {
         let avatar = adw::Avatar::builder().size(28).build();
 
@@ -140,9 +146,59 @@ impl CallDock {
         let camera = icon_button("camera-web-symbolic", "Turn the camera on", on_camera);
         let record = icon_button("media-record-symbolic", "Record the call", on_record);
         let hand = icon_button("view-sort-descending-symbolic", "Raise your hand", on_hand);
+
+        // A quick reaction, which is how people agree without interrupting.
+        let reactions = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(2)
+            .build();
+        let on_react = Rc::new(on_react);
+        for (name, glyph) in [
+            ("+1", "👍"),
+            ("clap", "👏"),
+            ("joy", "😂"),
+            ("open_mouth", "😮"),
+        ] {
+            let button = gtk::Button::builder()
+                .label(glyph)
+                .tooltip_text(format!(":{name}:"))
+                .build();
+            button.add_css_class("flat");
+            button.add_css_class("circular");
+            button.connect_clicked({
+                let on_react = on_react.clone();
+                move |_| on_react(name.to_string(), glyph.to_string())
+            });
+            reactions.append(&button);
+        }
+        let react = gtk::MenuButton::builder()
+            .icon_name("face-smile-symbolic")
+            .tooltip_text("React")
+            .popover(&gtk::Popover::builder().child(&reactions).build())
+            .build();
+        react.add_css_class("flat");
+        react.add_css_class("circular");
+        controls.append(&react);
         for button in [&mute, &screen, &camera, &hand, &record] {
             controls.append(button);
         }
+
+        // Host-only, and destructive for everyone else in the call, so they
+        // sit apart from the controls that only affect you.
+        let on_host_all = Rc::new(on_host_all);
+        let mute_others = icon_button("microphone-disabled-symbolic", "Mute everyone else", {
+            let on_host = on_host_all.clone();
+            move || on_host(HostAction::MuteOthers)
+        });
+        mute_others.set_visible(false);
+        let end_call = icon_button("window-close-symbolic", "End the call for everyone", {
+            let on_host = on_host_all.clone();
+            move || on_host(HostAction::EndCall)
+        });
+        end_call.add_css_class("destructive-action");
+        end_call.set_visible(false);
+        controls.append(&mute_others);
+        controls.append(&end_call);
 
         let leave = icon_button("call-stop-symbolic", "Leave the call", on_leave);
         leave.add_css_class("destructive-action");
@@ -179,6 +235,8 @@ impl CallDock {
             widget,
             roster,
             on_host: Rc::new(on_host),
+            mute_others,
+            end_call,
             caption,
             avatar,
             title,
@@ -239,6 +297,10 @@ impl CallDock {
             .set_text(&format!("{channel} · {people} in the call{sharing}"));
 
         self.refresh_roster(&st, avatars, call);
+
+        let i_am_host = call.host_id == st.me.id;
+        self.mute_others.set_visible(i_am_host);
+        self.end_call.set_visible(i_am_host);
 
         set_state(
             &self.mute,

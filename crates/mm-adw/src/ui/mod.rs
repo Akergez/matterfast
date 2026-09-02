@@ -157,6 +157,8 @@ enum Action {
     ToggleHand,
     /// Do something to another participant, as the call's host.
     HostControl(String, call_dock::HostAction),
+    /// React in the call: emoji name and the glyph to show.
+    CallReaction(String, String),
     /// Drop an uploaded file before it is sent.
     DropAttachment(String),
     /// Files arrived by drag and drop.
@@ -563,6 +565,19 @@ fn build_session_ui(
             let tx = tx.clone();
             move |session_id, action| {
                 let _ = tx.send_blocking(Action::HostControl(session_id, action));
+            }
+        },
+        {
+            let tx = tx.clone();
+            move |action| {
+                // These take no target: they apply to the whole call.
+                let _ = tx.send_blocking(Action::HostControl(String::new(), action));
+            }
+        },
+        {
+            let tx = tx.clone();
+            move |name, glyph| {
+                let _ = tx.send_blocking(Action::CallReaction(name, glyph));
             }
         },
     ));
@@ -1047,6 +1062,8 @@ impl Ui {
         runtime::spawn(
             async move {
                 match what {
+                    call_dock::HostAction::MuteOthers => session.host_mute_others().await,
+                    call_dock::HostAction::EndCall => session.host_end_call().await,
                     call_dock::HostAction::Mute => session.host_mute(&session_id).await,
                     call_dock::HostAction::StopSharing => {
                         session.host_screen_off(&session_id).await
@@ -4356,6 +4373,29 @@ impl Ui {
             Action::Row(channel_id, what) => self.row_action(channel_id, what),
             Action::ToggleHand => self.toggle_hand(),
             Action::HostControl(session_id, what) => self.host_control(session_id, what),
+            Action::CallReaction(name, glyph) => {
+                let Some(session) = self.state.borrow().call.as_ref().map(|c| c.session.clone())
+                else {
+                    return;
+                };
+                let ui = self.clone();
+                runtime::spawn(
+                    async move {
+                        session
+                            .react(&mattermost_calls::CallReaction {
+                                name: name.clone(),
+                                literal: glyph,
+                                ..Default::default()
+                            })
+                            .await
+                    },
+                    move |result| {
+                        if let Err(e) = result {
+                            ui.toast(&format!("Could not react: {e}"));
+                        }
+                    },
+                );
+            }
             Action::DropAttachment(file_id) => {
                 self.state
                     .borrow_mut()
