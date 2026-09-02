@@ -207,16 +207,18 @@ impl Player {
                 spinner.set_halign(gtk::Align::Center);
                 spinner.set_valign(gtk::Align::Center);
 
+                // Out of the row before into the tile: a widget cannot be
+                // given a second parent while it still has the first.
+                controls.remove(&play);
+                controls.remove(&spinner);
+                controls.set_halign(gtk::Align::Start);
+
                 let face = gtk::Overlay::builder()
                     .height_request(POSTER_HEIGHT)
                     .build();
                 face.add_css_class("video-tile");
                 face.add_overlay(&play);
                 face.add_overlay(&spinner);
-
-                controls.remove(&play);
-                controls.remove(&spinner);
-                controls.set_halign(gtk::Align::Start);
 
                 let tile = gtk::Box::builder()
                     .orientation(gtk::Orientation::Vertical)
