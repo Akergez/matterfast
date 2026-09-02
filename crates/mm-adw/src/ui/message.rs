@@ -198,7 +198,7 @@ pub fn build(
         body.append(&acknowledgement(post, state, actions));
     }
 
-    if let Some(strip) = reaction_strip(post, state, actions) {
+    if let Some(strip) = reaction_strip(post, state, avatars, actions) {
         body.append(&strip);
     }
 
@@ -302,6 +302,26 @@ fn acknowledgement(post: &Post, state: &SharedState, actions: &MessageActions) -
     }
 
     row.upcast()
+}
+
+/// One emoji, however it has to be drawn: a Unicode glyph in a label, or a
+/// custom upload as a small picture. A custom one that has not arrived shows
+/// its shortcode, which is at least readable.
+fn emoji_widget(name: &str, avatars: &Avatars) -> gtk::Widget {
+    match emoji::resolve(name) {
+        emoji::Rendered::Unicode(glyph) => gtk::Label::new(Some(glyph)).upcast(),
+        emoji::Rendered::Custom => match avatars.custom_emoji(name) {
+            Some(texture) => {
+                let picture = gtk::Picture::for_paintable(&texture);
+                picture.set_content_fit(gtk::ContentFit::Contain);
+                picture.set_width_request(18);
+                picture.set_height_request(18);
+                picture.set_tooltip_text(Some(&format!(":{name}:")));
+                picture.upcast()
+            }
+            None => gtk::Label::new(Some(&format!(":{name}:"))).upcast(),
+        },
+    }
 }
 
 /// The quoted message behind a permalink, as a compact card.
@@ -725,6 +745,7 @@ fn reaction_picker(post: &Post, actions: &MessageActions) -> gtk::Popover {
 fn reaction_strip(
     post: &Post,
     state: &SharedState,
+    avatars: &Avatars,
     actions: &MessageActions,
 ) -> Option<gtk::Widget> {
     let reactions = post.reactions();
@@ -761,7 +782,7 @@ fn reaction_strip(
             .orientation(gtk::Orientation::Horizontal)
             .spacing(4)
             .build();
-        content.append(&gtk::Label::new(Some(&emoji::label(&name))));
+        content.append(&emoji_widget(&name, avatars));
         let n = gtk::Label::new(Some(&count.to_string()));
         n.add_css_class("reaction-count");
         content.append(&n);

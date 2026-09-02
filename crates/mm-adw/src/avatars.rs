@@ -35,6 +35,8 @@ type LoadedCallback = Rc<RefCell<Option<Box<dyn Fn()>>>>;
 
 /// Marks a cache key as a file thumbnail rather than a user's picture.
 const FILE_PREFIX: &str = "file:";
+/// Marks a cache key as a custom emoji, looked up by name rather than by id.
+const EMOJI_PREFIX: &str = "emoji:";
 
 #[derive(Clone)]
 pub struct Avatars {
@@ -62,6 +64,13 @@ impl Avatars {
     /// returns `None` so the caller can draw initials meanwhile.
     pub fn texture(&self, user_id: &str) -> Option<gdk::Texture> {
         self.cached(user_id)
+    }
+
+    /// A custom emoji's image, on the same cache as everything else here.
+    /// Custom emoji are per-server uploads, so there is no local table to fall
+    /// back to — either the picture arrives or the shortcode stands in.
+    pub fn custom_emoji(&self, name: &str) -> Option<gdk::Texture> {
+        self.cached(&format!("{EMOJI_PREFIX}{name}"))
     }
 
     /// The thumbnail for an attached image, on the same cache and the same
@@ -114,10 +123,16 @@ impl Avatars {
 
         runtime::spawn(
             async move {
-                match fetch_id.strip_prefix(FILE_PREFIX) {
-                    Some(file_id) => client.file_thumbnail_bytes(file_id).await,
-                    None => client.user_image_bytes(&fetch_id).await,
+                if let Some(file_id) = fetch_id.strip_prefix(FILE_PREFIX) {
+                    return client.file_thumbnail_bytes(file_id).await;
                 }
+                if let Some(name) = fetch_id.strip_prefix(EMOJI_PREFIX) {
+                    // Two calls: the name has to become an id before the image
+                    // can be asked for.
+                    let emoji = client.emoji_by_name(name).await?;
+                    return client.emoji_image_bytes(&emoji.id).await;
+                }
+                client.user_image_bytes(&fetch_id).await
             },
             move |result| {
                 let mut loaded = false;

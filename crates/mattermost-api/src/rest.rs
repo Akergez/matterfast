@@ -1561,6 +1561,14 @@ impl Client {
         Ok(resp.bytes().await?.to_vec())
     }
 
+    /// `GET /api/v4/emoji/{id}/image` — a custom emoji's picture.
+    pub async fn emoji_image_bytes(&self, emoji_id: &str) -> Result<Vec<u8>> {
+        let resp = self
+            .send(self.request(Method::GET, &self.api(&format!("/emoji/{emoji_id}/image"))))
+            .await?;
+        Ok(resp.bytes().await?.to_vec())
+    }
+
     /// Looks a custom emoji up by name, for shortcodes that are not standard
     /// Unicode ones.
     pub async fn emoji_by_name(&self, name: &str) -> Result<Emoji> {
