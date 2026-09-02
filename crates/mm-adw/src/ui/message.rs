@@ -887,20 +887,24 @@ fn attachment(
         return open.upcast();
     }
 
-    // Video and audio play in place. Nothing is fetched until the play button
-    // is pressed — a channel with ten clips must not pull down ten clips.
+    // Video and audio play in place. The *whole file* is fetched only once
+    // the play button is pressed — a channel with ten clips must not pull
+    // down ten clips — but a video also gets a still, decoded from just the
+    // head of the file (`avatars.video_head`, cached like a thumbnail), since
+    // the server itself makes no thumbnail for video (it 400s `no_thumbnail`).
     if super::media::is_playable(file) {
         let client = state.borrow().client.clone();
         // The player is kept alive by the closure the poster button holds, and
-        // both die with the row. Its Drop removes the temp file it wrote.
+        // both die with the row. Its Drop removes the temp file(s) it wrote.
         let player = Rc::new_cyclic(|weak: &std::rc::Weak<super::media::Player>| {
             let weak = weak.clone();
-            // Only images have a thumbnail on the server — it makes none for
-            // video, so asking would be a round trip that always fails.
-            let poster = file
-                .is_image()
-                .then(|| avatars.file_thumbnail(&file.id))
-                .flatten();
+            let poster = if super::media::is_audio(file) {
+                None
+            } else {
+                avatars
+                    .video_head(&file.id)
+                    .and_then(|head| super::media::video_still(file, head.as_slice()))
+            };
             super::media::Player::new(file, poster, move |file_id| {
                 let Some(player) = weak.upgrade() else { return };
                 let client = client.clone();

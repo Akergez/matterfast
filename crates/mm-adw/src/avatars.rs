@@ -22,6 +22,9 @@ use crate::runtime;
 #[derive(Default)]
 struct Inner {
     textures: HashMap<String, gdk::Texture>,
+    /// The head of a video file — not a decoded image, so it sits beside
+    /// `textures` rather than in it. See [`Avatars::video_head`].
+    heads: HashMap<String, Rc<Vec<u8>>>,
     /// In flight, so redrawing a hundred messages does not start a hundred
     /// downloads of the same face.
     pending: HashSet<String>,
@@ -40,6 +43,16 @@ const FILE_PREFIX: &str = "file:";
 const FILE_PREVIEW_PREFIX: &str = "preview:";
 /// Marks a cache key as a custom emoji, looked up by name rather than by id.
 const EMOJI_PREFIX: &str = "emoji:";
+/// Marks a cache key as a video's head bytes (see [`Avatars::video_head`]).
+const VIDEO_HEAD_PREFIX: &str = "video-head:";
+
+/// How much of a video file to fetch for a poster attempt: enough to hold
+/// `ftyp` + `moov` for a phone-shot clip's sample table, tiny next to the
+/// clip itself. A file whose `moov` sits after `mdat` (no `-movflags
+/// +faststart`) will not fit — `ui::media::head_playable` detects that
+/// cheaply from what did come back, and the caller gives up rather than
+/// asking for more.
+const VIDEO_HEAD_BYTES: u64 = 1_500_000;
 
 #[derive(Clone)]
 pub struct Avatars {
@@ -88,6 +101,22 @@ impl Avatars {
     /// download of the original.
     pub fn file_preview(&self, file_id: &str) -> Option<gdk::Texture> {
         self.cached(&format!("{FILE_PREVIEW_PREFIX}{file_id}"))
+    }
+
+    /// The first slice of a video file's bytes — not decoded into anything,
+    /// just enough for the UI layer to judge whether a poster can be built
+    /// from it. `None` while the fetch is in flight or has failed; a redraw
+    /// triggered by [`connect_loaded`](Avatars::connect_loaded) is what
+    /// picks it up once it lands.
+    ///
+    /// Cached like everything else here, so scrolling a video row out of view
+    /// and back does not repeat the request.
+    pub fn video_head(&self, file_id: &str) -> Option<Rc<Vec<u8>>> {
+        if let Some(bytes) = self.inner.borrow().heads.get(file_id) {
+            return Some(bytes.clone());
+        }
+        self.request(&format!("{VIDEO_HEAD_PREFIX}{file_id}"));
+        None
     }
 
     fn cached(&self, key: &str) -> Option<gdk::Texture> {
@@ -145,6 +174,9 @@ impl Avatars {
                 if let Some(file_id) = fetch_id.strip_prefix(FILE_PREVIEW_PREFIX) {
                     return client.file_preview_bytes(file_id).await;
                 }
+                if let Some(file_id) = fetch_id.strip_prefix(VIDEO_HEAD_PREFIX) {
+                    return client.download_file_range(file_id, VIDEO_HEAD_BYTES).await;
+                }
                 if let Some(name) = fetch_id.strip_prefix(EMOJI_PREFIX) {
                     // Two calls: the name has to become an id before the image
                     // can be asked for.
@@ -159,6 +191,13 @@ impl Avatars {
                     let mut inner = this.inner.borrow_mut();
                     inner.pending.remove(&done_id);
                     match result {
+                        // Raw bytes to keep, not an image to decode — the
+                        // caller inspects and plays these, this cache just
+                        // spares it a second fetch on the next redraw.
+                        Ok(bytes) if done_id.starts_with(VIDEO_HEAD_PREFIX) => {
+                            inner.heads.insert(done_id, Rc::new(bytes));
+                            loaded = true;
+                        }
                         Ok(bytes) => {
                             match gdk::Texture::from_bytes(&glib::Bytes::from_owned(bytes)) {
                                 Ok(texture) => {

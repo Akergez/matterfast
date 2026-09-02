@@ -14,7 +14,7 @@
 
 use std::sync::{Arc, RwLock};
 
-use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, CONTENT_TYPE};
+use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, CONTENT_TYPE, RANGE};
 use reqwest::{Method, StatusCode};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -1354,6 +1354,24 @@ impl Client {
     pub async fn download_file(&self, file_id: &str) -> Result<Vec<u8>> {
         let resp = self
             .send(self.request(Method::GET, &self.api(&format!("/files/{file_id}"))))
+            .await?;
+        Ok(resp.bytes().await?.to_vec())
+    }
+
+    /// `GET /api/v4/files/{file}` with `Range: bytes=0-{len-1}` — just the
+    /// head of a file, for building a video poster from its container's
+    /// index without downloading the whole clip (see
+    /// `ui::media::head_playable` in the GTK client).
+    ///
+    /// The route is served by Go's `http.ServeContent`, which honours `Range`
+    /// and answers `206 Partial Content`; a proxy that strips the header
+    /// falls back to the whole file, which still decodes, just costs more.
+    pub async fn download_file_range(&self, file_id: &str, len: u64) -> Result<Vec<u8>> {
+        let resp = self
+            .send(
+                self.request(Method::GET, &self.api(&format!("/files/{file_id}")))
+                    .header(RANGE, format!("bytes=0-{}", len.saturating_sub(1))),
+            )
             .await?;
         Ok(resp.bytes().await?.to_vec())
     }
