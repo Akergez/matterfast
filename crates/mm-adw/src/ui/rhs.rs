@@ -36,6 +36,8 @@ pub struct RightPanel {
     thread_list: gtk::Box,
     thread_scroller: gtk::ScrolledWindow,
     thread_entry: gtk::TextView,
+    /// Set while a draft is being restored, so it is not mistaken for typing.
+    restoring: Rc<RefCell<bool>>,
 
     search_list: gtk::Box,
 
@@ -55,6 +57,7 @@ impl RightPanel {
         on_reply: impl Fn(String) + 'static,
         on_open_thread: impl Fn(String) + 'static,
         on_open_post: impl Fn(String, String) + 'static,
+        on_draft: impl Fn() + 'static,
     ) -> Rc<Self> {
         let title = gtk::Label::builder()
             .ellipsize(gtk::pango::EllipsizeMode::End)
@@ -175,6 +178,17 @@ impl RightPanel {
         });
         thread_entry.add_controller(keys);
 
+        let restoring = Rc::new(RefCell::new(false));
+        thread_entry.buffer().connect_changed({
+            let restoring = restoring.clone();
+            let on_draft = Rc::new(on_draft);
+            move |_| {
+                if !*restoring.borrow() {
+                    on_draft();
+                }
+            }
+        });
+
         let thread_page = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .build();
@@ -237,6 +251,7 @@ impl RightPanel {
             thread_list,
             thread_scroller,
             thread_entry,
+            restoring,
             search_list,
             inbox_stack,
             saved_list,
@@ -257,6 +272,27 @@ impl RightPanel {
 
     pub fn focus_composer(&self) {
         self.thread_entry.grab_focus();
+    }
+
+    /// What is in the thread's reply box.
+    pub fn composer_text(&self) -> String {
+        let buffer = self.thread_entry.buffer();
+        buffer
+            .text(&buffer.start_iter(), &buffer.end_iter(), false)
+            .to_string()
+    }
+
+    /// Puts a thread draft back. Guarded like the channel composer's: setting
+    /// the buffer fires `changed`, which must not be read as typing.
+    pub fn set_composer_text(&self, text: &str) {
+        if self.composer_text() == text {
+            return;
+        }
+        *self.restoring.borrow_mut() = true;
+        self.thread_entry.buffer().set_text(text);
+        let buffer = self.thread_entry.buffer();
+        buffer.place_cursor(&buffer.end_iter());
+        *self.restoring.borrow_mut() = false;
     }
 
     /// Redraws whatever the panel is currently showing.

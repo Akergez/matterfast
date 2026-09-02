@@ -147,6 +147,8 @@ enum Action {
     Complete(Option<autocomplete::Query>),
     /// Send what is in the composer at a chosen time instead of now.
     ScheduleMessage,
+    /// The thread panel's reply box changed.
+    ThreadDraftChanged,
 }
 
 pub fn build_window(app: &adw::Application) {
@@ -459,6 +461,12 @@ fn build_session_ui(
                 let _ = tx.send_blocking(Action::OpenPost(channel, root));
             }
         },
+        {
+            let tx = tx.clone();
+            move || {
+                let _ = tx.send_blocking(Action::ThreadDraftChanged);
+            }
+        },
     );
 
     // The right panel overlays the conversation rather than adding a permanent
@@ -618,6 +626,7 @@ fn build_session_ui(
         sidebar_reload_pending: std::cell::Cell::new(false),
         typing_sweep_pending: std::cell::Cell::new(false),
         draft_save_pending: std::cell::Cell::new(false),
+        thread_draft_pending: std::cell::Cell::new(false),
         snapshot_pending: std::cell::Cell::new(false),
         typing_sent_recently: std::cell::Cell::new(false),
         dock_in_chat: std::cell::Cell::new(false),
@@ -767,6 +776,7 @@ struct Ui {
     sidebar_reload_pending: std::cell::Cell<bool>,
     typing_sweep_pending: std::cell::Cell<bool>,
     draft_save_pending: std::cell::Cell<bool>,
+    thread_draft_pending: std::cell::Cell<bool>,
     snapshot_pending: std::cell::Cell<bool>,
     typing_sent_recently: std::cell::Cell<bool>,
     dock_in_chat: std::cell::Cell<bool>,
@@ -2133,6 +2143,81 @@ impl Ui {
                     },
                 );
             }
+            PostAction::Acknowledge | PostAction::Unacknowledge => {
+                let ack = what == PostAction::Acknowledge;
+                let ui = self.clone();
+                runtime::spawn(
+                    async move {
+                        if ack {
+                            client.acknowledge_post(&me, &post_id).await.map(|_| ())
+                        } else {
+                            client.unacknowledge_post(&me, &post_id).await
+                        }
+                    },
+                    move |result| {
+                        // The server broadcasts the change, which is what
+                        // redraws the row; only a failure needs saying.
+                        if let Err(e) = result {
+                            ui.toast(&format!("Could not do that: {e}"));
+                        }
+                    },
+                );
+            }
+            PostAction::MoveThread => {
+                // Reuse the jump-to switcher: picking a destination channel is
+                // the same act as picking one to read, and a second list would
+                // be a second thing to keep working.
+                let holder: Rc<RefCell<Option<Rc<switcher::Switcher>>>> =
+                    Rc::new(RefCell::new(None));
+                let search_ui = self.clone();
+                let move_ui = self.clone();
+                let search_holder = holder.clone();
+                let opened = Rc::new(switcher::Switcher::present(
+                    &self.window,
+                    move |term| {
+                        let lowered = term.to_lowercase();
+                        let st = search_ui.state.borrow();
+                        let mut rows: Vec<(switcher::Target, String, String, String)> = st
+                            .channels
+                            .values()
+                            .filter(|c| c.delete_at == 0 && c.r#type != ChannelType::Direct)
+                            .filter_map(|channel| {
+                                let title = st.channel_title(channel);
+                                (lowered.is_empty() || title.to_lowercase().contains(&lowered))
+                                    .then(|| {
+                                        (
+                                            switcher::Target::Channel(channel.id.clone()),
+                                            title,
+                                            String::new(),
+                                            channel_icon_name(channel),
+                                        )
+                                    })
+                            })
+                            .collect();
+                        rows.sort_by_key(|row| row.1.to_lowercase());
+                        rows.truncate(QUICK_SWITCH_ROWS);
+                        if let Some(switcher) = search_holder.borrow().as_ref() {
+                            switcher.set_results(rows);
+                        }
+                    },
+                    move |target| {
+                        let switcher::Target::Channel(channel_id) = target else {
+                            return;
+                        };
+                        let client = client.clone();
+                        let post_id = post_id.clone();
+                        let ui = move_ui.clone();
+                        runtime::spawn(
+                            async move { client.move_thread(&post_id, &channel_id).await },
+                            move |result| match result {
+                                Ok(()) => ui.toast("Thread moved."),
+                                Err(e) => ui.toast(&format!("Could not move it: {e}")),
+                            },
+                        );
+                    },
+                ));
+                *holder.borrow_mut() = Some(opened);
+            }
             PostAction::Edit => self.chat.begin_edit(&post_id, post.source_text()),
             PostAction::Delete => self.confirm_delete(post_id),
             PostAction::Pin | PostAction::Unpin => {
@@ -2259,6 +2344,67 @@ impl Ui {
         );
     }
 
+    /// A thread's reply box has its own draft, keyed by the thread root —
+    /// which is how the server stores them too, so they sync with the other
+    /// clients rather than only surviving locally.
+    fn schedule_thread_draft_save(self: &Rc<Self>) {
+        if self.thread_draft_pending.replace(true) {
+            return;
+        }
+        let ui = self.clone();
+        glib::timeout_add_local_once(std::time::Duration::from_millis(900), move || {
+            ui.thread_draft_pending.set(false);
+            ui.save_thread_draft();
+        });
+    }
+
+    fn save_thread_draft(self: &Rc<Self>) {
+        let PanelMode::Thread(root_id) = self.right.mode() else {
+            return;
+        };
+        let text = self.right.composer_text();
+        let (client, channel_id, synced, changed) = {
+            let mut st = self.state.borrow_mut();
+            let Some(channel_id) = st.find_post(&root_id).map(|p| p.channel_id.clone()) else {
+                return;
+            };
+            let trimmed = text.trim().to_string();
+            let changed = if trimmed.is_empty() {
+                st.thread_drafts.remove(&root_id).is_some()
+            } else {
+                st.thread_drafts.insert(root_id.clone(), trimmed.clone()) != Some(trimmed)
+            };
+            (st.client.clone(), channel_id, st.drafts_synced, changed)
+        };
+        if !changed || !synced {
+            return;
+        }
+
+        let draft = mattermost_api::models::Draft::new(&channel_id, &root_id, text.trim());
+        runtime::spawn(
+            async move { client.upsert_draft(&draft).await.map(|_| ()) },
+            move |result| {
+                if let Err(e) = result {
+                    tracing::warn!(error = %e, "could not save the thread draft");
+                }
+            },
+        );
+    }
+
+    fn restore_thread_draft(&self) {
+        let text = match self.right.mode() {
+            PanelMode::Thread(root_id) => self
+                .state
+                .borrow()
+                .thread_drafts
+                .get(&root_id)
+                .cloned()
+                .unwrap_or_default(),
+            _ => return,
+        };
+        self.right.set_composer_text(&text);
+    }
+
     /// Saves the composer as a draft shortly after typing stops.
     ///
     /// Debounced rather than per-keystroke: a draft is worth one request when
@@ -2339,11 +2485,13 @@ impl Ui {
                     {
                         let mut st = ui.state.borrow_mut();
                         for draft in drafts {
-                            // Thread drafts have their own composer, which does
-                            // not exist yet; ignore them rather than showing a
-                            // thread reply in the channel box.
-                            if draft.root_id.is_empty() && !draft.message.is_empty() {
+                            if draft.message.is_empty() {
+                                continue;
+                            }
+                            if draft.root_id.is_empty() {
                                 st.drafts.insert(draft.channel_id, draft.message);
+                            } else {
+                                st.thread_drafts.insert(draft.root_id, draft.message);
                             }
                         }
                     }
@@ -2649,6 +2797,10 @@ impl Ui {
             Action::ToggleCamera => self.toggle_camera(),
             Action::OpenThread(root_id) => self.open_thread(root_id),
             Action::ReplyInThread(text) => {
+                // The reply box is empty after this, and the draft has to go
+                // with it — immediately, not on the debounce.
+                let flush = self.clone();
+                glib::idle_add_local_once(move || flush.save_thread_draft());
                 if let PanelMode::Thread(root) = self.right.mode() {
                     self.send_message(text, Some(root));
                 }
@@ -2670,6 +2822,7 @@ impl Ui {
             Action::Search(terms) => self.search(terms),
             Action::Complete(query) => self.complete(query),
             Action::ScheduleMessage => self.schedule_message(),
+            Action::ThreadDraftChanged => self.schedule_thread_draft_save(),
             Action::PickAttachment => self.pick_attachment(),
             Action::AttachFiles(paths) => {
                 let Some(channel_id) = self.state.borrow().current_channel.clone() else {
@@ -2895,10 +3048,13 @@ impl Ui {
     // ---------------------------------------------------------------- threads
 
     fn open_thread(self: &Rc<Self>, root_id: String) {
+        // Flush the previous thread's reply before the box is reused.
+        self.save_thread_draft();
         self.right.set_mode(PanelMode::Thread(root_id.clone()));
         self.refresh_panel_mode();
         self.overlay.set_show_sidebar(true);
         self.refresh_messages();
+        self.restore_thread_draft();
 
         // Always refetch. A thread we opened earlier may have grown, and the
         // root's reply count is not enough to tell which replies we hold.
@@ -3839,14 +3995,18 @@ impl Ui {
                 Event::DraftCreated(draft) => {
                     if draft.root_id.is_empty() {
                         st.drafts.insert(draft.channel_id, draft.message);
-                        redraw_draft = true;
+                    } else {
+                        st.thread_drafts.insert(draft.root_id, draft.message);
                     }
+                    redraw_draft = true;
                 }
                 Event::DraftDeleted(draft) => {
                     if draft.root_id.is_empty() {
                         st.drafts.remove(&draft.channel_id);
-                        redraw_draft = true;
+                    } else {
+                        st.thread_drafts.remove(&draft.root_id);
                     }
+                    redraw_draft = true;
                 }
                 Event::ChannelCreated { .. }
                 | Event::ChannelUpdated { .. }
@@ -3897,6 +4057,7 @@ impl Ui {
         }
         if redraw_draft {
             self.restore_draft();
+            self.restore_thread_draft();
             redraw_sidebar = true;
         }
 

@@ -175,6 +175,9 @@ pub struct AppState {
     /// the plugin is not installed, which is indistinguishable from "nothing
     /// new" and needs no special case.
     pub reaction_unread: i64,
+    /// Unsent replies, keyed by thread root. Separate from `drafts` because
+    /// the server keys them the same way: one per (channel, root) pair.
+    pub thread_drafts: HashMap<String, String>,
     /// False once the server has told us drafts are turned off, after which
     /// they are kept in this map and nowhere else.
     pub drafts_synced: bool,
@@ -238,6 +241,7 @@ impl AppState {
             active_calls: HashMap::new(),
             call: None,
             drafts: HashMap::new(),
+            thread_drafts: HashMap::new(),
             drafts_synced: true,
             bots: Vec::new(),
             pending_files: Vec::new(),

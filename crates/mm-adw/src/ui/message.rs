@@ -51,6 +51,11 @@ pub enum PostAction {
     Remind,
     /// Show what this message said before it was edited.
     History,
+    /// Move this thread to another channel.
+    MoveThread,
+    /// Confirm you have read a priority message, or take it back.
+    Acknowledge,
+    Unacknowledge,
 }
 
 pub struct RowOptions {
@@ -176,6 +181,14 @@ pub fn build(
         body.append(&attachment(file, avatars, state));
     }
 
+    if post
+        .priority()
+        .and_then(|p| p.requested_ack)
+        .unwrap_or(false)
+    {
+        body.append(&acknowledgement(post, state, actions));
+    }
+
     if let Some(strip) = reaction_strip(post, state, actions) {
         body.append(&strip);
     }
@@ -225,6 +238,63 @@ pub fn build(
 }
 
 /// The small react / reply buttons on the right of a row.
+/// The "please confirm you have read this" row on a priority message. Shown
+/// as a button until you press it, then as who has.
+fn acknowledgement(post: &Post, state: &SharedState, actions: &MessageActions) -> gtk::Widget {
+    let st = state.borrow();
+    let acks = post
+        .metadata
+        .as_ref()
+        .map(|m| m.acknowledgements.as_slice())
+        .unwrap_or_default();
+    let mine = acks.iter().any(|a| a.user_id == st.me.id);
+
+    let row = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(8)
+        .margin_top(4)
+        .build();
+
+    let button = gtk::Button::builder()
+        .label(if mine { "Acknowledged" } else { "Acknowledge" })
+        .build();
+    button.add_css_class("pill");
+    if mine {
+        button.add_css_class("success");
+    } else {
+        button.add_css_class("suggested-action");
+    }
+    button.connect_clicked({
+        let actions = actions.clone();
+        let post_id = post.id.clone();
+        move |_| {
+            (actions.post_action)(
+                post_id.clone(),
+                if mine {
+                    PostAction::Unacknowledge
+                } else {
+                    PostAction::Acknowledge
+                },
+            )
+        }
+    });
+    row.append(&button);
+
+    if !acks.is_empty() {
+        let names: Vec<String> = acks
+            .iter()
+            .filter_map(|a| st.users.get(&a.user_id))
+            .map(|u| st.display_name(u))
+            .collect();
+        let count = gtk::Label::new(Some(&format!("{} acknowledged", acks.len())));
+        count.add_css_class("dim-label");
+        count.set_tooltip_text(Some(&names.join(", ")));
+        row.append(&count);
+    }
+
+    row.upcast()
+}
+
 /// An attached file. Images show themselves; everything else is a name and a
 /// size, which is all there is to say about it without opening it.
 fn attachment(
@@ -434,6 +504,7 @@ fn overflow_menu(post: &Post, actions: &MessageActions, mine: bool) -> gtk::Widg
     }
     if post.reply_count > 0 {
         entries.push(("Summarise thread", "summarise", PostAction::Summarise));
+        entries.push(("Move thread…", "move", PostAction::MoveThread));
     }
     if mine {
         entries.push(("Edit", "edit", PostAction::Edit));
