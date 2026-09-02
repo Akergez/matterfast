@@ -22,7 +22,10 @@ use crate::state::SharedState;
 #[derive(Debug, Clone, Copy)]
 pub enum HostAction {
     Mute,
+    StopSharing,
+    LowerHand,
     Remove,
+    MakeHost,
 }
 
 pub struct CallDock {
@@ -371,18 +374,40 @@ impl CallDock {
             let i_am_host = call.host_id == st.me.id;
             if i_am_host && user_id != &st.me.id {
                 if let Some(session_id) = call.sessions.get(user_id) {
-                    for (icon, tooltip, action) in [
-                        (
-                            "microphone-disabled-symbolic",
-                            "Mute them",
-                            HostAction::Mute,
-                        ),
-                        (
-                            "list-remove-symbolic",
-                            "Remove from call",
-                            HostAction::Remove,
-                        ),
-                    ] {
+                    // Only the controls that apply: offering "stop sharing"
+                    // to someone who is not sharing is a button that does
+                    // nothing.
+                    let mut controls = vec![(
+                        "microphone-disabled-symbolic",
+                        "Mute them",
+                        HostAction::Mute,
+                    )];
+                    if call.sharing.contains(user_id) {
+                        controls.push((
+                            "video-display-symbolic",
+                            "Stop their screen share",
+                            HostAction::StopSharing,
+                        ));
+                    }
+                    if call.hands.iter().any(|id| id == user_id) {
+                        controls.push((
+                            "view-sort-descending-symbolic",
+                            "Lower their hand",
+                            HostAction::LowerHand,
+                        ));
+                    }
+                    controls.push((
+                        "emblem-default-symbolic",
+                        "Make them the host",
+                        HostAction::MakeHost,
+                    ));
+                    controls.push((
+                        "list-remove-symbolic",
+                        "Remove from call",
+                        HostAction::Remove,
+                    ));
+
+                    for (icon, tooltip, action) in controls {
                         let button = gtk::Button::builder()
                             .icon_name(icon)
                             .tooltip_text(tooltip)
@@ -392,8 +417,14 @@ impl CallDock {
                         button.add_css_class("circular");
                         button.connect_clicked({
                             let on_host = self.on_host.clone();
-                            let session_id = session_id.clone();
-                            move |_| on_host(session_id.clone(), action)
+                            // Most host routes address a session; making
+                            // someone host addresses the person, since every
+                            // session of theirs gains it at once.
+                            let target = match action {
+                                HostAction::MakeHost => user_id.clone(),
+                                _ => session_id.clone(),
+                            };
+                            move |_| on_host(target.clone(), action)
                         });
                         row.append(&button);
                     }

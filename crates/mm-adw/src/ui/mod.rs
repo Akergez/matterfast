@@ -1010,6 +1010,11 @@ impl Ui {
             async move {
                 match what {
                     call_dock::HostAction::Mute => session.host_mute(&session_id).await,
+                    call_dock::HostAction::StopSharing => {
+                        session.host_screen_off(&session_id).await
+                    }
+                    call_dock::HostAction::LowerHand => session.host_lower_hand(&session_id).await,
+                    call_dock::HostAction::MakeHost => session.host_make(&session_id).await,
                     call_dock::HostAction::Remove => session.host_remove(&session_id).await,
                 }
             },
@@ -4160,6 +4165,36 @@ impl Ui {
                 .any(|t| t.id == root_id && t.is_following)
         };
         self.right.set_following(following);
+
+        // Opening a thread is reading it, so its unread count should go —
+        // the inbox badge only ever grew before.
+        {
+            let (client, team_id, unread) = {
+                let st = self.state.borrow();
+                let unread = st
+                    .thread_inbox
+                    .iter()
+                    .any(|t| t.id == root_id && t.unread_replies > 0);
+                (
+                    st.client.clone(),
+                    st.current_team.clone().unwrap_or_default(),
+                    unread,
+                )
+            };
+            if unread && !team_id.is_empty() {
+                let id = root_id.clone();
+                let ui = self.clone();
+                let now = glib::real_time() / 1000;
+                runtime::spawn(
+                    async move { client.mark_thread_read(&team_id, &id, now).await },
+                    move |result| {
+                        if result.is_ok() {
+                            ui.load_inbox();
+                        }
+                    },
+                );
+            }
+        }
 
         // Always refetch. A thread we opened earlier may have grown, and the
         // root's reply count is not enough to tell which replies we hold.

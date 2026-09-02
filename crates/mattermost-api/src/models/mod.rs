@@ -34,8 +34,9 @@ pub use channel::{
 pub use draft::Draft;
 pub use file::{FileInfo, FileInfoList, FileUploadResponse};
 pub use post::{
-    Emoji, Participant, Post, PostAcknowledgement, PostEmbed, PostList, PostMetadata, PostPriority,
-    PostSearchResults, Reaction, ScheduledPost, UserThread, UserThreads,
+    AttachmentField, Emoji, MessageAttachment, Participant, Post, PostAcknowledgement, PostEmbed,
+    PostList, PostMetadata, PostPriority, PostSearchResults, Reaction, ScheduledPost, UserThread,
+    UserThreads,
 };
 pub use team::{Team, TeamMember, TeamUnread};
 pub use upload::UploadSession;

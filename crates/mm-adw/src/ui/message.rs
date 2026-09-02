@@ -177,6 +177,12 @@ pub fn build(
         body.append(&edited);
     }
 
+    // A webhook or plugin card. These usually come with an empty message, so
+    // ignoring them renders nothing at all for the message.
+    for card in post.attachments() {
+        body.append(&attachment_card(&card));
+    }
+
     for file in post.files() {
         body.append(&attachment(file, avatars, state));
     }
@@ -304,6 +310,115 @@ fn acknowledgement(post: &Post, state: &SharedState, actions: &MessageActions) -
         row.append(&count);
     }
 
+    row.upcast()
+}
+
+/// One rich card: a coloured stripe, a title that may be a link, some text,
+/// and its fields laid out as label-and-value rows.
+fn attachment_card(card: &mattermost_api::models::MessageAttachment) -> gtk::Widget {
+    let content = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(2)
+        .build();
+
+    let line = |text: &str, classes: &[&str]| {
+        let label = gtk::Label::builder()
+            .label(text)
+            .xalign(0.0)
+            .wrap(true)
+            .selectable(true)
+            .can_focus(false)
+            .build();
+        for class in classes {
+            label.add_css_class(class);
+        }
+        label
+    };
+
+    if !card.author_name.is_empty() {
+        content.append(&line(&card.author_name, &["caption", "dim-label"]));
+    }
+    if !card.pretext.is_empty() {
+        content.append(&line(&card.pretext, &["dim-label"]));
+    }
+    if !card.title.is_empty() {
+        // A title with a link is a link; without one it is just bold.
+        if card.title_link.is_empty() {
+            content.append(&line(&card.title, &["heading"]));
+        } else {
+            let title = line("", &["heading"]);
+            title.set_markup(&format!(
+                "<a href=\"{}\">{}</a>",
+                crate::markdown::escape_for_pango(&card.title_link),
+                crate::markdown::escape_for_pango(&card.title)
+            ));
+            content.append(&title);
+        }
+    }
+    if !card.text.is_empty() {
+        for block in crate::markdown::parse(&card.text) {
+            content.append(&render_block(block));
+        }
+    }
+
+    for field in &card.fields {
+        let value = field.text();
+        if field.title.is_empty() && value.is_empty() {
+            continue;
+        }
+        let row = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .margin_top(4)
+            .build();
+        if !field.title.is_empty() {
+            row.append(&line(&field.title, &["caption-heading"]));
+        }
+        if !value.is_empty() {
+            row.append(&line(&value, &[]));
+        }
+        content.append(&row);
+    }
+
+    if !card.footer.is_empty() {
+        content.append(&line(&card.footer, &["caption", "dim-label"]));
+    }
+    // Nothing usable in the card itself: the fallback is what it is for.
+    if content.first_child().is_none() && !card.fallback.is_empty() {
+        content.append(&line(&card.fallback, &[]));
+    }
+
+    content.set_hexpand(true);
+    content.set_margin_start(10);
+
+    // The sender's colour, where they gave one — it usually encodes the status
+    // of whatever the card reports, so it carries meaning. Drawn rather than
+    // styled: a per-widget stylesheet needs the style context, deprecated in
+    // GTK 4.10, and one CSS provider per card would be a lot of stylesheets.
+    let stripe = gtk::DrawingArea::builder().width_request(3).build();
+    let colour = gtk::gdk::RGBA::parse(&card.color).ok();
+    stripe.set_draw_func(move |area, cr, width, height| {
+        let colour = colour.unwrap_or_else(|| {
+            // No colour given: a muted version of whatever the text is, so it
+            // still reads as a card in either light or dark.
+            let fg = area.color();
+            gtk::gdk::RGBA::new(fg.red(), fg.green(), fg.blue(), 0.3)
+        });
+        cr.set_source_rgba(
+            colour.red() as f64,
+            colour.green() as f64,
+            colour.blue() as f64,
+            colour.alpha() as f64,
+        );
+        cr.rectangle(0.0, 0.0, width as f64, height as f64);
+        let _ = cr.fill();
+    });
+
+    let row = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .build();
+    row.add_css_class("attachment-card");
+    row.append(&stripe);
+    row.append(&content);
     row.upcast()
 }
 

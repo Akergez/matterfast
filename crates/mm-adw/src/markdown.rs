@@ -208,6 +208,12 @@ fn inline(text: &str) -> String {
     out
 }
 
+/// Escapes the five characters Pango treats as markup. Public because message
+/// rendering builds a little markup of its own.
+pub fn escape_for_pango(text: &str) -> String {
+    escape(text)
+}
+
 /// Escapes the five characters Pango treats as markup.
 fn escape(text: &str) -> String {
     let mut out = String::with_capacity(text.len());

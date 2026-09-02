@@ -124,6 +124,17 @@ impl Post {
         self.metadata.as_ref()?.priority.as_ref()
     }
 
+    /// The rich cards a webhook, plugin or integration attached. They live in
+    /// `props`, not in metadata, and a message that carries them usually has
+    /// an empty `message` — so a client that ignores them renders nothing at
+    /// all for a whole class of messages.
+    pub fn attachments(&self) -> Vec<MessageAttachment> {
+        self.props
+            .get("attachments")
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
+            .unwrap_or_default()
+    }
+
     /// Link previews the server resolved for this message.
     pub fn embeds(&self) -> &[PostEmbed] {
         self.metadata
@@ -144,6 +155,55 @@ impl Post {
             .as_ref()
             .map(|m| m.reactions.as_slice())
             .unwrap_or(&[])
+    }
+}
+
+/// A rich card attached to a post (`model.SlackAttachment`). Named for its
+/// Slack ancestry, which is also why the field names are what they are.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct MessageAttachment {
+    #[serde(default)]
+    pub fallback: String,
+    /// A CSS colour for the stripe down the side, when the sender set one.
+    #[serde(default)]
+    pub color: String,
+    #[serde(default)]
+    pub pretext: String,
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub author_name: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub title_link: String,
+    #[serde(default)]
+    pub fields: Vec<AttachmentField>,
+    #[serde(default)]
+    pub footer: String,
+    #[serde(default)]
+    pub image_url: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct AttachmentField {
+    #[serde(default)]
+    pub title: String,
+    /// Free-form: a string, a number, or occasionally a nested object.
+    #[serde(default)]
+    pub value: serde_json::Value,
+    #[serde(default)]
+    pub short: bool,
+}
+
+impl AttachmentField {
+    /// The value as something printable, whatever shape it arrived in.
+    pub fn text(&self) -> String {
+        match &self.value {
+            serde_json::Value::String(s) => s.clone(),
+            serde_json::Value::Null => String::new(),
+            other => other.to_string(),
+        }
     }
 }
 

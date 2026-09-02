@@ -148,6 +148,13 @@
   margin: 12px 0 4px 0;
 }
 
+/* A webhook or plugin card. The stripe is the sender's colour when they give
+   one, and this grey when they do not. */
+.attachment-card {
+  padding: 4px 0;
+  margin-top: 4px;
+}
+
 /* Where reading stopped. Accent-coloured because it is a landmark you are
    looking for, not a separator you read past. */
 .unread-line separator {
