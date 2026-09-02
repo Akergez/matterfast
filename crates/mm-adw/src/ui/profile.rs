@@ -150,6 +150,21 @@ pub fn popover(
 
     let popover = gtk::Popover::builder().child(&column).build();
     popover.set_parent(anchor);
+
+    // A popover is a child of what it points at, and nothing takes it back
+    // off: click an avatar ten times and ten of them hang off that button,
+    // and a row rebuilt while one is open is finalized with a child still
+    // attached — which is what GTK was complaining about on every refresh.
+    // Unparenting from the close handler itself would run inside GTK's own
+    // emission, so it waits a tick.
+    popover.connect_closed(|popover| {
+        let popover = popover.clone();
+        glib::idle_add_local_once(move || popover.unparent());
+    });
+    anchor.connect_destroy({
+        let popover = popover.clone();
+        move |_| popover.unparent()
+    });
     Some(popover)
 }
 

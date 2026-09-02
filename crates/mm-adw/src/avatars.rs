@@ -118,6 +118,12 @@ impl Avatars {
     }
 
     fn request(&self, user_id: &str) {
+        // A post from a webhook or an integration carries no author id, and
+        // the server answers a request for one with "invalid user_id" — a
+        // round trip to be told what is already known here.
+        if user_id.is_empty() || user_id.ends_with(':') {
+            return;
+        }
         {
             let mut inner = self.inner.borrow_mut();
             if inner.pending.contains(user_id) || inner.failed.contains(user_id) {
