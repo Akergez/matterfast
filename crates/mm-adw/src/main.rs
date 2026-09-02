@@ -12,6 +12,7 @@ mod audio;
 mod avatars;
 mod demo;
 mod emoji;
+mod markdown;
 mod runtime;
 mod session;
 mod state;

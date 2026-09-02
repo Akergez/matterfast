@@ -119,6 +119,20 @@
   padding-right: 6px;
 }
 
+/* A fenced code block. Monospace, on its own tinted panel, so it reads as
+   something quoted rather than as more prose. */
+.message-code {
+  font-family: monospace;
+  font-size: 0.9rem;
+  padding: 6px 8px;
+}
+
+.message-code-frame {
+  background-color: alpha(currentColor, 0.06);
+  border-radius: 6px;
+  margin: 2px 6px 2px 0;
+}
+
 .message-system {
   font-style: italic;
   opacity: 0.7;

@@ -158,18 +158,9 @@ pub fn build(
         body.append(&meta);
     }
 
-    let text = gtk::Label::builder()
-        .label(&post.message)
-        .xalign(0.0)
-        .wrap(true)
-        .wrap_mode(gtk::pango::WrapMode::WordChar)
-        .selectable(true)
-        // Selectable labels select all their text when they take keyboard
-        // focus, so the first message would come up highlighted.
-        .can_focus(false)
-        .build();
-    text.add_css_class("message-body");
-    body.append(&text);
+    for block in crate::markdown::parse(&post.message) {
+        body.append(&render_block(block));
+    }
 
     if post.is_edited() {
         let edited = gtk::Label::builder().label("(edited)").xalign(0.0).build();
@@ -235,6 +226,45 @@ pub fn build(
 }
 
 /// The small react / reply buttons on the right of a row.
+/// One piece of a message. Prose is a label with Pango markup; a code block is
+/// a monospaced label that must *not* be told to read markup — its text is
+/// literal, and code is exactly the content most likely to contain angle
+/// brackets.
+fn render_block(block: crate::markdown::Block) -> gtk::Widget {
+    let label = gtk::Label::builder()
+        .xalign(0.0)
+        .wrap(true)
+        .wrap_mode(gtk::pango::WrapMode::WordChar)
+        .selectable(true)
+        // Selectable labels select all their text when they take keyboard
+        // focus, so the first message would come up highlighted.
+        .can_focus(false)
+        .build();
+
+    match block {
+        crate::markdown::Block::Text(markup) => {
+            label.set_markup(&markup);
+            label.add_css_class("message-body");
+            label.upcast()
+        }
+        crate::markdown::Block::Code { text, .. } => {
+            label.set_text(&text);
+            label.set_wrap(false);
+            label.add_css_class("message-code");
+            // Long lines scroll rather than widening the whole conversation.
+            let scroller = gtk::ScrolledWindow::builder()
+                .hscrollbar_policy(gtk::PolicyType::Automatic)
+                .vscrollbar_policy(gtk::PolicyType::Never)
+                .propagate_natural_height(true)
+                .propagate_natural_width(true)
+                .child(&label)
+                .build();
+            scroller.add_css_class("message-code-frame");
+            scroller.upcast()
+        }
+    }
+}
+
 fn hover_actions(
     post: &Post,
     actions: &MessageActions,

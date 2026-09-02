@@ -214,7 +214,7 @@ fn dev_channel_feed() -> ChannelFeed {
             "p-4",
             "c-dev",
             "u-sara",
-            "So parse the track id instead: `{type}_{sessionID}_{rand}`.",
+            "So parse the track id instead:\n\n```go\nparts := strings.Split(trackID, \"_\")\n```\n\n- **type** first\n- then the *session*\n- see [the notes](https://example.com/rtc)",
             BASE + 95_000,
         ),
         post(
