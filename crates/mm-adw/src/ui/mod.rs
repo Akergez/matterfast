@@ -5552,6 +5552,7 @@ impl Ui {
         let mut reload_teams = false;
         let mut reload_inbox = false;
         let mut open_dialog: Option<mattermost_api::models::dialog::OpenDialogRequest> = None;
+        let mut notice: Option<String> = None;
         let mut refetch_post: Option<String> = None;
         let mut forget_avatar: Option<String> = None;
         let mut notify_about: Option<mattermost_api::ws::Posted> = None;
@@ -5626,6 +5627,11 @@ impl Ui {
                 // A plugin or slash command asking for a form. Shown outside
                 // the state borrow, since it needs the window.
                 Event::OpenDialog(request) => open_dialog = Some(*request),
+                Event::TeamsChanged => reload_teams = true,
+                // The directory is refetched lazily: everyone on screen is
+                // already held, and a deactivated user's posts do not vanish.
+                Event::UsersChanged | Event::EmojiChanged => {}
+                Event::Notice { message } => notice = Some(message),
                 Event::ThreadsChanged => reload_inbox = true,
                 // Nothing on screen depends on these continuously; they matter
                 // when one of those windows is open, and it refills on open.
@@ -5800,6 +5806,9 @@ impl Ui {
         }
         if let Some(request) = open_dialog {
             self.open_dialog(request);
+        }
+        if let Some(message) = notice.filter(|m| !m.is_empty()) {
+            self.toast(&message);
         }
         if let Some(post_id) = refetch_post {
             // The event says which post changed but not to what, and

@@ -205,6 +205,16 @@ pub enum Event {
     /// A draft you wrote on another device. Both create and update arrive as
     /// `draft_created` — `draft_updated` exists in the server's enum but is
     /// never published.
+    /// Teams or their names changed; the switcher needs refetching.
+    TeamsChanged,
+    /// The user directory changed — someone joined or was deactivated.
+    UsersChanged,
+    /// The server's custom emoji set changed.
+    EmojiChanged,
+    /// Text the server wants shown to this person.
+    Notice {
+        message: String,
+    },
     /// A list this client can show — scheduled posts, channel bookmarks —
     /// changed elsewhere.
     ListsChanged,
@@ -277,6 +287,26 @@ impl Event {
             "draft_deleted" => match extract(d, "draft") {
                 Some(draft) => Event::DraftDeleted(Box::new(draft)),
                 None => Event::other(frame),
+            },
+            // The channel list changed shape in a way that is not about
+            // membership: renamed, converted between public and private,
+            // restored from the archive.
+            "channel_converted" | "channel_restored" => Event::ChannelUpdated {
+                channel_id: str_field(d, "channel_id"),
+            },
+            // Team membership or naming moved. Both mean the switcher is
+            // stale, and neither carries enough to patch it.
+            "update_team" | "delete_team" | "restore_team" | "update_team_scheme" => {
+                Event::TeamsChanged
+            }
+            // Somebody was deactivated, or the server gained a user or an
+            // emoji. All three make a cached copy wrong rather than absent.
+            "user_activation_status_change" | "new_user" => Event::UsersChanged,
+            "emoji_added" => Event::EmojiChanged,
+            // A plugin's own toast, and the "you have unread urgent messages"
+            // nudge. Both are text aimed at the person.
+            "show_toast" | "persistent_notification_triggered" => Event::Notice {
+                message: str_field(d, "message"),
             },
             // A plugin or slash command asking for a form. The dialog arrives
             // as a JSON *string* inside the payload, not as an object.
