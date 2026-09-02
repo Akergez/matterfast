@@ -30,6 +30,7 @@ pub struct ChatView {
     loading: Rc<RefCell<bool>>,
     connection: adw::Banner,
     typing: gtk::Label,
+    attachments: gtk::Box,
     edit_banner: adw::Banner,
     /// The post being edited, when the composer is in edit mode.
     editing: Rc<RefCell<Option<String>>>,
@@ -45,6 +46,7 @@ impl ChatView {
     pub fn new(
         on_send: impl Fn(String) + 'static,
         on_typing: impl Fn(bool) + 'static,
+        on_attach: impl Fn() + 'static,
         on_call: impl Fn() + 'static,
         on_inbox: impl Fn() + 'static,
     ) -> Self {
@@ -175,6 +177,15 @@ impl ChatView {
         send.add_css_class("suggested-action");
         send.add_css_class("circular");
 
+        let attach = gtk::Button::builder()
+            .icon_name("mail-attachment-symbolic")
+            .tooltip_text("Attach a file")
+            .valign(gtk::Align::End)
+            .build();
+        attach.add_css_class("flat");
+        attach.add_css_class("circular");
+        attach.connect_clicked(move |_| on_attach());
+
         let composer = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(8)
@@ -183,6 +194,7 @@ impl ChatView {
             .margin_start(12)
             .margin_end(12)
             .build();
+        composer.append(&attach);
         composer.append(&entry_frame);
         composer.append(&send);
 
@@ -236,6 +248,16 @@ impl ChatView {
             }
         });
 
+        // Uploaded files wait here until a message carries them.
+        let attachments = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(6)
+            .margin_start(14)
+            .margin_end(14)
+            .margin_bottom(4)
+            .visible(false)
+            .build();
+
         let editing: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
 
         // Editing is a mode, and a mode you cannot see is a trap: the banner
@@ -279,6 +301,7 @@ impl ChatView {
         conversation.append(&scroller);
         conversation.append(&edit_banner);
         conversation.append(&typing);
+        conversation.append(&attachments);
         conversation.append(&composer);
 
         let placeholder = adw::StatusPage::builder()
@@ -326,6 +349,7 @@ impl ChatView {
             join_button,
             stack,
             typing,
+            attachments,
             edit_banner,
             editing,
             restoring,
@@ -362,6 +386,65 @@ impl ChatView {
             }
             None => self.connection.set_revealed(false),
         }
+    }
+
+    /// Redraws the row of files waiting to go out with the next message.
+    pub fn set_attachments(&self, files: &[(String, String)], on_remove: impl Fn(String) + 'static) {
+        while let Some(child) = self.attachments.first_child() {
+            self.attachments.remove(&child);
+        }
+        self.attachments.set_visible(!files.is_empty());
+
+        let on_remove = Rc::new(on_remove);
+        for (id, name) in files {
+            let label = gtk::Label::builder()
+                .label(name)
+                .ellipsize(gtk::pango::EllipsizeMode::Middle)
+                .max_width_chars(24)
+                .build();
+            let remove = gtk::Button::builder()
+                .icon_name("window-close-symbolic")
+                .tooltip_text("Remove")
+                .build();
+            remove.add_css_class("flat");
+            remove.add_css_class("circular");
+            remove.connect_clicked({
+                let on_remove = on_remove.clone();
+                let id = id.clone();
+                move |_| on_remove(id.clone())
+            });
+
+            let chip = gtk::Box::builder()
+                .orientation(gtk::Orientation::Horizontal)
+                .spacing(4)
+                .build();
+            chip.add_css_class("attachment-chip");
+            chip.append(&gtk::Image::from_icon_name("mail-attachment-symbolic"));
+            chip.append(&label);
+            chip.append(&remove);
+            self.attachments.append(&chip);
+        }
+    }
+
+    /// A file being uploaded shows as a chip that is not yet removable.
+    pub fn set_uploading(&self, count: usize) {
+        if count == 0 {
+            return;
+        }
+        self.attachments.set_visible(true);
+        let spinner = gtk::Spinner::new();
+        spinner.start();
+        let chip = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(6)
+            .build();
+        chip.add_css_class("attachment-chip");
+        chip.append(&spinner);
+        chip.append(&gtk::Label::new(Some(&match count {
+            1 => "Uploading…".to_string(),
+            n => format!("Uploading {n} files…"),
+        })));
+        self.attachments.append(&chip);
     }
 
     /// Puts the composer into edit mode for an existing post.

@@ -134,6 +134,13 @@
   margin: 12px 0 4px 0;
 }
 
+/* A file waiting to go out with the next message. */
+.attachment-chip {
+  padding: 2px 4px 2px 8px;
+  border-radius: 999px;
+  background-color: alpha(currentColor, 0.08);
+}
+
 /* ── call dock ─────────────────────────────────────────────────────────
    Pinned under the channel list for as long as a call runs. */
 .call-dock-summary {

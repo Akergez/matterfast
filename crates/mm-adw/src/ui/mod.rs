@@ -85,6 +85,10 @@ enum Action {
     Post(String, PostAction),
     /// Search this team's messages.
     Search(String),
+    /// Open the file chooser to attach something.
+    PickAttachment,
+    /// Drop an uploaded file before it is sent.
+    DropAttachment(String),
 }
 
 pub fn build_window(app: &adw::Application) {
@@ -274,6 +278,12 @@ fn build_session_ui(
             let tx = tx.clone();
             move |has_text| {
                 let _ = tx.send_blocking(Action::ComposerChanged(has_text));
+            }
+        },
+        {
+            let tx = tx.clone();
+            move || {
+                let _ = tx.send_blocking(Action::PickAttachment);
             }
         },
         {
@@ -709,6 +719,81 @@ impl Ui {
                 }
             },
         );
+    }
+
+    /// Asks for files and uploads them straight away.
+    ///
+    /// Uploading on pick rather than on send is what the other clients do, and
+    /// it is the reason sending feels instant: by the time a message goes out
+    /// its attachments are already on the server.
+    fn pick_attachment(self: &Rc<Self>) {
+        let Some(channel_id) = self.state.borrow().current_channel.clone() else {
+            return;
+        };
+        let dialog = gtk::FileDialog::builder().title("Attach files").build();
+        let ui = self.clone();
+        dialog.open_multiple(
+            Some(&self.window),
+            None::<&gtk::gio::Cancellable>,
+            move |result| {
+                let Ok(files) = result else { return };
+                let paths: Vec<std::path::PathBuf> = files
+                    .iter::<gtk::gio::File>()
+                    .flatten()
+                    .filter_map(|f| f.path())
+                    .collect();
+                if paths.is_empty() {
+                    return;
+                }
+                ui.chat.set_uploading(paths.len());
+                for path in paths {
+                    ui.upload(&channel_id, path);
+                }
+            },
+        );
+    }
+
+    fn upload(self: &Rc<Self>, channel_id: &str, path: std::path::PathBuf) {
+        let client = self.state.borrow().client.clone();
+        let channel_id = channel_id.to_string();
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "file".to_string());
+
+        let ui = self.clone();
+        let label = name.clone();
+        runtime::spawn(
+            async move {
+                // Reading in the worker: a large file would otherwise block
+                // the frame this was started from.
+                let bytes = tokio::fs::read(&path).await.map_err(|e| e.to_string())?;
+                client
+                    .upload_file(&channel_id, &name, bytes, None)
+                    .await
+                    .map_err(|e| e.to_string())
+            },
+            move |result| {
+                match result {
+                    Ok(response) => {
+                        let mut st = ui.state.borrow_mut();
+                        for info in response.file_infos {
+                            st.pending_files.push((info.id, info.name.clone()));
+                        }
+                    }
+                    Err(e) => ui.toast(&format!("Could not attach {label}: {e}")),
+                }
+                ui.refresh_attachments();
+            },
+        );
+    }
+
+    fn refresh_attachments(self: &Rc<Self>) {
+        let files = self.state.borrow().pending_files.clone();
+        let ui = self.clone();
+        self.chat.set_attachments(&files, move |file_id| {
+            ui.dispatch(Action::DropAttachment(file_id))
+        });
     }
 
     /// Runs a search and shows the hits in the right panel.
@@ -1332,6 +1417,14 @@ impl Ui {
             Action::OpenDirectMessage(user_id) => self.open_direct_message(user_id),
             Action::Post(post_id, what) => self.post_action(post_id, what),
             Action::Search(terms) => self.search(terms),
+            Action::PickAttachment => self.pick_attachment(),
+            Action::DropAttachment(file_id) => {
+                self.state
+                    .borrow_mut()
+                    .pending_files
+                    .retain(|(id, _)| id != &file_id);
+                self.refresh_attachments();
+            }
             Action::ComposerChanged(has_text) => {
                 if has_text {
                     self.notify_typing();
@@ -1667,8 +1760,8 @@ impl Ui {
     // ---------------------------------------------------------------- posting
 
     fn send_message(self: &Rc<Self>, text: String, root_id: Option<String>) {
-        let (client, channel_id, me) = {
-            let st = self.state.borrow();
+        let (client, channel_id, me, file_ids) = {
+            let mut st = self.state.borrow_mut();
             let channel = match &root_id {
                 // A reply belongs to the root's channel, which is not
                 // necessarily the one on screen.
@@ -1678,11 +1771,16 @@ impl Ui {
                     .or_else(|| st.current_channel.clone()),
                 None => st.current_channel.clone(),
             };
-            match channel {
-                Some(id) => (st.client.clone(), id, st.me.id.clone()),
-                None => return,
-            }
+            let Some(id) = channel else { return };
+            // Attachments leave the queue with the message they go out on.
+            let files: Vec<String> = st.pending_files.drain(..).map(|(id, _)| id).collect();
+            (st.client.clone(), id, st.me.id.clone(), files)
         };
+        // An empty message with nothing attached is not a message.
+        if text.trim().is_empty() && file_ids.is_empty() {
+            return;
+        }
+        self.refresh_attachments();
 
         // Show it immediately. The websocket echo replaces this copy — matched
         // on `pending_post_id` — so a slow round trip never looks like a
@@ -1696,6 +1794,7 @@ impl Ui {
             message: text.clone(),
             root_id: root_id.clone().unwrap_or_default(),
             create_at: glib::real_time() / 1000,
+            file_ids: file_ids.clone(),
             ..Default::default()
         };
         self.state.borrow_mut().apply_post(optimistic);
@@ -1711,6 +1810,7 @@ impl Ui {
                     message: text,
                     root_id: reply_to.unwrap_or_default(),
                     pending_post_id: pending_id,
+                    file_ids,
                     ..Default::default()
                 };
                 client.create_post(&post).await

@@ -142,6 +142,9 @@ pub struct AppState {
     /// Unsent text, keyed by channel id. Mirrors what the server has, so the
     /// same half-written message is waiting on every device.
     pub drafts: HashMap<String, String>,
+    /// Files uploaded and waiting to be attached to the next message: the
+    /// server's file id and the name to show on the chip.
+    pub pending_files: Vec<(String, String)>,
     /// The last search's hits, newest first, and whether one is in flight.
     pub search_results: Vec<Post>,
     pub searching: bool,
@@ -211,6 +214,7 @@ impl AppState {
             call: None,
             drafts: HashMap::new(),
             drafts_synced: true,
+            pending_files: Vec::new(),
             search_results: Vec::new(),
             searching: false,
             saved_posts: HashSet::new(),
