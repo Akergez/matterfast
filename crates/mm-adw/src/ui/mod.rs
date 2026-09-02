@@ -15,6 +15,7 @@ mod chat;
 mod dialogs;
 mod interactive;
 mod login;
+mod media;
 mod message;
 mod notify;
 mod profile;

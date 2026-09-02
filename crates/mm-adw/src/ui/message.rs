@@ -641,6 +641,32 @@ fn attachment(
         return open.upcast();
     }
 
+    // Video and audio play in place. Nothing is fetched until the play button
+    // is pressed — a channel with ten clips must not pull down ten clips.
+    if super::media::is_playable(file) {
+        let client = state.borrow().client.clone();
+        // The player is kept alive by the closure the poster button holds, and
+        // both die with the row. Its Drop removes the temp file it wrote.
+        let player = Rc::new_cyclic(|weak: &std::rc::Weak<super::media::Player>| {
+            let weak = weak.clone();
+            super::media::Player::new(file, move |file_id| {
+                let Some(player) = weak.upgrade() else { return };
+                let client = client.clone();
+                crate::runtime::spawn(
+                    async move { client.download_file(&file_id).await },
+                    move |result| match result {
+                        Ok(bytes) => player.set_data(bytes),
+                        Err(e) => tracing::warn!(error = %e, "could not fetch the media"),
+                    },
+                );
+            })
+        });
+        let widget = player.widget.clone();
+        // Tie the player's lifetime to the widget it drew.
+        unsafe { widget.set_data("player", player) };
+        return widget;
+    }
+
     // Everything that is not an image: a name, a size, and a way to get it.
     let label = gtk::Label::builder()
         .label(format!("{}  ·  {}", file.name, file.human_size()))

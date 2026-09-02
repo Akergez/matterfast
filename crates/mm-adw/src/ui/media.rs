@@ -1,0 +1,328 @@
+//! Playing an attached video or audio file where it was posted.
+//!
+//! Nothing here downloads on its own. A [`Player`] starts as a poster — the
+//! name, the size and a play button — and only asks for the bytes when someone
+//! presses play, because a channel scrolled past ten videos would otherwise
+//! fetch ten videos.
+//!
+//! The file itself is behind the session token, so a URL handed to GStreamer
+//! would come back 401; the bytes arrive the same way `open_image` gets an
+//! image, through the client, and are handed back with [`Player::set_data`].
+
+use std::cell::RefCell;
+use std::path::PathBuf;
+
+use gtk::prelude::*;
+use mattermost_api::models::FileInfo;
+
+/// Tall enough to watch, short enough that a video does not push the
+/// conversation off the screen — the same 180px an `.attachment-image` gets.
+const MAX_HEIGHT: i32 = 180;
+
+/// Containers and codecs a default GStreamer install usually cannot decode, so
+/// offering a play button for them would only produce a black box.
+///
+/// Windows Media and RealMedia need `-ugly`/`-bad` demuxers plus `libav` for
+/// the video; MPEG-1/2 program and transport streams need `mpeg2dec`; Flash
+/// and DivX-flavoured AVI need `libav` decoders. All of those are packaged
+/// separately from `gst-plugins-base`/`-good` on most distributions.
+const UNDECODABLE_EXT: &[&str] = &[
+    "asf", "wmv", "wma", "rm", "rmvb", "ram", "flv", "f4v", "mpg", "mpeg", "mpe", "m1v", "m2v",
+    "vob", "ts", "m2ts", "mts", "avi", "divx", "mid", "midi",
+];
+
+/// The same list by mime type, for servers that fill it in.
+const UNDECODABLE_MIME: &[&str] = &[
+    "video/mpeg",
+    "video/mp2t",
+    "video/x-ms",
+    "audio/x-ms",
+    "video/x-flv",
+    "video/x-msvideo",
+    "video/vnd.rn-",
+    "audio/vnd.rn-",
+    "application/vnd.rn-",
+    "audio/midi",
+    "audio/x-midi",
+];
+
+/// What we play when the server leaves `mime_type` empty.
+const VIDEO_EXT: &[&str] = &["mp4", "m4v", "mov", "webm", "mkv", "ogv", "3gp"];
+const AUDIO_EXT: &[&str] = &[
+    "mp3", "m4a", "aac", "flac", "wav", "ogg", "oga", "opus", "weba", "aiff",
+];
+
+fn extension(file: &FileInfo) -> String {
+    file.extension
+        .trim()
+        .trim_start_matches('.')
+        .to_ascii_lowercase()
+}
+
+/// True when this file is something we can play inline.
+pub fn is_playable(file: &FileInfo) -> bool {
+    let ext = extension(file);
+    if UNDECODABLE_EXT.contains(&ext.as_str()) {
+        return false;
+    }
+
+    // The mime type is the server's own answer, so it wins; the extension is
+    // only consulted when there is nothing to win against.
+    let mime = file.mime_type.trim().to_ascii_lowercase();
+    if !mime.is_empty() {
+        if UNDECODABLE_MIME.iter().any(|bad| mime.starts_with(bad)) {
+            return false;
+        }
+        return mime.starts_with("video/") || mime.starts_with("audio/");
+    }
+
+    VIDEO_EXT.contains(&ext.as_str()) || AUDIO_EXT.contains(&ext.as_str())
+}
+
+/// True for the ones that have nothing to show: audio gets controls, no poster.
+fn is_audio(file: &FileInfo) -> bool {
+    let mime = file.mime_type.trim().to_ascii_lowercase();
+    if !mime.is_empty() {
+        return mime.starts_with("audio/");
+    }
+    AUDIO_EXT.contains(&extension(file).as_str())
+}
+
+/// A player for one attached video or audio file.
+///
+/// Drop it to clean up the temporary file the bytes were written to; the
+/// widget stops playing on its own when it leaves the window.
+pub struct Player {
+    pub widget: gtk::Widget,
+    body: gtk::Box,
+    poster: gtk::Widget,
+    play: gtk::Button,
+    spinner: gtk::Spinner,
+    audio: bool,
+    id: String,
+    extension: String,
+    temp: RefCell<Option<PathBuf>>,
+}
+
+impl Drop for Player {
+    fn drop(&mut self) {
+        if let Some(path) = self.temp.borrow_mut().take() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+impl Player {
+    /// `on_load` is called with the file id when the user asks to play;
+    /// answer it with [`Player::set_data`].
+    pub fn new(file: &FileInfo, on_load: impl Fn(String) + 'static) -> Player {
+        let play = gtk::Button::builder()
+            .icon_name("media-playback-start-symbolic")
+            .tooltip_text("Play")
+            .valign(gtk::Align::Center)
+            .build();
+        play.add_css_class("flat");
+        play.add_css_class("circular");
+
+        // Takes the play button's place for as long as the download runs.
+        let spinner = gtk::Spinner::builder()
+            .valign(gtk::Align::Center)
+            .visible(false)
+            .build();
+
+        let label = gtk::Label::builder()
+            .label(format!("{}  ·  {}", file.name, file.human_size()))
+            .xalign(0.0)
+            .hexpand(true)
+            .ellipsize(gtk::pango::EllipsizeMode::Middle)
+            .build();
+
+        let poster = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(6)
+            .build();
+        poster.add_css_class("dim-label");
+        poster.append(&play);
+        poster.append(&spinner);
+        poster.append(&label);
+
+        play.connect_clicked({
+            let spinner = spinner.clone();
+            let id = file.id.clone();
+            move |play| {
+                play.set_visible(false);
+                spinner.set_visible(true);
+                spinner.start();
+                on_load(id.clone());
+            }
+        });
+
+        let body = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(4)
+            .build();
+        body.append(&poster);
+
+        Player {
+            widget: body.clone().upcast(),
+            body,
+            poster: poster.upcast(),
+            play,
+            spinner,
+            audio: is_audio(file),
+            id: file.id.clone(),
+            extension: extension(file),
+            temp: RefCell::new(None),
+        }
+    }
+
+    /// Hands over the downloaded bytes; the player starts from them.
+    pub fn set_data(&self, bytes: Vec<u8>) {
+        self.spinner.stop();
+        self.spinner.set_visible(false);
+        if self.temp.borrow().is_some() {
+            return;
+        }
+
+        // A temporary file rather than a `gio::MemoryInputStream`, because
+        // GTK's GStreamer backend only learned to read a `MediaFile` built
+        // from a stream recently: before that it answered one with "Input
+        // Streams are currently not supported. Please pass a File based
+        // MediaFile." It works here on GTK 4.22 and does nothing at all on the
+        // 4.18 in the GNOME 48 flatpak runtime; `for_filename` works on both.
+        let path = std::env::temp_dir().join(format!(
+            "mm-adw-{}.{}",
+            sanitised(&self.id),
+            sanitised(&self.extension)
+        ));
+        if let Err(e) = std::fs::write(&path, &bytes) {
+            self.failed(&format!("could not write {}: {e}", path.display()));
+            return;
+        }
+        *self.temp.borrow_mut() = Some(path.clone());
+
+        let media = gtk::MediaFile::for_filename(&path);
+        media.set_loop(false);
+        media.connect_error_notify({
+            let body = self.body.clone();
+            move |media| {
+                let Some(error) = media.error() else { return };
+                tracing::warn!(error = %error, "could not play the attachment");
+                body.append(&note(&error.to_string()));
+            }
+        });
+
+        let player: gtk::Widget = if self.audio {
+            // Audio has no picture to show, so the controls are the widget.
+            gtk::MediaControls::new(Some(&media)).upcast()
+        } else {
+            let video = gtk::Video::for_media_stream(Some(&media));
+            // We start it ourselves below, on the click that asked for it.
+            video.set_autoplay(false);
+            video.set_height_request(MAX_HEIGHT);
+            // A `GtkVideo` asks for the full size of whatever it is showing,
+            // and a 1080p attachment would take the conversation with it. The
+            // clamp is what actually holds the height down; the picture inside
+            // scales to fit rather than being cropped.
+            let clamp = adw::Clamp::builder()
+                .maximum_size(MAX_HEIGHT)
+                .halign(gtk::Align::Start)
+                .child(&video)
+                .build();
+            clamp.set_orientation(gtk::Orientation::Vertical);
+            clamp.upcast()
+        };
+
+        self.body.remove(&self.poster);
+        self.body.append(&player);
+        media.play();
+    }
+
+    /// Puts the play button back and says why nothing happened.
+    fn failed(&self, message: &str) {
+        tracing::warn!(message, "could not play the attachment");
+        self.play.set_visible(true);
+        self.body.append(&note(message));
+    }
+}
+
+fn note(message: &str) -> gtk::Label {
+    let label = gtk::Label::builder()
+        .label(message)
+        .xalign(0.0)
+        .wrap(true)
+        .build();
+    label.add_css_class("dim-label");
+    label.add_css_class("caption");
+    label
+}
+
+/// Both halves of the temporary file's name come from the server, and both end
+/// up in a path.
+fn sanitised(text: &str) -> String {
+    let clean: String = text
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .take(32)
+        .collect();
+    if clean.is_empty() {
+        "bin".to_string()
+    } else {
+        clean
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn file(mime: &str, extension: &str) -> FileInfo {
+        FileInfo {
+            mime_type: mime.to_string(),
+            extension: extension.to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn the_mime_type_decides_when_there_is_one() {
+        assert!(is_playable(&file("video/mp4", "mp4")));
+        assert!(is_playable(&file("audio/mpeg", "mp3")));
+        // An extension we would not have guessed from, and one we would have
+        // guessed wrong from.
+        assert!(is_playable(&file("video/webm", "")));
+        assert!(!is_playable(&file("application/pdf", "pdf")));
+        assert!(!is_playable(&file("image/png", "png")));
+    }
+
+    #[test]
+    fn the_extension_answers_when_the_mime_type_is_empty() {
+        assert!(is_playable(&file("", "mp4")));
+        assert!(is_playable(&file("", ".MP3")));
+        assert!(is_playable(&file("", "opus")));
+        assert!(!is_playable(&file("", "pdf")));
+    }
+
+    #[test]
+    fn nothing_to_go_on_is_not_playable() {
+        assert!(!is_playable(&file("", "")));
+    }
+
+    #[test]
+    fn formats_gstreamer_will_not_have_are_excluded() {
+        // Excluded by mime type and by extension alike, because the server
+        // may give us either.
+        assert!(!is_playable(&file("video/x-ms-wmv", "wmv")));
+        assert!(!is_playable(&file("video/mp4", "wmv")));
+        assert!(!is_playable(&file("", "avi")));
+        assert!(!is_playable(&file("video/mpeg", "")));
+    }
+
+    #[test]
+    fn audio_is_told_apart_from_video() {
+        assert!(is_audio(&file("audio/flac", "flac")));
+        assert!(!is_audio(&file("video/mp4", "mp4")));
+        assert!(is_audio(&file("", "m4a")));
+        assert!(!is_audio(&file("", "mkv")));
+    }
+}
