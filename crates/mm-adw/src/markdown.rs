@@ -180,8 +180,13 @@ fn inline(text: &str) -> String {
                 let name = &after[..end];
                 match crate::emoji::resolve(name) {
                     crate::emoji::Rendered::Unicode(glyph) => out.push_str(glyph),
-                    // A custom emoji has no glyph to substitute, so the
-                    // shortcode stays — it is at least readable.
+                    // ponytail: a custom emoji stays as its shortcode in
+                    // message bodies. Substituting the image needs a TextView
+                    // with child anchors instead of a Label, which is a
+                    // rewrite of the whole message row for a rare case; the
+                    // shortcode is at least readable, and reaction chips do
+                    // draw the picture. Upgrade when custom emoji in prose
+                    // actually get in the way.
                     crate::emoji::Rendered::Custom => {
                         out.push(':');
                         out.push_str(name);

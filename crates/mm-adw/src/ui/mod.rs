@@ -4215,6 +4215,23 @@ impl Ui {
             self.chat.focus_composer();
         }
 
+        // How many people are here. Cheap, cached by the server, and the
+        // question "who can see this" comes up constantly in a channel you
+        // have just walked into.
+        {
+            let stats_client = client.clone();
+            let id = channel_id.clone();
+            let ui = self.clone();
+            runtime::spawn(
+                async move { stats_client.channel_stats(&id).await },
+                move |result| {
+                    if let Ok(stats) = result {
+                        ui.chat.set_member_count(Some(stats.member_count));
+                    }
+                },
+            );
+        }
+
         // Tell the server we are looking at this channel so read state syncs to
         // our other sessions.
         let id = channel_id.clone();

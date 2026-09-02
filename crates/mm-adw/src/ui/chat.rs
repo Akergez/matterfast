@@ -595,6 +595,20 @@ impl ChatView {
 
     /// Rebuilds the agent menu: one entry to summarise this channel, and one
     /// per bot to go and talk to it.
+    /// How many people are in the channel, shown beside the topic. It answers
+    /// "who can see this" without opening the member list.
+    pub fn set_member_count(&self, count: Option<i64>) {
+        let topic = self.subtitle.text().to_string();
+        let topic = topic.split(" · ").next().unwrap_or("").to_string();
+        let line = match count {
+            Some(n) if !topic.is_empty() => format!("{topic} · {n} members"),
+            Some(n) => format!("{n} members"),
+            None => topic,
+        };
+        self.subtitle.set_visible(!line.is_empty());
+        self.subtitle.set_text(&line);
+    }
+
     pub fn set_agents(&self, bots: &[(String, String)], on_open: impl Fn(String) + 'static) {
         self.agent_button.set_visible(!bots.is_empty());
         if bots.is_empty() {
