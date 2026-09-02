@@ -114,10 +114,12 @@ mod tests {
     use super::*;
 
     fn posted(sender: &str, channel_type: &str, mentions: &[&str]) -> Posted {
-        let mut post = mattermost_api::models::Post::default();
-        post.user_id = sender.to_string();
-        post.channel_id = "c1".into();
-        post.message = "hello".into();
+        let post = mattermost_api::models::Post {
+            user_id: sender.to_string(),
+            channel_id: "c1".into(),
+            message: "hello".into(),
+            ..Default::default()
+        };
         Posted {
             post,
             channel_type: channel_type.to_string(),
@@ -139,10 +141,12 @@ mod tests {
     }
 
     fn member(desktop: &str) -> ChannelMember {
-        let mut m = ChannelMember::default();
-        m.notify_props
-            .insert("desktop".into(), desktop.to_string());
-        m
+        let mut notify_props = mattermost_api::models::StringMap::new();
+        notify_props.insert("desktop".into(), desktop.to_string());
+        ChannelMember {
+            notify_props,
+            ..Default::default()
+        }
     }
 
     #[test]
