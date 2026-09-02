@@ -87,6 +87,13 @@ on purpose and the reason is written down.
 - **Enterprise directory** — group synchronisation, compliance export, shared
   channel administration. Licence-gated server features with no client half.
 
+### Deliberately unused library surface
+
+`mattermost-calls` is usable without this app — for a bot, or a different front
+end — so a couple of its routes have no caller here and are kept anyway:
+`announce_screen_share` (this client announces through `start_screen_share`)
+and `channel_state` (it fetches every channel's call state at once instead).
+
 ### Known ceilings
 
 - **Custom emoji in message bodies use a TextView.** Only blocks containing one
