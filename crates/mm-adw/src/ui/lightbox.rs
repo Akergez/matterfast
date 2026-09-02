@@ -82,8 +82,186 @@ pub fn show(parent: &adw::ApplicationWindow, title: &str, texture: &gtk::gdk::Te
     buttons.append(&save);
     buttons.append(&close);
 
-    // The picture and the buttons over it, inset so there is always a strip of
-    // backdrop to click on even when the image fills the window.
+    let (dismiss, keys) = mount(parent, &picture, &buttons, None);
+
+    // The clipboard belongs to the display, not to the window, so holding one
+    // here keeps no widget alive.
+    let to_clipboard: Rc<dyn Fn()> = Rc::new({
+        let clipboard = parent.clipboard();
+        let texture = texture.clone();
+        move || clipboard.set_texture(&texture)
+    });
+
+    close.connect_clicked({
+        let dismiss = dismiss.clone();
+        move |_| dismiss()
+    });
+    // Somewhere to land the focus, so Escape is not the only way out for a
+    // keyboard, and so typing does not go on filling the entry underneath.
+    close.grab_focus();
+
+    copy.connect_clicked({
+        let to_clipboard = to_clipboard.clone();
+        move |button| {
+            to_clipboard();
+            // The only feedback a clipboard ever gives is that nothing
+            // happened, so the button says so itself for a moment.
+            button.set_icon_name("object-select-symbolic");
+            glib::timeout_add_local_once(std::time::Duration::from_secs(2), {
+                let button = button.clone();
+                move || button.set_icon_name("edit-copy-symbolic")
+            });
+        }
+    });
+
+    save.connect_clicked({
+        let texture = texture.clone();
+        let name = png_name(title);
+        move |button| {
+            let dialog = gtk::FileDialog::builder()
+                .title("Save image")
+                .initial_name(&name)
+                .modal(true)
+                .build();
+            let window = button.root().and_downcast::<gtk::Window>();
+            let texture = texture.clone();
+            dialog.save(
+                window.as_ref(),
+                gtk::gio::Cancellable::NONE,
+                move |result| {
+                    let Ok(file) = result else {
+                        return; // Cancelled, which is not an error.
+                    };
+                    let Some(path) = file.path() else { return };
+                    if let Err(e) = texture.save_to_png(&path) {
+                        tracing::warn!(error = %e, ?path, "could not write the image");
+                    }
+                },
+            );
+        }
+    });
+
+    // Escape closes, Ctrl+C copies; everything else carries on to whatever has
+    // the focus.
+    keys.connect_key_pressed(move |_, key, _, modifier| match key {
+        gtk::gdk::Key::Escape => {
+            dismiss();
+            glib::Propagation::Stop
+        }
+        gtk::gdk::Key::c | gtk::gdk::Key::C
+            if modifier.contains(gtk::gdk::ModifierType::CONTROL_MASK) =>
+        {
+            to_clipboard();
+            glib::Propagation::Stop
+        }
+        _ => glib::Propagation::Proceed,
+    });
+}
+
+/// The same, for something being played rather than looked at: the video fills
+/// the window, the backdrop and Escape put it back, and closing stops it.
+///
+/// The stream is shared with the row it was opened from rather than copied —
+/// two `GtkVideo`s onto one `GtkMediaStream` show the same frame, so pausing
+/// in one place pauses in both and the position never has to be handed over.
+pub fn show_media(parent: &adw::ApplicationWindow, title: &str, media: &gtk::MediaStream) {
+    let video = gtk::Video::builder()
+        .media_stream(media)
+        .autoplay(true)
+        .tooltip_text(title)
+        .hexpand(true)
+        .vexpand(true)
+        .build();
+
+    let close = osd_button("window-close-symbolic", "Close");
+    let buttons = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(6)
+        .halign(gtk::Align::End)
+        .valign(gtk::Align::Start)
+        .margin_top(12)
+        .margin_end(12)
+        .build();
+    buttons.append(&close);
+
+    let (dismiss, keys) = mount(
+        parent,
+        &video,
+        &buttons,
+        Some(Box::new({
+            let media = media.clone();
+            // Sound going on behind a lightbox nobody can see is worse than
+            // losing the position, and the position is kept anyway.
+            move || media.pause()
+        })),
+    );
+
+    close.connect_clicked({
+        let dismiss = dismiss.clone();
+        move |_| dismiss()
+    });
+    close.grab_focus();
+
+    keys.connect_key_pressed(move |_, key, _, _| match key {
+        gtk::gdk::Key::Escape => {
+            dismiss();
+            glib::Propagation::Stop
+        }
+        _ => glib::Propagation::Proceed,
+    });
+}
+
+fn osd_button(icon: &str, tooltip: &str) -> gtk::Button {
+    let button = gtk::Button::builder()
+        .icon_name(icon)
+        .tooltip_text(tooltip)
+        .build();
+    button.add_css_class("osd");
+    button.add_css_class("circular");
+    button
+}
+
+/// What to call the file in the save dialog. `save_to_png` writes a PNG
+/// whatever the attachment was called upstream, so the suggested name says PNG
+/// and does not promise a JPEG it is not about to write.
+fn png_name(title: &str) -> String {
+    let stem = title.rsplit_once('.').map_or(title, |(stem, _)| stem);
+    let stem = stem.trim();
+    if stem.is_empty() {
+        "image.png".to_string()
+    } else {
+        format!("{stem}.png")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::png_name;
+
+    #[test]
+    fn suggested_name_is_always_a_png() {
+        assert_eq!(png_name("holiday.jpeg"), "holiday.png");
+        assert_eq!(png_name("screenshot.png"), "screenshot.png");
+        assert_eq!(png_name("no extension"), "no extension.png");
+        assert_eq!(png_name(""), "image.png");
+        assert_eq!(png_name(".hidden"), "image.png");
+    }
+}
+
+/// Puts `content` over everything in the window, with `buttons` in the corner,
+/// and gives back the one way out and the key controller to hang shortcuts on.
+///
+/// `on_close` runs first when it is dismissed, for whatever the content needs
+/// stopping — a video keeps playing otherwise, behind a lightbox that is no
+/// longer there.
+fn mount(
+    parent: &adw::ApplicationWindow,
+    content: &impl IsA<gtk::Widget>,
+    buttons: &gtk::Box,
+    on_close: Option<Box<dyn Fn()>>,
+) -> (Rc<dyn Fn()>, gtk::EventControllerKey) {
+    // The content and the buttons over it, inset so there is always a strip of
+    // backdrop to click on even when the content fills the window.
     let frame = gtk::Overlay::builder()
         .hexpand(true)
         .vexpand(true)
@@ -91,9 +269,9 @@ pub fn show(parent: &adw::ApplicationWindow, title: &str, texture: &gtk::gdk::Te
         .margin_bottom(24)
         .margin_start(24)
         .margin_end(24)
-        .child(&picture)
+        .child(content)
         .build();
-    frame.add_overlay(&buttons);
+    frame.add_overlay(buttons);
 
     let dim = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -159,6 +337,9 @@ pub fn show(parent: &adw::ApplicationWindow, title: &str, texture: &gtk::gdk::Te
             let Some(open) = open.borrow_mut().take() else {
                 return; // Already dismissed by one of the other three ways.
             };
+            if let Some(on_close) = &on_close {
+                on_close();
+            }
             open.parent.remove_controller(&open.keys);
             open.overlay.remove_overlay(&open.dim);
             // Only put the content back if the overlay is still where it was
@@ -174,63 +355,6 @@ pub fn show(parent: &adw::ApplicationWindow, title: &str, texture: &gtk::gdk::Te
         }
     });
 
-    // The clipboard belongs to the display, not to the window, so holding one
-    // here keeps no widget alive.
-    let to_clipboard: Rc<dyn Fn()> = Rc::new({
-        let clipboard = parent.clipboard();
-        let texture = texture.clone();
-        move || clipboard.set_texture(&texture)
-    });
-
-    close.connect_clicked({
-        let dismiss = dismiss.clone();
-        move |_| dismiss()
-    });
-    // Somewhere to land the focus, so Escape is not the only way out for a
-    // keyboard, and so typing does not go on filling the entry underneath.
-    close.grab_focus();
-
-    copy.connect_clicked({
-        let to_clipboard = to_clipboard.clone();
-        move |button| {
-            to_clipboard();
-            // The only feedback a clipboard ever gives is that nothing
-            // happened, so the button says so itself for a moment.
-            button.set_icon_name("object-select-symbolic");
-            glib::timeout_add_local_once(std::time::Duration::from_secs(2), {
-                let button = button.clone();
-                move || button.set_icon_name("edit-copy-symbolic")
-            });
-        }
-    });
-
-    save.connect_clicked({
-        let texture = texture.clone();
-        let name = png_name(title);
-        move |button| {
-            let dialog = gtk::FileDialog::builder()
-                .title("Save image")
-                .initial_name(&name)
-                .modal(true)
-                .build();
-            let window = button.root().and_downcast::<gtk::Window>();
-            let texture = texture.clone();
-            dialog.save(
-                window.as_ref(),
-                gtk::gio::Cancellable::NONE,
-                move |result| {
-                    let Ok(file) = result else {
-                        return; // Cancelled, which is not an error.
-                    };
-                    let Some(path) = file.path() else { return };
-                    if let Err(e) = texture.save_to_png(&path) {
-                        tracing::warn!(error = %e, ?path, "could not write the image");
-                    }
-                },
-            );
-        }
-    });
-
     let click = gtk::GestureClick::new();
     click.set_button(gtk::gdk::BUTTON_PRIMARY);
     click.connect_released({
@@ -239,9 +363,9 @@ pub fn show(parent: &adw::ApplicationWindow, title: &str, texture: &gtk::gdk::Te
         let frame = frame.clone();
         move |_, _, x, y| {
             // `pick` gives the deepest widget under the pointer, so a click on
-            // the picture or on a button comes back as that widget and is left
+            // the content or on a button comes back as that widget and is left
             // alone. Only the backdrop itself — the dimmed box, or the inset
-            // area around the picture — closes.
+            // area around it — closes.
             let hit = dim.pick(x, y, gtk::PickFlags::DEFAULT);
             if hit.is_none_or(|w| w == dim || w == frame) {
                 dismiss();
@@ -250,56 +374,5 @@ pub fn show(parent: &adw::ApplicationWindow, title: &str, texture: &gtk::gdk::Te
     });
     dim.add_controller(click);
 
-    // Escape closes, Ctrl+C copies; everything else carries on to whatever has
-    // the focus.
-    keys.connect_key_pressed(move |_, key, _, modifier| match key {
-        gtk::gdk::Key::Escape => {
-            dismiss();
-            glib::Propagation::Stop
-        }
-        gtk::gdk::Key::c | gtk::gdk::Key::C
-            if modifier.contains(gtk::gdk::ModifierType::CONTROL_MASK) =>
-        {
-            to_clipboard();
-            glib::Propagation::Stop
-        }
-        _ => glib::Propagation::Proceed,
-    });
-}
-
-fn osd_button(icon: &str, tooltip: &str) -> gtk::Button {
-    let button = gtk::Button::builder()
-        .icon_name(icon)
-        .tooltip_text(tooltip)
-        .build();
-    button.add_css_class("osd");
-    button.add_css_class("circular");
-    button
-}
-
-/// What to call the file in the save dialog. `save_to_png` writes a PNG
-/// whatever the attachment was called upstream, so the suggested name says PNG
-/// and does not promise a JPEG it is not about to write.
-fn png_name(title: &str) -> String {
-    let stem = title.rsplit_once('.').map_or(title, |(stem, _)| stem);
-    let stem = stem.trim();
-    if stem.is_empty() {
-        "image.png".to_string()
-    } else {
-        format!("{stem}.png")
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::png_name;
-
-    #[test]
-    fn suggested_name_is_always_a_png() {
-        assert_eq!(png_name("holiday.jpeg"), "holiday.png");
-        assert_eq!(png_name("screenshot.png"), "screenshot.png");
-        assert_eq!(png_name("no extension"), "no extension.png");
-        assert_eq!(png_name(""), "image.png");
-        assert_eq!(png_name(".hidden"), "image.png");
-    }
+    (dismiss, keys)
 }

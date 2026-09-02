@@ -105,6 +105,7 @@ pub struct Player {
     spinner: gtk::Spinner,
     audio: bool,
     id: String,
+    title: String,
     extension: String,
     temp: RefCell<Option<PathBuf>>,
 }
@@ -261,6 +262,7 @@ impl Player {
             spinner,
             audio: is_audio(file),
             id: file.id.clone(),
+            title: file.name.clone(),
             extension: extension(file),
             temp: RefCell::new(None),
         }
@@ -320,7 +322,35 @@ impl Player {
                 .child(&video)
                 .build();
             clamp.set_orientation(gtk::Orientation::Vertical);
-            clamp.upcast()
+
+            // 180px in a column of messages is a postage stamp. The same
+            // stream over the whole window is what the web calls the lightbox,
+            // and it is the same object, so pausing there pauses here.
+            let expand = gtk::Button::builder()
+                .icon_name("view-fullscreen-symbolic")
+                .tooltip_text("Fill the window")
+                .halign(gtk::Align::End)
+                .valign(gtk::Align::Start)
+                .margin_top(6)
+                .margin_end(6)
+                .build();
+            expand.add_css_class("osd");
+            expand.add_css_class("circular");
+            expand.connect_clicked({
+                let media = media.clone();
+                let title = self.title.clone();
+                move |button| {
+                    let Some(window) = button.root().and_downcast::<adw::ApplicationWindow>()
+                    else {
+                        return;
+                    };
+                    super::lightbox::show_media(&window, &title, media.upcast_ref());
+                }
+            });
+
+            let framed = gtk::Overlay::builder().child(&clamp).build();
+            framed.add_overlay(&expand);
+            framed.upcast()
         };
 
         self.body.remove(&self.poster);
