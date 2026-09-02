@@ -830,6 +830,18 @@ impl Client {
         Ok(resp.bytes().await?.to_vec())
     }
 
+    /// `GET /api/v4/files/{file}/thumbnail` — the server-side thumbnail, for
+    /// showing an attached image inline without pulling the original.
+    pub async fn file_thumbnail_bytes(&self, file_id: &str) -> Result<Vec<u8>> {
+        let resp = self
+            .send(self.request(
+                Method::GET,
+                &self.api(&format!("/files/{file_id}/thumbnail")),
+            ))
+            .await?;
+        Ok(resp.bytes().await?.to_vec())
+    }
+
     /// `POST /api/v4/files` (multipart). `client_id` is echoed back so you can
     /// correlate the resulting [`FileInfo`] with a local upload.
     pub async fn upload_file(

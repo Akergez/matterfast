@@ -148,6 +148,17 @@
   margin: 12px 0 4px 0;
 }
 
+/* An image posted in the conversation. */
+.attachment-image {
+  border-radius: 8px;
+}
+
+.attachment-button {
+  padding: 2px;
+  margin-top: 4px;
+  background: none;
+}
+
 /* A file waiting to go out with the next message. */
 .attachment-chip {
   padding: 2px 4px 2px 8px;

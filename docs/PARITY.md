@@ -70,7 +70,8 @@ Ordered by how often it bites.
 - **Chunked uploads.** Single-shot multipart only, so a large file that drops
   mid-upload starts over. `POST /uploads` + `GET|POST /uploads/{id}` with
   `file_offset` is the resumable path.
-- **Image previews and a viewer.** Attachments are a filename and a size.
+- **Video and audio previews.** Images show inline and open full size;
+  everything else is a filename and a size.
 - **Drag and drop**, and paste-to-upload.
 
 ### Channels and teams

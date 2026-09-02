@@ -169,12 +169,7 @@ pub fn build(
     }
 
     for file in post.files() {
-        let attachment = gtk::Label::builder()
-            .label(format!("📎 {}  ·  {}", file.name, file.human_size()))
-            .xalign(0.0)
-            .build();
-        attachment.add_css_class("dim-label");
-        body.append(&attachment);
+        body.append(&attachment(file, avatars, state));
     }
 
     if let Some(strip) = reaction_strip(post, state, actions) {
@@ -226,6 +221,87 @@ pub fn build(
 }
 
 /// The small react / reply buttons on the right of a row.
+/// An attached file. Images show themselves; everything else is a name and a
+/// size, which is all there is to say about it without opening it.
+fn attachment(
+    file: &mattermost_api::models::FileInfo,
+    avatars: &Avatars,
+    state: &SharedState,
+) -> gtk::Widget {
+    if file.is_image() {
+        let picture = gtk::Picture::builder()
+            .content_fit(gtk::ContentFit::ScaleDown)
+            .halign(gtk::Align::Start)
+            .can_shrink(true)
+            // Tall enough to recognise, short enough that an image does not
+            // push the rest of the conversation off the screen.
+            .height_request(180)
+            .tooltip_text(&file.name)
+            .build();
+        picture.add_css_class("attachment-image");
+        if let Some(texture) = avatars.file_thumbnail(&file.id) {
+            picture.set_paintable(Some(&texture));
+        }
+
+        let open = gtk::Button::builder().child(&picture).build();
+        open.add_css_class("flat");
+        open.add_css_class("attachment-button");
+        open.connect_clicked({
+            let state = state.clone();
+            let file = file.clone();
+            move |button| open_image(&state, &file, button)
+        });
+        return open.upcast();
+    }
+
+    let label = gtk::Label::builder()
+        .label(format!("📎 {}  ·  {}", file.name, file.human_size()))
+        .xalign(0.0)
+        .build();
+    label.add_css_class("dim-label");
+    label.upcast()
+}
+
+/// Opens the full-size image in its own window. The original is behind the
+/// session token, so it is fetched rather than handed to an external viewer.
+fn open_image(
+    state: &SharedState,
+    file: &mattermost_api::models::FileInfo,
+    anchor: &gtk::Button,
+) {
+    let client = state.borrow().client.clone();
+    let file_id = file.id.clone();
+    let title = file.name.clone();
+    let parent = anchor.root().and_downcast::<gtk::Window>();
+
+    crate::runtime::spawn(
+        async move { client.download_file(&file_id).await },
+        move |result| {
+            let Ok(bytes) = result else { return };
+            let Ok(texture) =
+                gtk::gdk::Texture::from_bytes(&gtk::glib::Bytes::from_owned(bytes))
+            else {
+                return;
+            };
+            let picture = gtk::Picture::for_paintable(&texture);
+            picture.set_content_fit(gtk::ContentFit::ScaleDown);
+
+            let window = adw::Window::builder()
+                .title(&title)
+                .default_width(900)
+                .default_height(640)
+                .modal(false)
+                .build();
+            window.set_transient_for(parent.as_ref());
+            let view = adw::ToolbarView::new();
+            view.add_top_bar(&adw::HeaderBar::new());
+            view.set_content(Some(&picture));
+            window.set_content(Some(&view));
+            window.present();
+        },
+    );
+}
+
 /// One piece of a message. Prose is a label with Pango markup; a code block is
 /// a monospaced label that must *not* be told to read markup — its text is
 /// literal, and code is exactly the content most likely to contain angle

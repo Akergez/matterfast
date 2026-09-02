@@ -33,6 +33,9 @@ struct Inner {
 /// Fired on the GTK thread when a texture lands.
 type LoadedCallback = Rc<RefCell<Option<Box<dyn Fn()>>>>;
 
+/// Marks a cache key as a file thumbnail rather than a user's picture.
+const FILE_PREFIX: &str = "file:";
+
 #[derive(Clone)]
 pub struct Avatars {
     inner: Rc<RefCell<Inner>>,
@@ -58,10 +61,21 @@ impl Avatars {
     /// The texture for a user if we have it; otherwise starts a fetch and
     /// returns `None` so the caller can draw initials meanwhile.
     pub fn texture(&self, user_id: &str) -> Option<gdk::Texture> {
-        if let Some(texture) = self.inner.borrow().textures.get(user_id) {
+        self.cached(user_id)
+    }
+
+    /// The thumbnail for an attached image, on the same cache and the same
+    /// "ask once, redraw when it lands" contract as a face. Keyed apart so a
+    /// file id can never collide with a user id.
+    pub fn file_thumbnail(&self, file_id: &str) -> Option<gdk::Texture> {
+        self.cached(&format!("{FILE_PREFIX}{file_id}"))
+    }
+
+    fn cached(&self, key: &str) -> Option<gdk::Texture> {
+        if let Some(texture) = self.inner.borrow().textures.get(key) {
             return Some(texture.clone());
         }
-        self.request(user_id);
+        self.request(key);
         None
     }
 
@@ -99,7 +113,12 @@ impl Avatars {
         let this = self.clone();
 
         runtime::spawn(
-            async move { client.user_image_bytes(&fetch_id).await },
+            async move {
+                match fetch_id.strip_prefix(FILE_PREFIX) {
+                    Some(file_id) => client.file_thumbnail_bytes(file_id).await,
+                    None => client.user_image_bytes(&fetch_id).await,
+                }
+            },
             move |result| {
                 let mut loaded = false;
                 {
