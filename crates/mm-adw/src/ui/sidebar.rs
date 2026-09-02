@@ -464,11 +464,7 @@ fn channel_row(
     if let Some(status) = status {
         let chip = gtk::Label::new(Some(&crate::emoji::label(&status.emoji)));
         chip.add_css_class("custom-status");
-        chip.set_tooltip_text(Some(if status.text.is_empty() {
-            &status.emoji
-        } else {
-            &status.text
-        }));
+        chip.set_tooltip_text(Some(&super::message::custom_status_tooltip(&status)));
         row_box.append(&chip);
     }
 

@@ -77,13 +77,17 @@ pub fn popover(
 
     if let Some(status) = user.custom_status() {
         if !status.text.is_empty() || !status.emoji.is_empty() {
-            let text = if status.emoji.is_empty() {
-                status.text.clone()
-            } else {
-                format!("{} {}", emoji::label(&status.emoji), status.text)
-            };
             let label = gtk::Label::builder()
-                .label(text.trim())
+                // The card has room, so the expiry goes in the text rather
+                // than hiding in a tooltip on a tooltip.
+                .label(
+                    format!(
+                        "{} {}",
+                        emoji::label(&status.emoji),
+                        super::message::custom_status_tooltip(&status)
+                    )
+                    .trim(),
+                )
                 .halign(gtk::Align::Center)
                 .wrap(true)
                 .justify(gtk::Justification::Center)

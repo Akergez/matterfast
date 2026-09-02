@@ -1481,13 +1481,55 @@ fn custom_status_chip(status: &mattermost_api::models::CustomStatus) -> Option<g
 
     let label = gtk::Label::new(Some(&crate::emoji::label(&status.emoji)));
     label.add_css_class("custom-status");
-    let tooltip = if status.text.is_empty() {
+    label.set_tooltip_text(Some(&custom_status_tooltip(status)));
+    Some(label.upcast())
+}
+
+/// The status as a person would read it: what it says, and until when.
+///
+/// The expiry is most of the information — "on holiday" matters differently
+/// depending on whether they are back this afternoon or next week — and it is
+/// what the other clients show alongside it.
+pub fn custom_status_tooltip(status: &mattermost_api::models::CustomStatus) -> String {
+    let text = if status.text.is_empty() {
         format!(":{}:", status.emoji)
     } else {
         status.text.clone()
     };
-    label.set_tooltip_text(Some(&tooltip));
-    Some(label.upcast())
+    match status.expires_at.as_deref().and_then(expiry_phrase) {
+        Some(until) => format!("{text}\n{until}"),
+        None => text,
+    }
+}
+
+/// "Until 15:30" for today, "Until tomorrow at 15:30", "Until Friday at
+/// 15:30" within the week, and a date beyond that — the same ladder the web
+/// client walks, because "until 15:30" is useless if it means next Thursday.
+fn expiry_phrase(expires_at: &str) -> Option<String> {
+    if expires_at.is_empty() {
+        return None;
+    }
+    let when = glib::DateTime::from_iso8601(expires_at, None).ok()?;
+    let now = glib::DateTime::now_local().ok()?;
+    // Already gone: the caller drops the whole chip in that case, but a stale
+    // one must never claim a time in the past.
+    if when.to_unix() <= now.to_unix() {
+        return None;
+    }
+
+    let time = when.format("%H:%M").ok()?.to_string();
+    let days = when.day_of_year() - now.day_of_year();
+    // Across a year boundary the day numbers reset, so fall through to the
+    // date rather than reporting a negative difference.
+    let phrase = match days {
+        0 if when.year() == now.year() => format!("Until {time}"),
+        1 if when.year() == now.year() => format!("Until tomorrow at {time}"),
+        2..=6 if when.year() == now.year() => {
+            format!("Until {} at {time}", when.format("%A").ok()?)
+        }
+        _ => format!("Until {}", when.format("%e %B").ok()?.trim()),
+    };
+    Some(phrase)
 }
 
 /// The "new messages" landmark: a rule with a label, drawn where reading
@@ -1560,6 +1602,36 @@ pub fn format_relative(millis: Millis) -> String {
             .format("%e %b")
             .map(|s| s.trim().to_string())
             .unwrap_or_default(),
+    }
+}
+
+#[cfg(test)]
+mod expiry_tests {
+    use super::expiry_phrase;
+
+    fn in_hours(hours: i32) -> String {
+        gtk::glib::DateTime::now_local()
+            .unwrap()
+            .add_hours(hours)
+            .unwrap()
+            .format("%Y-%m-%dT%H:%M:%S%:z")
+            .unwrap()
+            .to_string()
+    }
+
+    #[test]
+    fn says_when_it_clears() {
+        // An hour out is a time; four days out has to name the day, or
+        // "until 15:30" reads as this afternoon.
+        assert!(expiry_phrase(&in_hours(1)).unwrap().starts_with("Until "));
+        let far = expiry_phrase(&in_hours(24 * 4)).unwrap();
+        assert!(far.contains(" at "), "got {far:?}");
+
+        // Nothing to say, and nothing to claim.
+        assert_eq!(expiry_phrase(""), None);
+        assert_eq!(expiry_phrase("not a date"), None);
+        // In the past: never phrased as though it were still coming.
+        assert_eq!(expiry_phrase(&in_hours(-2)), None);
     }
 }
 
