@@ -105,7 +105,10 @@ fn main() -> gtk::glib::ExitCode {
 /// mean a second session and a second websocket. `app.new-window` is the way
 /// to ask for another one on purpose.
 fn present_or_build(app: &adw::Application) {
-    match app.active_window() {
+    // `active_window` is the *focused* one, and a window hidden into the
+    // background has no focus — so it would look like there is none and a
+    // second session would be built beside the one still running.
+    match app.windows().first() {
         Some(window) => window.present(),
         None => ui::build_window(app),
     }

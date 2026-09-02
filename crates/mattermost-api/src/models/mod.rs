@@ -41,6 +41,18 @@ pub use team::{Team, TeamMember, TeamUnread};
 pub use upload::UploadSession;
 pub use user::{CustomStatus, Presence, Status, User, UserAutocomplete};
 
+/// A user group, which can be @-mentioned when the server is licensed for it.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct Group {
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub member_count: Option<i64>,
+}
+
 /// `server/public/model/preference.go`. `value` is *always* a string, even for
 /// booleans (`"true"`) and JSON blobs.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]

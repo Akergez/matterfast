@@ -1561,6 +1561,23 @@ impl Client {
         Ok(resp.bytes().await?.to_vec())
     }
 
+    /// `GET /api/v4/groups` — the groups that can be @-mentioned.
+    ///
+    /// Licensed servers only: Team Edition answers 501, which is the same as
+    /// having no groups and needs no special handling beyond ignoring it.
+    pub async fn mentionable_groups(&self, term: &str) -> Result<Vec<Group>> {
+        self.get_q(
+            "/groups",
+            &[
+                ("filter_allow_reference", "true".to_string()),
+                ("q", term.to_string()),
+                ("per_page", "10".to_string()),
+            ],
+            "groups",
+        )
+        .await
+    }
+
     /// `GET /api/v4/emoji/{id}/image` — a custom emoji's picture.
     pub async fn emoji_image_bytes(&self, emoji_id: &str) -> Result<Vec<u8>> {
         let resp = self

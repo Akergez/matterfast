@@ -681,8 +681,17 @@ fn build_session_ui(
     // closing the window is exactly when the next launch's picture is decided.
     window.connect_close_request({
         let ui = ui.clone();
-        move |_| {
+        move |window| {
             ui.save_snapshot();
+            // Closing the window must not tear the session down when the app
+            // is meant to keep running: destroying it would drop the socket
+            // and then the next activation would build a *second* session
+            // alongside the first, which is unreachable. Hiding keeps exactly
+            // one, and presenting it again is instant.
+            if crate::background::Background::enabled() {
+                window.set_visible(false);
+                return glib::Propagation::Stop;
+            }
             glib::Propagation::Proceed
         }
     });
@@ -731,6 +740,7 @@ fn build_session_ui(
                 let Some(channel_id) = target.and_then(|t| t.get::<String>()) else {
                     return;
                 };
+                ui.window.set_visible(true);
                 ui.window.present();
                 ui.dispatch(Action::SelectChannel(channel_id));
             }
@@ -748,6 +758,7 @@ fn build_session_ui(
                         return;
                     };
                     if join {
+                        ui.window.set_visible(true);
                         ui.window.present();
                         ui.dispatch(Action::SelectChannel(channel_id));
                         ui.dispatch(Action::ToggleCall);
