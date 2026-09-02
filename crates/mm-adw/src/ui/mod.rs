@@ -2924,13 +2924,17 @@ impl Ui {
                     } else {
                         String::new()
                     },
-                    // The server wants RFC3339 here, unlike every other time
-                    // in this API.
+                    // RFC3339, unlike every other time in this API — and it
+                    // is decoded into a Go time.Time, which insists on the
+                    // colon in the zone offset. `format_iso8601` writes
+                    // "+0300", which fails to parse and comes back as
+                    // "invalid or missing custom_status", so the format is
+                    // spelled out.
                     expires_at: (expires_at > 0)
                         .then(|| {
                             glib::DateTime::from_unix_local(expires_at / 1000)
                                 .ok()
-                                .and_then(|d| d.format_iso8601().ok())
+                                .and_then(|d| d.format("%Y-%m-%dT%H:%M:%S%:z").ok())
                                 .map(|s| s.to_string())
                         })
                         .flatten(),
