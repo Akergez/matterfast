@@ -10,8 +10,16 @@ use crate::avatars::Avatars;
 use crate::state::SharedState;
 
 /// The channel list, pane one.
+/// What the channel row's own menu can ask for.
+#[derive(Debug, Clone)]
+pub enum RowAction {
+    SetMuted(bool),
+    MoveTo(String),
+}
+
 pub struct ChannelSidebar {
     pub widget: adw::ToolbarView,
+    categories: Rc<dyn Fn(String, RowAction)>,
     list: gtk::ListBox,
     title: gtk::Label,
     switcher: Switcher,
@@ -24,6 +32,7 @@ impl ChannelSidebar {
         on_select_team: impl Fn(String) + 'static,
         on_search: impl Fn(String) + 'static,
         on_status: impl Fn(String) + 'static,
+        on_row_action: impl Fn(String, RowAction) + 'static,
         dock: &gtk::Widget,
     ) -> Self {
         let list = gtk::ListBox::builder()
@@ -142,6 +151,7 @@ impl ChannelSidebar {
 
         ChannelSidebar {
             widget,
+            categories: Rc::new(on_row_action),
             list,
             title,
             switcher,
@@ -177,6 +187,7 @@ impl ChannelSidebar {
                     .map(|user_id| dm_avatar(avatars, user_id, &title, st.presence(user_id)));
                 let row = channel_row(&channel, &title, icon, avatars, &st);
                 unsafe { row.set_data("channel-id", channel.id.clone()) };
+                attach_row_menu(&row, &channel.id, &st, &self.categories);
                 self.list.append(&row);
 
                 if st.current_channel.as_deref() == Some(channel.id.as_str()) {
@@ -199,6 +210,74 @@ fn presence_dot(size: i32) -> gtk::Box {
         .build();
     dot.add_css_class("presence-badge");
     dot
+}
+
+/// The right-click menu on a channel: mute it, favourite it, or file it under
+/// a different category. All three are things people expect to reach from the
+/// row itself rather than from a settings screen.
+fn attach_row_menu(
+    row: &gtk::ListBoxRow,
+    channel_id: &str,
+    state: &crate::state::AppState,
+    categories: &Rc<dyn Fn(String, RowAction)>,
+) {
+    let menu = gtk::gio::Menu::new();
+    let group = gtk::gio::SimpleActionGroup::new();
+
+    let muted = state
+        .memberships
+        .get(channel_id)
+        .is_some_and(|m| m.is_muted());
+    let mut entries: Vec<(String, String, RowAction)> = vec![(
+        if muted { "Unmute" } else { "Mute" }.to_string(),
+        "mute".to_string(),
+        RowAction::SetMuted(!muted),
+    )];
+
+    // Where it is now is not somewhere to move it to.
+    let current = state
+        .categories
+        .categories
+        .iter()
+        .find(|c| c.channel_ids.iter().any(|id| id == channel_id))
+        .map(|c| c.id.clone())
+        .unwrap_or_default();
+    for category in &state.categories.categories {
+        if category.id == current {
+            continue;
+        }
+        entries.push((
+            format!("Move to {}", category.display_name),
+            format!("move-{}", category.id),
+            RowAction::MoveTo(category.id.clone()),
+        ));
+    }
+
+    for (label, name, action) in entries {
+        let item = gtk::gio::SimpleAction::new(&name, None);
+        item.connect_activate({
+            let categories = categories.clone();
+            let channel_id = channel_id.to_string();
+            let action = action.clone();
+            move |_, _| categories(channel_id.clone(), action.clone())
+        });
+        group.add_action(&item);
+        menu.append(Some(&label), Some(&format!("row.{name}")));
+    }
+
+    let popover = gtk::PopoverMenu::from_model(Some(&menu));
+    popover.set_parent(row);
+    popover.set_has_arrow(false);
+    popover.set_halign(gtk::Align::Start);
+    row.insert_action_group("row", Some(&group));
+
+    let click = gtk::GestureClick::new();
+    click.set_button(gtk::gdk::BUTTON_SECONDARY);
+    click.connect_pressed(move |_, _, x, y| {
+        popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+        popover.popup();
+    });
+    row.add_controller(click);
 }
 
 fn category_header(name: &str) -> gtk::ListBoxRow {

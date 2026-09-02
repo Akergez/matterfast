@@ -43,7 +43,7 @@ use call_dock::CallDock;
 use chat::ChatView;
 use message::{MessageActions, PostAction};
 use rhs::{PanelMode, RightPanel};
-use sidebar::ChannelSidebar;
+use sidebar::{ChannelSidebar, RowAction};
 
 /// The websocket prefix of <https://github.com/Toxblh/mattermost-reactions-notify-plugin>,
 /// which notifies you about reactions to your own posts.
@@ -143,6 +143,8 @@ enum Action {
     SummariseUnreads,
     /// Set your own presence.
     SetStatus(String),
+    /// Something from a channel row's own menu.
+    Row(String, sidebar::RowAction),
     /// Raise or lower your hand in the call.
     ToggleHand,
     /// Do something to another participant, as the call's host.
@@ -565,6 +567,12 @@ fn build_session_ui(
             let tx = tx.clone();
             move |status| {
                 let _ = tx.send_blocking(Action::SetStatus(status));
+            }
+        },
+        {
+            let tx = tx.clone();
+            move |channel_id, action| {
+                let _ = tx.send_blocking(Action::Row(channel_id, action));
             }
         },
         dock.widget.upcast_ref(),
@@ -1452,6 +1460,61 @@ impl Ui {
                 },
             );
         });
+    }
+
+    /// Muting a channel, or filing it under a different category.
+    fn row_action(self: &Rc<Self>, channel_id: String, what: RowAction) {
+        let (client, me, team_id) = {
+            let st = self.state.borrow();
+            (
+                st.client.clone(),
+                st.me.id.clone(),
+                st.current_team.clone().unwrap_or_default(),
+            )
+        };
+
+        match what {
+            RowAction::SetMuted(muted) => {
+                // Muted is stored as mark_unread: "mention" — the same field
+                // the notification dialog writes, so it goes the same way.
+                let mut props = mattermost_api::models::StringMap::new();
+                props.insert(
+                    "mark_unread".into(),
+                    if muted { "mention" } else { "all" }.into(),
+                );
+                let ui = self.clone();
+                runtime::spawn(
+                    async move {
+                        client
+                            .set_channel_notify_props(&channel_id, &me, &props)
+                            .await
+                    },
+                    move |result| match result {
+                        Ok(()) => ui.schedule_sidebar_reload(),
+                        Err(e) => ui.toast(&format!("Could not change that: {e}")),
+                    },
+                );
+            }
+            RowAction::MoveTo(category_id) => {
+                // The categories route replaces membership wholesale, so both
+                // the old and the new category have to be sent together.
+                let mut categories = self.state.borrow().categories.categories.clone();
+                for category in categories.iter_mut() {
+                    category.channel_ids.retain(|id| id != &channel_id);
+                    if category.id == category_id {
+                        category.channel_ids.insert(0, channel_id.clone());
+                    }
+                }
+                let ui = self.clone();
+                runtime::spawn(
+                    async move { client.update_categories(&me, &team_id, &categories).await },
+                    move |result| match result {
+                        Ok(_) => ui.schedule_sidebar_reload(),
+                        Err(e) => ui.toast(&format!("Could not move it: {e}")),
+                    },
+                );
+            }
+        }
     }
 
     /// The channel's name and topic.
@@ -3498,6 +3561,7 @@ impl Ui {
             }
             Action::SummariseUnreads => self.summarise_unreads(),
             Action::SetStatus(status) => self.set_status(status),
+            Action::Row(channel_id, what) => self.row_action(channel_id, what),
             Action::ToggleHand => self.toggle_hand(),
             Action::HostControl(session_id, what) => self.host_control(session_id, what),
             Action::DropAttachment(file_id) => {
