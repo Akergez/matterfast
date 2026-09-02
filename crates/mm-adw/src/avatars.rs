@@ -146,11 +146,33 @@ impl Avatars {
                                     inner.textures.insert(done_id, texture);
                                     loaded = true;
                                 }
-                                Err(e) => {
+                                // A shortcode that is neither Unicode nor uploaded to
+                        // this server is an ordinary thing for someone to
+                        // type, not a failure worth the word "failed".
+                        Err(e) if done_id.starts_with(EMOJI_PREFIX) => {
+                            tracing::debug!(
+                                emoji = done_id.trim_start_matches(EMOJI_PREFIX),
+                                "no such custom emoji on this server"
+                            );
+                            let _ = e;
+                            inner.failed.insert(done_id.clone());
+                        }
+                        Err(e) => {
                                     tracing::warn!(error = %e, "undecodable avatar image");
                                     inner.failed.insert(done_id);
                                 }
                             }
+                        }
+                        // A shortcode that is neither Unicode nor uploaded to
+                        // this server is an ordinary thing for someone to
+                        // type, not a failure worth the word "failed".
+                        Err(e) if done_id.starts_with(EMOJI_PREFIX) => {
+                            tracing::debug!(
+                                emoji = done_id.trim_start_matches(EMOJI_PREFIX),
+                                "no such custom emoji on this server"
+                            );
+                            let _ = e;
+                            inner.failed.insert(done_id.clone());
                         }
                         Err(e) => {
                             tracing::debug!(error = %e, "avatar fetch failed");
