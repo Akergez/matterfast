@@ -1,0 +1,380 @@
+//! Editing your own account: the profile, the custom status, and which server
+//! you sign in to.
+//!
+//! Like [`super::dialogs`], nothing here talks to the server or to
+//! [`crate::state`] — each function takes callbacks and hands back what the
+//! user chose, so the API calls stay in [`super`] with the client.
+
+use std::path::PathBuf;
+use std::rc::Rc;
+
+use adw::prelude::*;
+use gtk::glib;
+
+/// The clear-after choices, in menu order. The index into this table is what
+/// [`expires_at`] reads; index 0 never expires.
+const DURATIONS: [&str; 6] = [
+    "Don't clear",
+    "30 minutes",
+    "1 hour",
+    "4 hours",
+    "Today",
+    "This week",
+];
+
+/// Edit your own profile. `current` is (first_name, last_name, nickname, position).
+/// `on_save` gets the same four. `on_avatar` gets a chosen image file.
+pub fn edit_profile(
+    parent: &impl IsA<gtk::Window>,
+    current: (String, String, String, String),
+    avatar: Option<gtk::gdk::Texture>,
+    on_save: impl Fn(String, String, String, String) + 'static,
+    on_avatar: impl Fn(PathBuf) + 'static,
+) {
+    let (first_name, last_name, nickname, position) = current;
+
+    let picture = adw::Avatar::builder()
+        .size(96)
+        .show_initials(true)
+        .text(format!("{first_name} {last_name}").trim())
+        .halign(gtk::Align::Center)
+        .build();
+    if let Some(texture) = &avatar {
+        picture.set_custom_image(Some(texture));
+    }
+
+    let change = gtk::Button::builder()
+        .label("Change picture…")
+        .halign(gtk::Align::Center)
+        .margin_top(12)
+        .build();
+    change.add_css_class("pill");
+
+    let first = adw::EntryRow::builder()
+        .title("First name")
+        .text(&first_name)
+        .build();
+    let last = adw::EntryRow::builder()
+        .title("Last name")
+        .text(&last_name)
+        .build();
+    let nick = adw::EntryRow::builder()
+        .title("Nickname")
+        .text(&nickname)
+        .build();
+    let role = adw::EntryRow::builder()
+        .title("Position")
+        .text(&position)
+        .build();
+
+    let group = adw::PreferencesGroup::builder().margin_top(24).build();
+    group.add(&first);
+    group.add(&last);
+    group.add(&nick);
+    group.add(&role);
+
+    let column = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .margin_top(24)
+        .margin_bottom(24)
+        .margin_start(12)
+        .margin_end(12)
+        .build();
+    column.append(&picture);
+    column.append(&change);
+    column.append(&group);
+
+    let cancel = gtk::Button::with_label("Cancel");
+    let save = gtk::Button::with_label("Save");
+    save.add_css_class("suggested-action");
+
+    let header = adw::HeaderBar::builder()
+        .title_widget(&adw::WindowTitle::new("Edit profile", ""))
+        .show_end_title_buttons(false)
+        .show_start_title_buttons(false)
+        .build();
+    header.pack_start(&cancel);
+    header.pack_end(&save);
+
+    let view = adw::ToolbarView::new();
+    view.add_top_bar(&header);
+    view.set_content(Some(
+        &adw::Clamp::builder()
+            .maximum_size(460)
+            .child(&column)
+            .build(),
+    ));
+
+    let window = adw::Window::builder()
+        .title("Edit profile")
+        .default_width(420)
+        .modal(true)
+        .build();
+    window.set_transient_for(Some(parent));
+    window.set_content(Some(&view));
+
+    // The picker can be opened again after a mis-click, so the callback is
+    // shared rather than moved into the first click.
+    let on_avatar = Rc::new(on_avatar);
+    change.connect_clicked({
+        let window = window.clone();
+        let picture = picture.clone();
+        let on_avatar = on_avatar.clone();
+        move |_| {
+            let filter = gtk::FileFilter::new();
+            filter.set_name(Some("Images"));
+            for mime in ["image/png", "image/jpeg", "image/webp"] {
+                filter.add_mime_type(mime);
+            }
+            let filters = gtk::gio::ListStore::new::<gtk::FileFilter>();
+            filters.append(&filter);
+
+            let chooser = gtk::FileDialog::builder()
+                .title("Choose a picture")
+                .modal(true)
+                .filters(&filters)
+                .default_filter(&filter)
+                .build();
+            chooser.open(Some(&window), gtk::gio::Cancellable::NONE, {
+                let picture = picture.clone();
+                let on_avatar = on_avatar.clone();
+                move |result| {
+                    let Ok(file) = result else {
+                        return; // Cancelled, which is not an error worth showing.
+                    };
+                    // Show it straight away: the upload and the reload of the
+                    // server's copy both happen much later.
+                    if let Ok(texture) = gtk::gdk::Texture::from_file(&file) {
+                        picture.set_custom_image(Some(&texture));
+                    }
+                    if let Some(path) = file.path() {
+                        on_avatar(path);
+                    }
+                }
+            });
+        }
+    });
+
+    cancel.connect_clicked({
+        let window = window.clone();
+        move |_| window.close()
+    });
+    save.connect_clicked({
+        let window = window.clone();
+        move |_| {
+            window.close();
+            on_save(
+                first.text().trim().to_string(),
+                last.text().trim().to_string(),
+                nick.text().trim().to_string(),
+                role.text().trim().to_string(),
+            );
+        }
+    });
+
+    window.present();
+}
+
+/// Set a custom status. `current` is (emoji_shortcode, text).
+/// `on_set` gets (emoji, text, expires_at_unix_millis or 0 for never).
+/// `on_clear` clears it.
+pub fn custom_status(
+    parent: &impl IsA<gtk::Window>,
+    current: (String, String),
+    on_set: impl Fn(String, String, i64) + 'static,
+    on_clear: impl Fn() + 'static,
+) {
+    let (current_emoji, current_text) = current;
+    let is_set = !current_emoji.is_empty() || !current_text.is_empty();
+
+    let emoji = adw::EntryRow::builder()
+        .title("Emoji")
+        .text(&current_emoji)
+        .build();
+    let text = adw::EntryRow::builder()
+        .title("Message")
+        .text(&current_text)
+        .build();
+    let duration = adw::ComboRow::builder().title("Clear after").build();
+    duration.set_model(Some(&gtk::StringList::new(&DURATIONS)));
+
+    let group = adw::PreferencesGroup::builder()
+        .description("The emoji is a shortcode without colons, like coffee.")
+        .build();
+    group.add(&emoji);
+    group.add(&text);
+    group.add(&duration);
+
+    let dialog = adw::MessageDialog::new(Some(parent), Some("Set a status"), None);
+    dialog.set_extra_child(Some(&group));
+    dialog.add_responses(&[("cancel", "Cancel"), ("set", "Set status")]);
+    // Nothing to clear until there is a status, so the button is not offered.
+    if is_set {
+        dialog.add_response("clear", "Clear status");
+        dialog.set_response_appearance("clear", adw::ResponseAppearance::Destructive);
+    }
+    dialog.set_response_appearance("set", adw::ResponseAppearance::Suggested);
+    dialog.set_default_response(Some("set"));
+    dialog.set_close_response("cancel");
+
+    dialog.connect_response(None, move |dialog, response| {
+        dialog.close();
+        match response {
+            "clear" => on_clear(),
+            "set" => {
+                let base = glib::DateTime::now_local().ok();
+                let expires = base.map_or(0, |now| expires_at(&now, duration.selected()));
+                on_set(
+                    emoji.text().trim().trim_matches(':').to_string(),
+                    text.text().trim().to_string(),
+                    expires,
+                );
+            }
+            _ => {}
+        }
+    });
+    dialog.present();
+}
+
+/// Pick a server to sign in to, or add another. `servers` is (url, label).
+/// `on_pick` selects an existing one; `on_add` starts a new sign-in.
+pub fn choose_server(
+    parent: &impl IsA<gtk::Window>,
+    servers: Vec<(String, String)>,
+    on_pick: impl Fn(String) + 'static,
+    on_add: impl Fn() + 'static,
+) {
+    let list = gtk::ListBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
+        .valign(gtk::Align::Start)
+        .build();
+    list.add_css_class("boxed-list");
+
+    let window = adw::Window::builder()
+        .title("Choose a server")
+        .default_width(420)
+        .default_height(420)
+        .modal(true)
+        .build();
+    window.set_transient_for(Some(parent));
+
+    let on_pick = Rc::new(on_pick);
+    for (url, label) in servers {
+        // AdwActionRow reads its title as Pango markup, and both of these are
+        // free text the user typed at sign-in.
+        let row = adw::ActionRow::builder()
+            .title(glib::markup_escape_text(&label))
+            .subtitle(glib::markup_escape_text(&url))
+            .activatable(true)
+            .build();
+        row.connect_activated({
+            let on_pick = on_pick.clone();
+            let window = window.clone();
+            move |_| {
+                window.close();
+                on_pick(url.clone());
+            }
+        });
+        list.append(&row);
+    }
+
+    let add = adw::ActionRow::builder()
+        .title("Add Server…")
+        .activatable(true)
+        .build();
+    add.add_prefix(&gtk::Image::from_icon_name("list-add-symbolic"));
+    add.connect_activated({
+        let window = window.clone();
+        move |_| {
+            window.close();
+            on_add();
+        }
+    });
+    list.append(&add);
+
+    let scroller = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vexpand(true)
+        .child(
+            &adw::Clamp::builder()
+                .maximum_size(460)
+                .margin_top(12)
+                .margin_bottom(12)
+                .margin_start(12)
+                .margin_end(12)
+                .child(&list)
+                .build(),
+        )
+        .build();
+
+    let view = adw::ToolbarView::new();
+    view.add_top_bar(&adw::HeaderBar::new());
+    view.set_content(Some(&scroller));
+    window.set_content(Some(&view));
+    window.present();
+}
+
+/// When the status picked at `base` should expire, in Unix milliseconds.
+/// `choice` indexes [`DURATIONS`]; 0 — and anything glib refuses to compute —
+/// means "never", which is the answer that loses the least.
+fn expires_at(base: &glib::DateTime, choice: u32) -> i64 {
+    let time = match choice {
+        1 => base.add_minutes(30).ok(),
+        2 => base.add_hours(1).ok(),
+        3 => base.add_hours(4).ok(),
+        4 => end_of_day(base),
+        // glib numbers the days 1 = Monday … 7 = Sunday, so the week ends
+        // 7 - today days from now.
+        5 => base
+            .add_days(7 - base.day_of_week())
+            .ok()
+            .and_then(|day| end_of_day(&day)),
+        _ => None,
+    };
+    time.map_or(0, |time| time.to_unix() * 1000)
+}
+
+/// One second before midnight on `day`, in its own local time.
+fn end_of_day(day: &glib::DateTime) -> Option<glib::DateTime> {
+    glib::DateTime::from_local(day.year(), day.month(), day.day_of_month(), 23, 59, 59.0).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base() -> glib::DateTime {
+        glib::DateTime::from_local(2026, 9, 2, 10, 30, 0.0).unwrap()
+    }
+
+    #[test]
+    fn never_is_zero() {
+        assert_eq!(expires_at(&base(), 0), 0);
+        // An index past the table is a bug elsewhere; it must not expire early.
+        assert_eq!(expires_at(&base(), 99), 0);
+    }
+
+    #[test]
+    fn offsets_are_added_to_the_base() {
+        let start = base().to_unix() * 1000;
+        assert_eq!(expires_at(&base(), 1) - start, 30 * 60 * 1000);
+        assert_eq!(expires_at(&base(), 2) - start, 60 * 60 * 1000);
+        assert_eq!(expires_at(&base(), 3) - start, 4 * 60 * 60 * 1000);
+    }
+
+    #[test]
+    fn today_ends_tonight() {
+        let end = glib::DateTime::from_unix_local(expires_at(&base(), 4) / 1000).unwrap();
+        assert_eq!((end.year(), end.month(), end.day_of_month()), (2026, 9, 2));
+        assert_eq!((end.hour(), end.minute()), (23, 59));
+    }
+
+    #[test]
+    fn the_week_ends_on_sunday_night() {
+        let end = glib::DateTime::from_unix_local(expires_at(&base(), 5) / 1000).unwrap();
+        assert_eq!(end.day_of_week(), 7);
+        assert_eq!((end.hour(), end.minute()), (23, 59));
+        // Always ahead of "Today", never behind it.
+        assert!(expires_at(&base(), 5) >= expires_at(&base(), 4));
+    }
+}

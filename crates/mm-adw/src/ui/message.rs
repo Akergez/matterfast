@@ -49,6 +49,8 @@ pub enum PostAction {
     Summarise,
     /// Have the server DM you about this later.
     Remind,
+    /// Show what this message said before it was edited.
+    History,
 }
 
 pub struct RowOptions {
@@ -426,6 +428,10 @@ fn overflow_menu(post: &Post, actions: &MessageActions, mine: bool) -> gtk::Widg
     } else {
         entries.push(("Pin to channel", "pin", PostAction::Pin));
     }
+    // Only worth offering where there is a history to see.
+    if post.is_edited() {
+        entries.push(("Edit history", "history", PostAction::History));
+    }
     if post.reply_count > 0 {
         entries.push(("Summarise thread", "summarise", PostAction::Summarise));
     }
@@ -457,11 +463,85 @@ fn overflow_menu(post: &Post, actions: &MessageActions, mine: bool) -> gtk::Widg
 }
 
 fn reaction_picker(post: &Post, actions: &MessageActions) -> gtk::Popover {
-    let grid = gtk::Box::builder()
+    let quick = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(2)
         .build();
-    let popover = gtk::Popover::builder().child(&grid).build();
+
+    // The eight most-used sit on top, because most reactions are one of them
+    // and scrolling past them to find one would be the common case made slow.
+    let all = gtk::FlowBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
+        .min_children_per_line(8)
+        .max_children_per_line(8)
+        .homogeneous(true)
+        .build();
+    let scroller = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .min_content_height(220)
+        .max_content_height(220)
+        .width_request(280)
+        .child(&all)
+        .build();
+
+    let search = gtk::SearchEntry::builder()
+        .placeholder_text("Search emoji")
+        .build();
+
+    let content = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(6)
+        .build();
+    content.append(&quick);
+    content.append(&search);
+    content.append(&scroller);
+
+    let popover = gtk::Popover::builder().child(&content).build();
+
+    // Filling the whole table costs a few thousand buttons, so the list is
+    // rebuilt per search instead — and starts on a page of common ones.
+    let fill = {
+        let all = all.clone();
+        let actions = actions.clone();
+        let post_id = post.id.clone();
+        let popover = popover.clone();
+        move |term: &str| {
+            while let Some(child) = all.first_child() {
+                all.remove(&child);
+            }
+            let term = term.trim().to_lowercase();
+            let matches = emojis::iter().filter_map(|e| {
+                let name = e.shortcode()?;
+                (term.is_empty() || name.contains(&term)).then_some((name, e.as_str()))
+            });
+            for (name, glyph) in matches.take(120) {
+                let button = gtk::Button::builder()
+                    .label(glyph)
+                    .tooltip_text(format!(":{name}:"))
+                    .build();
+                button.add_css_class("flat");
+                button.add_css_class("emoji-button");
+                button.connect_clicked({
+                    let actions = actions.clone();
+                    let post_id = post_id.clone();
+                    let name = name.to_string();
+                    let popover = popover.clone();
+                    move |_| {
+                        popover.popdown();
+                        (actions.toggle_reaction)(post_id.clone(), name.clone());
+                    }
+                });
+                all.append(&button);
+            }
+        }
+    };
+    fill("");
+    search.connect_search_changed({
+        let fill = fill.clone();
+        move |entry| fill(&entry.text())
+    });
+
+    let grid = quick;
 
     for name in emoji::QUICK_REACTIONS {
         let button = gtk::Button::builder()

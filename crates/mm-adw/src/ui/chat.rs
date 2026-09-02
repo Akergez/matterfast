@@ -337,6 +337,49 @@ impl ChatView {
             move |query| on_complete(query)
         }));
 
+        // Ctrl+V with an image on the clipboard attaches it. Pasting a
+        // screenshot is how most images get into a chat, and the alternative
+        // is saving it to disk first for no reason.
+        let on_files = Rc::new(on_files);
+        let paste = gtk::EventControllerKey::new();
+        paste.connect_key_pressed({
+            let on_files = on_files.clone();
+            move |controller, key, _, modifier| {
+                let ctrl_v = key == gtk::gdk::Key::v
+                    && modifier.contains(gtk::gdk::ModifierType::CONTROL_MASK);
+                if !ctrl_v {
+                    return glib::Propagation::Proceed;
+                }
+                let Some(clipboard) = controller.widget().map(|w| w.clipboard()) else {
+                    return glib::Propagation::Proceed;
+                };
+                // Only claim the keystroke when there really is an image;
+                // otherwise the text paste has to go through untouched.
+                if !clipboard
+                    .formats()
+                    .contains_type(gtk::gdk::Texture::static_type())
+                {
+                    return glib::Propagation::Proceed;
+                }
+
+                let on_files = on_files.clone();
+                clipboard.read_texture_async(gtk::gio::Cancellable::NONE, move |result| {
+                    let Ok(Some(texture)) = result else { return };
+                    // The upload path takes paths, so the pasted image lands
+                    // in a temp file that the OS cleans up.
+                    let path = std::env::temp_dir()
+                        .join(format!("mm-adw-paste-{}.png", glib::monotonic_time()));
+                    if let Err(e) = texture.save_to_png(&path) {
+                        tracing::warn!(error = %e, "could not save the pasted image");
+                        return;
+                    }
+                    on_files(vec![path]);
+                });
+                glib::Propagation::Stop
+            }
+        });
+        entry.add_controller(paste);
+
         let keys = gtk::EventControllerKey::new();
         keys.connect_key_pressed({
             let complete = complete.clone();
@@ -452,17 +495,20 @@ impl ChatView {
             gtk::gdk::FileList::static_type(),
             gtk::gdk::DragAction::COPY,
         );
-        drop.connect_drop(move |_, value, _, _| {
-            let Ok(files) = value.get::<gtk::gdk::FileList>() else {
-                return false;
-            };
-            let paths: Vec<std::path::PathBuf> =
-                files.files().iter().filter_map(|f| f.path()).collect();
-            if paths.is_empty() {
-                return false;
+        drop.connect_drop({
+            let on_files = on_files.clone();
+            move |_, value, _, _| {
+                let Ok(files) = value.get::<gtk::gdk::FileList>() else {
+                    return false;
+                };
+                let paths: Vec<std::path::PathBuf> =
+                    files.files().iter().filter_map(|f| f.path()).collect();
+                if paths.is_empty() {
+                    return false;
+                }
+                on_files(paths);
+                true
             }
-            on_files(paths);
-            true
         });
         conversation.add_controller(drop);
 

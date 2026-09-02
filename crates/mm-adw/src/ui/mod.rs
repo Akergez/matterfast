@@ -1155,6 +1155,64 @@ impl Ui {
         *browser.borrow_mut() = Some(opened);
     }
 
+    /// Shows what a message used to say, newest first, each with the time it
+    /// was replaced.
+    fn show_history(self: &Rc<Self>, versions: Vec<Post>) {
+        let list = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(12)
+            .margin_top(12)
+            .margin_bottom(12)
+            .margin_start(12)
+            .margin_end(12)
+            .build();
+
+        for version in versions {
+            let when = gtk::Label::builder()
+                .label(format!(
+                    "{} {}",
+                    message::format_day(version.create_at),
+                    message::format_time(version.create_at)
+                ))
+                .xalign(0.0)
+                .build();
+            when.add_css_class("message-timestamp");
+
+            let text = gtk::Label::builder()
+                .label(version.source_text())
+                .xalign(0.0)
+                .wrap(true)
+                .selectable(true)
+                .can_focus(false)
+                .build();
+
+            let entry = gtk::Box::builder()
+                .orientation(gtk::Orientation::Vertical)
+                .build();
+            entry.append(&when);
+            entry.append(&text);
+            list.append(&entry);
+        }
+
+        let window = adw::Window::builder()
+            .title("Edit history")
+            .transient_for(&self.window)
+            .modal(true)
+            .default_width(520)
+            .default_height(420)
+            .build();
+        let view = adw::ToolbarView::new();
+        view.add_top_bar(&adw::HeaderBar::new());
+        view.set_content(Some(
+            &gtk::ScrolledWindow::builder()
+                .hscrollbar_policy(gtk::PolicyType::Never)
+                .child(&list)
+                .build(),
+        ));
+        window.set_content(Some(&view));
+        window.present();
+    }
+
     /// Sends what is in the composer at a chosen time.
     ///
     /// The server keeps it and posts it for you, so this works with the app
@@ -1508,6 +1566,12 @@ impl Ui {
         );
     }
 
+    /// Above this a file goes up in chunks through an upload session, so a
+    /// dropped connection resumes instead of starting the whole thing again.
+    /// Below it, one multipart request is fewer round trips.
+    const CHUNKED_ABOVE: u64 = 8 * 1024 * 1024;
+    const CHUNK: usize = 4 * 1024 * 1024;
+
     fn upload(self: &Rc<Self>, channel_id: &str, path: std::path::PathBuf) {
         let client = self.state.borrow().client.clone();
         let channel_id = channel_id.to_string();
@@ -1523,10 +1587,44 @@ impl Ui {
                 // Reading in the worker: a large file would otherwise block
                 // the frame this was started from.
                 let bytes = tokio::fs::read(&path).await.map_err(|e| e.to_string())?;
-                client
-                    .upload_file(&channel_id, &name, bytes, None)
+                if bytes.len() as u64 <= Self::CHUNKED_ABOVE {
+                    return client
+                        .upload_file(&channel_id, &name, bytes, None)
+                        .await
+                        .map_err(|e| e.to_string());
+                }
+
+                // Chunked: create a session, then send from wherever the
+                // server says it got to. There is no Content-Range here — the
+                // body simply starts at file_offset.
+                let session = client
+                    .create_upload_session(&channel_id, &name, bytes.len() as i64)
                     .await
-                    .map_err(|e| e.to_string())
+                    .map_err(|e| e.to_string())?;
+                let mut offset = session.file_offset as usize;
+                loop {
+                    let end = (offset + Self::CHUNK).min(bytes.len());
+                    let info = client
+                        .upload_data(&session.id, bytes[offset..end].to_vec())
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    if let Some(info) = info {
+                        return Ok(mattermost_api::models::FileUploadResponse {
+                            file_infos: vec![info],
+                            ..Default::default()
+                        });
+                    }
+                    if end >= bytes.len() {
+                        return Err("the server never finished the upload".to_string());
+                    }
+                    // Trust the server's idea of where it got to rather than
+                    // our own arithmetic: a partial write is its to report.
+                    offset = client
+                        .upload_session(&session.id)
+                        .await
+                        .map_err(|e| e.to_string())?
+                        .file_offset as usize;
+                }
             },
             move |result| {
                 match result {
@@ -1670,6 +1768,19 @@ impl Ui {
                         },
                     );
                 });
+            }
+            PostAction::History => {
+                let ui = self.clone();
+                runtime::spawn(
+                    async move { client.post_edit_history(&post_id).await },
+                    move |result| match result {
+                        Ok(versions) if versions.is_empty() => {
+                            ui.toast("No earlier versions are kept for this message.")
+                        }
+                        Ok(versions) => ui.show_history(versions),
+                        Err(e) => ui.toast(&format!("Could not load the history: {e}")),
+                    },
+                );
             }
             PostAction::Edit => self.chat.begin_edit(&post_id, post.source_text()),
             PostAction::Delete => self.confirm_delete(post_id),
