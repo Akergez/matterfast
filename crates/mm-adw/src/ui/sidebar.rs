@@ -22,6 +22,8 @@ pub enum RowAction {
 pub struct ChannelSidebar {
     pub widget: adw::ToolbarView,
     categories: Rc<dyn Fn(String, RowAction)>,
+    search_button: gtk::ToggleButton,
+    search_entry: gtk::SearchEntry,
     list: gtk::ListBox,
     title: gtk::Label,
     switcher: Switcher,
@@ -160,12 +162,20 @@ impl ChannelSidebar {
 
         ChannelSidebar {
             widget,
+            search_button: search_button.clone(),
+            search_entry: search_entry.clone(),
             categories: Rc::new(on_row_action),
             list,
             title,
             switcher,
             updating,
         }
+    }
+
+    /// Opens the search bar and puts the cursor in it.
+    pub fn focus_search(&self) {
+        self.search_button.set_active(true);
+        self.search_entry.grab_focus();
     }
 
     pub fn refresh(&self, state: &SharedState, avatars: &Avatars) {

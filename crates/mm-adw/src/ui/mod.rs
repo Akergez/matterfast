@@ -84,6 +84,11 @@ enum MenuAction {
     BrowseTeams,
     NewCategory,
     LeaveTeam,
+    FocusSearch,
+    OpenInbox,
+    ClosePanel,
+    NextUnread,
+    PreviousUnread,
     EditChannel,
     ArchiveChannel,
     ChannelNotifications,
@@ -729,6 +734,11 @@ fn build_session_ui(
         ("channel-bookmarks", MenuAction::ChannelBookmarks),
         ("browse-teams", MenuAction::BrowseTeams),
         ("new-category", MenuAction::NewCategory),
+        ("search", MenuAction::FocusSearch),
+        ("inbox", MenuAction::OpenInbox),
+        ("close-panel", MenuAction::ClosePanel),
+        ("next-unread", MenuAction::NextUnread),
+        ("previous-unread", MenuAction::PreviousUnread),
         ("leave-team", MenuAction::LeaveTeam),
         ("edit-channel", MenuAction::EditChannel),
         ("archive-channel", MenuAction::ArchiveChannel),
@@ -746,7 +756,19 @@ fn build_session_ui(
     }
 
     if let Some(app) = window.application() {
-        app.set_accels_for_action("win.quick-switch", &["<Control>k"]);
+        // The shortcuts a chat client is expected to have. Anything reachable
+        // only by mouse is reachable only slowly.
+        for (action, keys) in [
+            ("win.quick-switch", &["<Control>k"][..]),
+            ("win.search", &["<Control>f"]),
+            ("win.inbox", &["<Control><Shift>i"]),
+            ("win.close-panel", &["Escape"]),
+            ("win.new-channel", &["<Control>n"]),
+            ("win.next-unread", &["<Control><Shift>Down"]),
+            ("win.previous-unread", &["<Control><Shift>Up"]),
+        ] {
+            app.set_accels_for_action(action, keys);
+        }
     }
 
     // Clicking a notification lands here. The action is on the application so
@@ -785,12 +807,24 @@ fn build_session_ui(
                         ui.dispatch(Action::SelectChannel(channel_id));
                         ui.dispatch(Action::ToggleCall);
                     } else {
-                        // Tell the server, so the same call stops ringing on
-                        // this account's other devices too.
-                        let client = ui.state.borrow().client.clone();
+                        // In a DM there is one person waiting, and declining
+                        // tells them; anywhere else there is nobody to tell,
+                        // so it is only silenced for us and our other devices.
+                        let (client, direct) = {
+                            let st = ui.state.borrow();
+                            let direct = st
+                                .channel(&channel_id)
+                                .is_some_and(|c| matches!(c.r#type, ChannelType::Direct));
+                            (st.client.clone(), direct)
+                        };
                         runtime::spawn(
                             async move {
-                                mattermost_calls::dismiss_notification(&client, &channel_id).await
+                                if direct {
+                                    mattermost_calls::decline(&client, &channel_id).await
+                                } else {
+                                    mattermost_calls::dismiss_notification(&client, &channel_id)
+                                        .await
+                                }
                             },
                             |_| {},
                         );
@@ -1298,6 +1332,11 @@ impl Ui {
             MenuAction::ChannelBookmarks => self.channel_bookmarks(),
             MenuAction::BrowseTeams => self.browse_teams(),
             MenuAction::NewCategory => self.new_category(),
+            MenuAction::FocusSearch => self.channels.focus_search(),
+            MenuAction::OpenInbox => self.open_inbox(),
+            MenuAction::ClosePanel => self.dispatch(Action::CloseRightPanel),
+            MenuAction::NextUnread => self.step_unread(true),
+            MenuAction::PreviousUnread => self.step_unread(false),
             MenuAction::LeaveTeam => self.leave_team(),
             MenuAction::EditChannel => self.edit_channel(),
             MenuAction::ArchiveChannel => self.archive_channel(),
@@ -2230,6 +2269,97 @@ impl Ui {
         dialog.present();
     }
 
+    /// Moves to the next or previous channel with something unread, in
+    /// sidebar order. Wraps, because the alternative is a shortcut that
+    /// silently stops working at the end of the list.
+    fn step_unread(self: &Rc<Self>, forwards: bool) {
+        let next = {
+            let st = self.state.borrow();
+            let ordered: Vec<String> = st
+                .sidebar_groups()
+                .into_iter()
+                .flat_map(|(_, channels)| channels)
+                .map(|c| c.id)
+                .collect();
+            let unread: Vec<String> = ordered
+                .iter()
+                .filter(|id| st.unread(id).is_unread())
+                .cloned()
+                .collect();
+            if unread.is_empty() {
+                None
+            } else {
+                let here = st
+                    .current_channel
+                    .as_ref()
+                    .and_then(|id| ordered.iter().position(|other| other == id))
+                    .unwrap_or(0);
+                let mut candidates: Vec<&String> = unread.iter().collect();
+                if !forwards {
+                    candidates.reverse();
+                }
+                candidates
+                    .iter()
+                    .find(|id| {
+                        let position = ordered.iter().position(|other| &other == *id).unwrap_or(0);
+                        if forwards {
+                            position > here
+                        } else {
+                            position < here
+                        }
+                    })
+                    .or(candidates.first())
+                    .map(|id| (*id).clone())
+            }
+        };
+        if let Some(channel_id) = next {
+            self.dispatch(Action::SelectChannel(channel_id));
+        }
+    }
+
+    /// Asks which channel, using the same switcher as Ctrl+K. Picking a
+    /// destination is the same act as picking one to read, and a second list
+    /// would be a second thing to keep working.
+    fn pick_channel(self: &Rc<Self>, on_pick: impl Fn(String) + 'static) {
+        let holder: Rc<RefCell<Option<Rc<switcher::Switcher>>>> = Rc::new(RefCell::new(None));
+        let search_ui = self.clone();
+        let search_holder = holder.clone();
+        let opened = Rc::new(switcher::Switcher::present(
+            &self.window,
+            move |term| {
+                let lowered = term.to_lowercase();
+                let st = search_ui.state.borrow();
+                let mut rows: Vec<(switcher::Target, String, String, String)> = st
+                    .channels
+                    .values()
+                    .filter(|c| c.delete_at == 0)
+                    .filter_map(|channel| {
+                        let title = st.channel_title(channel);
+                        (lowered.is_empty() || title.to_lowercase().contains(&lowered)).then(|| {
+                            (
+                                switcher::Target::Channel(channel.id.clone()),
+                                title,
+                                String::new(),
+                                channel_icon_name(channel),
+                            )
+                        })
+                    })
+                    .collect();
+                rows.sort_by_key(|row| row.1.to_lowercase());
+                rows.truncate(QUICK_SWITCH_ROWS);
+                if let Some(switcher) = search_holder.borrow().as_ref() {
+                    switcher.set_results(rows);
+                }
+            },
+            move |target| {
+                if let switcher::Target::Channel(channel_id) = target {
+                    on_pick(channel_id);
+                }
+            },
+        ));
+        *holder.borrow_mut() = Some(opened);
+    }
+
     /// Ctrl+K: jump to a channel or a person by typing a few letters.
     ///
     /// Channels are matched locally against the sidebar — instant, and the
@@ -3095,60 +3225,47 @@ impl Ui {
                     },
                 );
             }
+            PostAction::Forward => {
+                // Forwarding is a new message carrying a permalink: the server
+                // resolves that back into the original, which is how the other
+                // clients do it and why the quoted post stays live rather than
+                // becoming a stale copy.
+                let team = self
+                    .state
+                    .borrow()
+                    .current_team_name()
+                    .unwrap_or_else(|| "_redirect".to_string());
+                let link = format!("{}/{team}/pl/{post_id}", client.site_url());
+                let ui = self.clone();
+                self.pick_channel(move |channel_id| {
+                    let client = client.clone();
+                    let link = link.clone();
+                    let ui = ui.clone();
+                    runtime::spawn(
+                        async move { client.send_message(&channel_id, &link, None).await },
+                        move |result| match result {
+                            Ok(post) => {
+                                ui.dispatch(Action::OpenPost(post.channel_id, String::new()))
+                            }
+                            Err(e) => ui.toast(&format!("Could not forward it: {e}")),
+                        },
+                    );
+                });
+            }
             PostAction::MoveThread => {
-                // Reuse the jump-to switcher: picking a destination channel is
-                // the same act as picking one to read, and a second list would
-                // be a second thing to keep working.
-                let holder: Rc<RefCell<Option<Rc<switcher::Switcher>>>> =
-                    Rc::new(RefCell::new(None));
-                let search_ui = self.clone();
-                let move_ui = self.clone();
-                let search_holder = holder.clone();
-                let opened = Rc::new(switcher::Switcher::present(
-                    &self.window,
-                    move |term| {
-                        let lowered = term.to_lowercase();
-                        let st = search_ui.state.borrow();
-                        let mut rows: Vec<(switcher::Target, String, String, String)> = st
-                            .channels
-                            .values()
-                            .filter(|c| c.delete_at == 0 && c.r#type != ChannelType::Direct)
-                            .filter_map(|channel| {
-                                let title = st.channel_title(channel);
-                                (lowered.is_empty() || title.to_lowercase().contains(&lowered))
-                                    .then(|| {
-                                        (
-                                            switcher::Target::Channel(channel.id.clone()),
-                                            title,
-                                            String::new(),
-                                            channel_icon_name(channel),
-                                        )
-                                    })
-                            })
-                            .collect();
-                        rows.sort_by_key(|row| row.1.to_lowercase());
-                        rows.truncate(QUICK_SWITCH_ROWS);
-                        if let Some(switcher) = search_holder.borrow().as_ref() {
-                            switcher.set_results(rows);
-                        }
-                    },
-                    move |target| {
-                        let switcher::Target::Channel(channel_id) = target else {
-                            return;
-                        };
-                        let client = client.clone();
-                        let post_id = post_id.clone();
-                        let ui = move_ui.clone();
-                        runtime::spawn(
-                            async move { client.move_thread(&post_id, &channel_id).await },
-                            move |result| match result {
-                                Ok(()) => ui.toast("Thread moved."),
-                                Err(e) => ui.toast(&format!("Could not move it: {e}")),
-                            },
-                        );
-                    },
-                ));
-                *holder.borrow_mut() = Some(opened);
+                let ui = self.clone();
+                self.pick_channel(move |channel_id| {
+                    let client = client.clone();
+                    let post_id = post_id.clone();
+                    let ui = ui.clone();
+                    runtime::spawn(
+                        async move { client.move_thread(&post_id, &channel_id).await },
+                        move |result| match result {
+                            Ok(()) => ui.toast("Thread moved."),
+                            Err(e) => ui.toast(&format!("Could not move it: {e}")),
+                        },
+                    );
+                });
             }
             PostAction::Edit => self.chat.begin_edit(&post_id, post.source_text()),
             PostAction::Delete => self.confirm_delete(post_id),

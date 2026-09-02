@@ -47,6 +47,8 @@ pub enum PostAction {
     CopyText,
     /// Ask the LLM agent to summarise this thread.
     Summarise,
+    /// Send this message on to another channel.
+    Forward,
     /// Have the server DM you about this later.
     Remind,
     /// Show what this message said before it was edited.
@@ -847,6 +849,7 @@ fn overflow_menu(post: &Post, actions: &MessageActions, mine: bool) -> gtk::Widg
         ("Copy text", "copy-text", PostAction::CopyText),
         ("Copy link", "copy-link", PostAction::CopyLink),
         ("Mark as unread", "mark-unread", PostAction::MarkUnread),
+        ("Forward…", "forward", PostAction::Forward),
         ("Remind me about this…", "remind", PostAction::Remind),
     ];
     if post.is_pinned {
