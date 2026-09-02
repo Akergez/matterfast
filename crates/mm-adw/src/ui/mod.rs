@@ -1086,6 +1086,25 @@ impl Ui {
         );
     }
 
+    /// Files posts in the local store. Fire and forget: a failure costs a
+    /// slower next launch and nothing on this one.
+    fn store_posts(&self, posts: Vec<Post>) {
+        if posts.is_empty() {
+            return;
+        }
+        let Some(store) = self.store.borrow().clone() else {
+            return;
+        };
+        runtime::spawn(
+            async move {
+                if let Err(e) = store.save_posts(posts).await {
+                    tracing::warn!(error = %e, "could not store those messages");
+                }
+            },
+            |_| {},
+        );
+    }
+
     /// Writes the snapshot the next launch will open with.
     ///
     /// Debounced hard: this serialises a chunk of state, and the only thing
@@ -3776,6 +3795,7 @@ impl Ui {
                 let Ok((channel_id, posts, authors, statuses)) = result else {
                     return;
                 };
+                let kept;
                 {
                     let mut st = ui.state.borrow_mut();
                     for user in authors {
@@ -3786,6 +3806,7 @@ impl Ui {
                     // An empty page means there is nothing before this, and
                     // the feed should stop asking.
                     let exhausted = older.posts.is_empty();
+                    kept = older.posts.clone();
                     if let Some(feed) = st.feeds.get_mut(&channel_id) {
                         for post in older.posts {
                             feed.upsert(post);
@@ -3797,6 +3818,7 @@ impl Ui {
                 // The feed grew upwards, so the view has to move down by the
                 // same amount or the reader is thrown back in time.
                 ui.chat.restore_scroll(anchor);
+                ui.store_posts(kept);
             },
         );
     }
@@ -4492,6 +4514,9 @@ impl Ui {
                             ui.chat.set_loading(false);
                             ui.refresh_messages();
                             ui.chat.focus_composer();
+                            // Straight into the store, so the next launch has
+                            // this channel without asking for it again.
+                            ui.store_posts(posts.chronological().into_iter().cloned().collect());
                         }
                         Err(e) => {
                             ui.chat.set_loading(false);
