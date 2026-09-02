@@ -215,7 +215,7 @@ fn presence_label(presence: Presence) -> &'static str {
     }
 }
 
-fn presence_class(presence: Presence) -> &'static str {
+pub fn presence_class(presence: Presence) -> &'static str {
     match presence {
         Presence::Online => "presence-online",
         Presence::Away => "presence-away",

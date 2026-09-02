@@ -89,6 +89,8 @@ enum Action {
     PickAttachment,
     /// Ask the LLM agent to summarise what is unread here.
     SummariseUnreads,
+    /// Set your own presence.
+    SetStatus(String),
     /// Drop an uploaded file before it is sent.
     DropAttachment(String),
 }
@@ -408,6 +410,12 @@ fn build_session_ui(
                 let _ = tx.send_blocking(Action::Search(terms));
             }
         },
+        {
+            let tx = tx.clone();
+            move |status| {
+                let _ = tx.send_blocking(Action::SetStatus(status));
+            }
+        },
         dock.widget.upcast_ref(),
     ));
 
@@ -674,6 +682,31 @@ impl Ui {
             // updated server-side too; nothing left to do.
             StreamUpdate::Done { .. } | StreamUpdate::Ignored => {}
         }
+    }
+
+    /// Sets your own presence, showing it immediately: the server echoes it
+    /// back as a status_change, but the click should not wait for a round trip
+    /// to look like it landed.
+    fn set_status(self: &Rc<Self>, status: String) {
+        let (client, me) = {
+            let mut st = self.state.borrow_mut();
+            let me = st.me.id.clone();
+            let presence = mattermost_api::models::Presence::from(status.as_str());
+            st.statuses.insert(me.clone(), presence);
+            (st.client.clone(), me)
+        };
+        self.channels.refresh(&self.state, &self.avatars);
+        self.refresh_messages();
+
+        let ui = self.clone();
+        runtime::spawn(
+            async move { client.set_status(&me, &status).await },
+            move |result| {
+                if let Err(e) = result {
+                    ui.toast(&format!("Could not change your status: {e}"));
+                }
+            },
+        );
     }
 
     /// Asks the Agents plugin what bots exist. A server without the plugin
@@ -1545,6 +1578,7 @@ impl Ui {
             Action::Search(terms) => self.search(terms),
             Action::PickAttachment => self.pick_attachment(),
             Action::SummariseUnreads => self.summarise_unreads(),
+            Action::SetStatus(status) => self.set_status(status),
             Action::DropAttachment(file_id) => {
                 self.state
                     .borrow_mut()

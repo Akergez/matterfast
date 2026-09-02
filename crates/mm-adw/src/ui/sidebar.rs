@@ -23,6 +23,7 @@ impl ChannelSidebar {
         on_select: impl Fn(String) + 'static,
         on_select_team: impl Fn(String) + 'static,
         on_search: impl Fn(String) + 'static,
+        on_status: impl Fn(String) + 'static,
         dock: &gtk::Widget,
     ) -> Self {
         let list = gtk::ListBox::builder()
@@ -46,7 +47,7 @@ impl ChannelSidebar {
             .build();
         title.add_css_class("heading");
 
-        let switcher = Switcher::new(on_select_team);
+        let switcher = Switcher::new(on_select_team, on_status);
 
         let header = adw::HeaderBar::builder()
             .title_widget(&title)
@@ -160,6 +161,18 @@ impl ChannelSidebar {
         drop(st);
         *self.updating.borrow_mut() = false;
     }
+}
+
+/// The status dot drawn over your own avatar.
+fn presence_dot(size: i32) -> gtk::Box {
+    let dot = gtk::Box::builder()
+        .width_request(size)
+        .height_request(size)
+        .halign(gtk::Align::End)
+        .valign(gtk::Align::End)
+        .build();
+    dot.add_css_class("presence-badge");
+    dot
 }
 
 fn category_header(name: &str) -> gtk::ListBoxRow {
@@ -351,17 +364,26 @@ fn channel_icon(kind: &ChannelType) -> &'static str {
 struct Switcher {
     button: gtk::MenuButton,
     avatar: adw::Avatar,
+    avatar_dot: gtk::Box,
     account_avatar: adw::Avatar,
+    account_dot: gtk::Box,
     name: gtk::Label,
     username: gtk::Label,
     teams: gtk::ListBox,
 }
 
 impl Switcher {
-    fn new(on_select_team: impl Fn(String) + 'static) -> Self {
+    fn new(
+        on_select_team: impl Fn(String) + 'static,
+        on_status: impl Fn(String) + 'static,
+    ) -> Self {
         let avatar = adw::Avatar::builder().size(24).build();
+        let avatar_dot = presence_dot(8);
+        let avatar_stack = gtk::Overlay::builder().child(&avatar).build();
+        avatar_stack.add_overlay(&avatar_dot);
+
         let button = gtk::MenuButton::builder()
-            .child(&avatar)
+            .child(&avatar_stack)
             .tooltip_text("Account and teams")
             .build();
         button.add_css_class("image-button");
@@ -369,6 +391,9 @@ impl Switcher {
         button.add_css_class("flat");
 
         let account_avatar = adw::Avatar::builder().size(40).build();
+        let account_dot = presence_dot(12);
+        let account_stack = gtk::Overlay::builder().child(&account_avatar).build();
+        account_stack.add_overlay(&account_dot);
         let name = gtk::Label::builder().xalign(0.0).build();
         name.add_css_class("heading");
         let username = gtk::Label::builder().xalign(0.0).build();
@@ -389,8 +414,49 @@ impl Switcher {
             .margin_end(6)
             .margin_top(6)
             .build();
-        account.append(&account_avatar);
+        account.append(&account_stack);
         account.append(&labels);
+
+        // Setting your own status belongs with your own name, which is here.
+        let statuses = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(4)
+            .homogeneous(true)
+            .margin_start(6)
+            .margin_end(6)
+            .build();
+        let on_status = Rc::new(on_status);
+        for (label, value, css) in [
+            ("Online", "online", "presence-online"),
+            ("Away", "away", "presence-away"),
+            ("Do not disturb", "dnd", "presence-dnd"),
+            ("Offline", "offline", "presence-offline"),
+        ] {
+            let dot = gtk::Label::new(Some("●"));
+            dot.add_css_class("presence-dot");
+            dot.add_css_class(css);
+            let button = gtk::Button::builder()
+                .child(&dot)
+                .tooltip_text(label)
+                .build();
+            button.add_css_class("flat");
+            button.connect_clicked({
+                let on_status = on_status.clone();
+                let button_parent = button.clone();
+                move |_| {
+                    on_status(value.to_string());
+                    // Close the popover the button lives in, so the choice
+                    // registers as made.
+                    if let Some(popover) = button_parent
+                        .ancestor(gtk::Popover::static_type())
+                        .and_downcast::<gtk::Popover>()
+                    {
+                        popover.popdown();
+                    }
+                }
+            });
+            statuses.append(&button);
+        }
 
         let teams = gtk::ListBox::builder()
             .selection_mode(gtk::SelectionMode::Single)
@@ -430,6 +496,7 @@ impl Switcher {
             .width_request(260)
             .build();
         content.append(&account);
+        content.append(&statuses);
         content.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
         content.append(&heading);
         content.append(&teams_scroller);
@@ -439,7 +506,9 @@ impl Switcher {
         Switcher {
             button,
             avatar,
+            avatar_dot,
             account_avatar,
+            account_dot,
             name,
             username,
             teams,
@@ -452,6 +521,19 @@ impl Switcher {
         let display = me.display_name(st.teammate_name_display());
         avatars.apply(&self.avatar, &me.id, &display);
         avatars.apply(&self.account_avatar, &me.id, &display);
+        // The dot on your own face is the only place the chosen status shows.
+        let presence = st.presence(&me.id);
+        for dot in [&self.avatar_dot, &self.account_dot] {
+            for name in [
+                "presence-online",
+                "presence-away",
+                "presence-dnd",
+                "presence-offline",
+            ] {
+                dot.remove_css_class(name);
+            }
+            dot.add_css_class(super::profile::presence_class(presence));
+        }
         self.name.set_text(&display);
         self.username.set_text(&format!("@{}", me.username));
 

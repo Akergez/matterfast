@@ -404,6 +404,25 @@ impl Client {
         self.post_json("/users/status/ids", &ids, "statuses").await
     }
 
+    /// `PUT /api/v4/users/{user}/status` — online, away, dnd or offline.
+    ///
+    /// A status set this way is "manual" and the server stops moving it on
+    /// your behalf until you go back to online.
+    pub async fn set_status(&self, user_id: &str, status: &str) -> Result<Status> {
+        let mut body = std::collections::HashMap::new();
+        body.insert("user_id", user_id);
+        body.insert("status", status);
+        self.json(
+            self.request(
+                Method::PUT,
+                &self.api(&format!("/users/{user_id}/status")),
+            )
+            .json(&body),
+            "set status",
+        )
+        .await
+    }
+
     pub async fn set_custom_status(&self, status: &CustomStatus) -> Result<()> {
         self.send(
             self.request(Method::PUT, &self.api("/users/me/status/custom"))
