@@ -51,6 +51,44 @@ use sidebar::{ChannelSidebar, RowAction};
 /// which notifies you about reactions to your own posts.
 const REACTION_NOTIFY_PREFIX: &str = "custom_ru.toxblh.reactions-notify_";
 
+/// Mentions answerable from memory: everyone whose handle or name starts with
+/// what has been typed.
+///
+/// Prefix rather than substring — typing "an" wants Anna, not everyone with an
+/// "an" in the middle of a surname — and it stops at [`COMPLETIONS`] matches
+/// rather than scanning to the end, which is what keeps a directory of ten
+/// thousand people off the critical path.
+fn local_mentions<'a>(
+    users: impl Iterator<Item = &'a User>,
+    lowered: &str,
+    display: &str,
+) -> Vec<(String, String, String)> {
+    let mut found: Vec<(String, String, String)> = Vec::with_capacity(COMPLETIONS);
+    for user in users {
+        if found.len() >= COMPLETIONS {
+            break;
+        }
+        // The handle first: it is already lowercase on the server, so the
+        // common case costs no allocation at all.
+        let matches = user.username.starts_with(lowered)
+            || user.username.to_lowercase().starts_with(lowered)
+            || user
+                .display_name(display)
+                .to_lowercase()
+                .starts_with(lowered);
+        if matches {
+            let name = user.display_name(display);
+            found.push((
+                format!("@{}", user.username),
+                format!("@{}", user.username),
+                name,
+            ));
+        }
+    }
+    found.sort_by(|a, b| a.0.cmp(&b.0));
+    found
+}
+
 /// The `@names` a message mentions, by the same rule the renderer uses.
 fn mentioned_names(message: &str) -> Vec<String> {
     let mut names = Vec::new();
@@ -75,7 +113,45 @@ fn mentioned_names(message: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod mention_tests {
-    use super::mentioned_names;
+    use super::{local_mentions, mentioned_names, COMPLETIONS};
+    use mattermost_api::models::User;
+
+    /// A directory the size of a large company, to check that answering from
+    /// memory stays instant. The claim is "under a frame"; this asserts an
+    /// order of magnitude below that, so it fails long before anyone notices.
+    #[test]
+    fn ten_thousand_users_complete_instantly() {
+        let users: Vec<User> = (0..10_000)
+            .map(|i| User {
+                id: format!("u{i}"),
+                username: format!("person{i}"),
+                first_name: "Person".into(),
+                last_name: i.to_string(),
+                ..Default::default()
+            })
+            .collect();
+
+        let started = std::time::Instant::now();
+        let found = local_mentions(users.iter(), "person9", "full_name");
+        let elapsed = started.elapsed();
+
+        assert_eq!(found.len(), COMPLETIONS);
+        assert!(
+            elapsed < std::time::Duration::from_millis(10),
+            "took {elapsed:?} for 10k users"
+        );
+
+        // The worst case is a term nobody matches: every user is examined and
+        // the early exit never fires.
+        let started = std::time::Instant::now();
+        let none = local_mentions(users.iter(), "nobodyatall", "full_name");
+        let elapsed = started.elapsed();
+        assert!(none.is_empty());
+        assert!(
+            elapsed < std::time::Duration::from_millis(20),
+            "worst case took {elapsed:?} for 10k users"
+        );
+    }
 
     #[test]
     fn finds_mentions_and_ignores_addresses() {
@@ -738,6 +814,7 @@ fn build_session_ui(
         snapshot_pending: std::cell::Cell::new(false),
         store: RefCell::new(None),
         typing_sent_recently: std::cell::Cell::new(false),
+        completion_generation: std::cell::Cell::new(0),
         dock_in_chat: std::cell::Cell::new(false),
         dock_visible: std::cell::Cell::new(false),
         tx: tx.clone(),
@@ -970,6 +1047,10 @@ struct Ui {
     /// The local message store, once it has opened.
     store: RefCell<Option<crate::store::Store>>,
     typing_sent_recently: std::cell::Cell<bool>,
+    /// Bumped on every completion query, so a slow answer for a term the
+    /// person has already typed past is discarded rather than replacing the
+    /// list under them.
+    completion_generation: std::cell::Cell<u64>,
     dock_in_chat: std::cell::Cell<bool>,
     dock_visible: std::cell::Cell<bool>,
     tx: async_channel::Sender<Action>,
@@ -3154,17 +3235,37 @@ impl Ui {
                 );
             }
             Query::Mention(term) => {
-                let (client, team_id, channel_id) = {
+                let lowered = term.to_lowercase();
+                let (client, team_id, channel_id, local) = {
                     let st = self.state.borrow();
+                    let display = st.teammate_name_display().to_string();
+
+                    // Answered from memory first, before anything touches the
+                    // network. This is what keeps the list under a frame: a
+                    // round trip is tens of milliseconds at best, and the
+                    // names most likely to be wanted are already here.
+                    let local = local_mentions(st.users.values(), &lowered, &display);
+
                     (
                         st.client.clone(),
                         st.current_team.clone().unwrap_or_default(),
                         st.current_channel.clone().unwrap_or_default(),
+                        local,
                     )
                 };
+                self.chat.set_completions(local.clone());
+
                 if channel_id.is_empty() {
                     return;
                 }
+
+                // The server knows who else is in the channel, and about
+                // groups. That answer is allowed to be late; it replaces the
+                // local list when it lands, and only if the person is still
+                // typing the same thing.
+                self.completion_generation
+                    .set(self.completion_generation.get() + 1);
+                let generation = self.completion_generation.get();
                 let ui = self.clone();
                 let groups_client = client.clone();
                 let group_term = term.clone();
@@ -3176,6 +3277,9 @@ impl Ui {
                             .await
                     },
                     move |result| {
+                        if ui.completion_generation.get() != generation {
+                            return;
+                        }
                         let Ok(found) = result else { return };
                         let display = ui.state.borrow().teammate_name_display().to_string();
                         // People in the channel first; the server already
@@ -3194,14 +3298,17 @@ impl Ui {
                                 )
                             })
                             .collect();
+                        if items.is_empty() {
+                            return;
+                        }
                         ui.chat.set_completions(items.clone());
 
-                        // Groups last, and only where the server has them: an
-                        // unlicensed server answers 501, which is the same as
-                        // having none.
                         runtime::spawn(
                             async move { groups_client.mentionable_groups(&group_term).await },
                             move |result| {
+                                if group_ui.completion_generation.get() != generation {
+                                    return;
+                                }
                                 let Ok(groups) = result else { return };
                                 if groups.is_empty() {
                                     return;
