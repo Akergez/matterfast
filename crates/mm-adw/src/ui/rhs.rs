@@ -53,6 +53,8 @@ pub struct RightPanel {
     on_open_thread: Rc<dyn Fn(String)>,
     /// (channel id, root post id — empty when the target is a root post)
     on_open_post: Rc<dyn Fn(String, String)>,
+    /// Channel id and post id: open that channel *at* that message.
+    on_jump: Rc<dyn Fn(String, String)>,
 }
 
 impl RightPanel {
@@ -61,6 +63,7 @@ impl RightPanel {
         on_reply: impl Fn(String) + 'static,
         on_open_thread: impl Fn(String) + 'static,
         on_open_post: impl Fn(String, String) + 'static,
+        on_jump: impl Fn(String, String) + 'static,
         on_draft: impl Fn() + 'static,
         on_follow: impl Fn(bool) + 'static,
     ) -> Rc<Self> {
@@ -285,6 +288,7 @@ impl RightPanel {
             threads_list,
             on_open_thread: Rc::new(on_open_thread),
             on_open_post: Rc::new(on_open_post),
+            on_jump: Rc::new(on_jump),
         })
     }
 
@@ -393,16 +397,31 @@ impl RightPanel {
                     show_thread_footer: false,
                 },
             );
-            // Which channel a hit came from is most of what makes it useful.
+            // Which channel a hit came from is most of what makes it useful —
+            // and it is also the obvious place to press to go there.
             let label = gtk::Label::builder()
-                .label(&channel)
+                .label(format!("{channel}  ›"))
                 .xalign(0.0)
-                .margin_start(14)
-                .margin_top(8)
                 .build();
             label.add_css_class("caption-heading");
             label.add_css_class("dim-label");
-            self.search_list.append(&label);
+
+            let go = gtk::Button::builder()
+                .child(&label)
+                .halign(gtk::Align::Start)
+                .margin_start(10)
+                .margin_top(8)
+                .tooltip_text("Go to this message")
+                .build();
+            go.add_css_class("flat");
+            go.add_css_class("thread-link");
+            go.connect_clicked({
+                let jump = self.on_jump.clone();
+                let channel_id = post.channel_id.clone();
+                let post_id = post.id.clone();
+                move |_| jump(channel_id.clone(), post_id.clone())
+            });
+            self.search_list.append(&go);
             self.search_list.append(&row);
         }
     }
@@ -553,15 +572,16 @@ impl RightPanel {
             let root_id = post.thread_root().to_string();
             let is_reply = post.is_reply();
             let open = self.on_open_post.clone();
+            let jump = self.on_jump.clone();
+            let post_id = post.id.clone();
             row.connect_clicked(move |_| {
-                open(
-                    channel_id.clone(),
-                    if is_reply {
-                        root_id.clone()
-                    } else {
-                        String::new()
-                    },
-                )
+                if is_reply {
+                    open(channel_id.clone(), root_id.clone());
+                } else {
+                    // Not a reply, so there is no thread to open — the useful
+                    // thing is the message itself.
+                    jump(channel_id.clone(), post_id.clone());
+                }
             });
             self.mentions_list.append(&row);
         }
@@ -604,15 +624,14 @@ impl RightPanel {
             let root_id = post.thread_root().to_string();
             let is_reply = post.is_reply();
             let open = self.on_open_post.clone();
+            let jump = self.on_jump.clone();
+            let post_id = post.id.clone();
             row.connect_clicked(move |_| {
-                open(
-                    channel_id.clone(),
-                    if is_reply {
-                        root_id.clone()
-                    } else {
-                        String::new()
-                    },
-                )
+                if is_reply {
+                    open(channel_id.clone(), root_id.clone());
+                } else {
+                    jump(channel_id.clone(), post_id.clone());
+                }
             });
             self.saved_list.append(&row);
         }

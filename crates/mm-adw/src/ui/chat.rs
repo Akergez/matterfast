@@ -836,6 +836,40 @@ impl ChatView {
         }));
     }
 
+    /// Scrolls the feed so a particular message is in view and briefly
+    /// highlights it. Returns false when that message is not on screen — the
+    /// caller then knows it has to fetch further back first.
+    pub fn scroll_to_post(&self, post_id: &str) -> bool {
+        let mut child = self.messages.first_child();
+        while let Some(row) = child {
+            let matches = unsafe { row.data::<String>("post-id") }
+                .map(|id| unsafe { id.as_ref() } == post_id)
+                .unwrap_or(false);
+            if matches {
+                // The allocation is not final until the frame is laid out, so
+                // the scroll waits for it rather than aiming at zero.
+                let scroller = self.scroller.clone();
+                let target = row.clone();
+                glib::idle_add_local_once(move || {
+                    if let Some(bounds) = target.compute_bounds(&scroller) {
+                        let adjustment = scroller.vadjustment();
+                        let middle = adjustment.value() + bounds.y() as f64
+                            - (adjustment.page_size() - bounds.height() as f64) / 2.0;
+                        adjustment.set_value(middle.max(0.0));
+                    }
+                });
+                row.add_css_class("message-highlight");
+                let fading = row.clone();
+                glib::timeout_add_local_once(std::time::Duration::from_secs(2), move || {
+                    fading.remove_css_class("message-highlight");
+                });
+                return true;
+            }
+            child = row.next_sibling();
+        }
+        false
+    }
+
     /// How far the feed is scrolled, and how tall it is. Used to keep the
     /// reader looking at the same message when older ones are added above.
     pub fn scroll_anchor(&self) -> (f64, f64) {

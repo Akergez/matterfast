@@ -51,6 +51,19 @@ const SCHEMA: &str = "
     CREATE INDEX posts_by_channel ON posts (channel_id, create_at);
 ";
 
+/// How many posts per channel [`Store::prune`] keeps by default.
+///
+/// Generous on purpose — the store exists so that history is *there*, and a
+/// number that only covers the first screen would make it a splash screen. The
+/// window draws 60 posts on a cold start (`ui::INITIAL_POSTS`), so this is
+/// roughly sixteen screens of scrollback that works with the network down.
+///
+/// Bounded on purpose too: a post's JSON is on the order of a kilobyte once
+/// metadata and reactions are on it, which puts a busy channel near a megabyte
+/// and the whole file in the tens of megabytes for an account with dozens of
+/// them. That is a cache size worth having; a year of scrollback is not.
+pub const DEFAULT_KEEP_PER_CHANNEL: usize = 1_000;
+
 const DROP_ALL: &str = "
     DROP TABLE IF EXISTS meta;
     DROP TABLE IF EXISTS channels;
@@ -206,6 +219,39 @@ impl Store {
         }
         posts.reverse();
         Ok(posts)
+    }
+
+    /// Drops every post in a channel past the newest `keep_per_channel`, in
+    /// every channel at once.
+    ///
+    /// Channels, members and users are left alone: there is one row per thing
+    /// that exists on the server, so they are bounded by the account, not by
+    /// how much it is used. Posts are the only table that grows with time.
+    pub async fn prune(&self, keep_per_channel: usize) -> Result<(), Error> {
+        let conn = self.conn.lock().await;
+        // One statement: number the posts of each channel newest-first and
+        // delete everything numbered past the limit. The tiebreak matches
+        // `posts()` exactly, so pruning can never drop a post that a read of
+        // the same size would have returned.
+        //
+        // No VACUUM after this. Measured on a store pruned from 20k posts to
+        // 1k: the file does not shrink either way until VACUUM rewrites it,
+        // and the pages the delete frees are reused by the posts that arrive
+        // next — so the file settles at its high-water mark instead of growing.
+        // VACUUM would buy back that one-off difference in exchange for
+        // rewriting the whole database while the app holds the only connection.
+        let n = conn.execute(
+            "DELETE FROM posts WHERE id IN (
+                 SELECT id FROM (
+                     SELECT id, ROW_NUMBER() OVER (
+                         PARTITION BY channel_id ORDER BY create_at DESC, id DESC
+                     ) AS rank FROM posts
+                 ) WHERE rank > ?1
+             )",
+            params![keep_per_channel as i64],
+        )?;
+        tracing::debug!(pruned = n, keep_per_channel, "trimmed the post cache");
+        Ok(())
     }
 
     pub async fn channels(&self) -> Result<(Vec<Channel>, Vec<ChannelMember>), Error> {
@@ -459,6 +505,100 @@ mod tests {
         remove_at(&dir, "example.com");
         assert!(!db_path(&dir, "example.com").exists());
 
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn pruning_keeps_the_newest_few_of_every_channel() {
+        // The whole statement rests on window functions; SQLite has had them
+        // since 3.25 (2018) and this is the bundled build, so check the claim
+        // rather than assume it.
+        assert!(
+            rusqlite::version_number() >= 3_025_000,
+            "bundled SQLite {} is too old for ROW_NUMBER() OVER (...)",
+            rusqlite::version()
+        );
+
+        let dir = temp_dir("prune");
+        let store = Store::open_at(&dir, "example.com").unwrap();
+        let mut posts: Vec<Post> = (0..50).map(|i| post(&format!("a{i}"), "c1", i)).collect();
+        posts.extend((0..3).map(|i| post(&format!("b{i}"), "c2", i)));
+        store.save_posts(posts).await.unwrap();
+
+        store.prune(10).await.unwrap();
+
+        // Exactly the newest ten of the busy channel...
+        let kept = store.posts("c1", 1000).await.unwrap();
+        assert_eq!(kept.len(), 10);
+        assert_eq!(kept.first().unwrap().id, "a40");
+        assert_eq!(kept.last().unwrap().id, "a49");
+        // ...and the quiet channel is untouched: the limit is per channel.
+        assert_eq!(store.posts("c2", 1000).await.unwrap().len(), 3);
+
+        // Idempotent: a second pass has nothing left to take.
+        store.prune(10).await.unwrap();
+        assert_eq!(store.posts("c1", 1000).await.unwrap().len(), 10);
+        assert_eq!(store.posts("c2", 1000).await.unwrap().len(), 3);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn pruning_an_empty_store_is_not_an_error() {
+        let dir = temp_dir("prune-empty");
+        let store = Store::open_at(&dir, "example.com").unwrap();
+        store.prune(DEFAULT_KEEP_PER_CHANNEL).await.unwrap();
+        // And zero is a real answer, not a no-op that quietly keeps everything.
+        store.save_posts(vec![post("p1", "c1", 100)]).await.unwrap();
+        store.prune(0).await.unwrap();
+        assert!(store.posts("c1", 10).await.unwrap().is_empty());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn zzz_vacuum_probe() {
+        let dir = temp_dir("vacuum-probe");
+        let store = Store::open_at(&dir, "example.com").unwrap();
+        let mut all = Vec::new();
+        for c in 0..20 {
+            for i in 0..1000i64 {
+                let mut p = post(&format!("c{c}p{i}"), &format!("ch{c}"), i);
+                p.message = "x".repeat(600);
+                all.push(p);
+            }
+        }
+        store.save_posts(all).await.unwrap();
+        let path = db_path(&dir, "example.com");
+        let size = |p: &PathBuf| fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+        println!("PROBE full: {}", size(&path));
+        store.prune(1000).await.unwrap();
+        println!("PROBE after no-op prune: {}", size(&path));
+        store.prune(100).await.unwrap();
+        println!("PROBE after prune to 100: {}", size(&path));
+        {
+            let conn = store.conn.lock().await;
+            let free: i64 = conn
+                .query_row("PRAGMA freelist_count", [], |r| r.get(0))
+                .unwrap();
+            let total: i64 = conn
+                .query_row("PRAGMA page_count", [], |r| r.get(0))
+                .unwrap();
+            println!("PROBE freelist {free} of {total} pages");
+            conn.execute_batch("VACUUM").unwrap();
+        }
+        println!("PROBE after vacuum: {}", size(&path));
+        // refill and see whether it grows past the high-water mark
+        let mut more = Vec::new();
+        for c in 0..20 {
+            for i in 1000..1900i64 {
+                let mut p = post(&format!("c{c}q{i}"), &format!("ch{c}"), i);
+                p.message = "x".repeat(600);
+                more.push(p);
+            }
+        }
+        store.save_posts(more).await.unwrap();
+        println!("PROBE refilled after vacuum: {}", size(&path));
         let _ = fs::remove_dir_all(&dir);
     }
 

@@ -135,6 +135,8 @@ enum Action {
     ToggleReaction(String, String),
     /// Jump to a channel, and into a thread when the second field is set.
     OpenPost(String, String),
+    /// Open a channel and put a specific message on screen.
+    JumpToPost(String, String),
     /// Open (or create) the direct-message channel with a user.
     OpenDirectMessage(String),
     /// Jump to the channel whose call we are in.
@@ -489,6 +491,12 @@ fn build_session_ui(
             let tx = tx.clone();
             move |channel, root| {
                 let _ = tx.send_blocking(Action::OpenPost(channel, root));
+            }
+        },
+        {
+            let tx = tx.clone();
+            move |channel, post| {
+                let _ = tx.send_blocking(Action::JumpToPost(channel, post));
             }
         },
         {
@@ -3723,6 +3731,74 @@ impl Ui {
         );
     }
 
+    /// Opens a channel and puts one message on screen.
+    ///
+    /// Whether it is loaded decides what happens: if it is, scroll to it; if
+    /// it is not, fetch the page around it, because a hit from three months
+    /// ago is not reachable by paging back from today.
+    fn jump_to_post(self: &Rc<Self>, channel_id: String, post_id: String) {
+        self.select_channel(channel_id.clone());
+
+        // After the channel's own load and layout have had their turn.
+        let ui = self.clone();
+        glib::idle_add_local_once(move || {
+            if ui.chat.scroll_to_post(&post_id) {
+                return;
+            }
+            let (client, crt) = {
+                let st = ui.state.borrow();
+                (st.client.clone(), st.crt_enabled)
+            };
+            runtime::spawn(
+                async move {
+                    // Half a page either side, so the message lands in the
+                    // middle with its context rather than at an edge.
+                    let before = client
+                        .posts_before(&channel_id, &post_id, INITIAL_POSTS / 2, crt)
+                        .await?;
+                    let after = client
+                        .posts_after(&channel_id, &post_id, INITIAL_POSTS / 2, crt)
+                        .await?;
+                    let target = client.post(&post_id).await?;
+                    let (authors, statuses) = hydrate_authors(&client, &before).await;
+                    Ok::<_, mattermost_api::Error>((
+                        channel_id, before, after, target, authors, statuses,
+                    ))
+                },
+                move |result| {
+                    let Ok((channel_id, before, after, target, authors, statuses)) = result else {
+                        ui.toast("That message could not be loaded.");
+                        return;
+                    };
+                    let post_id = target.id.clone();
+                    {
+                        let mut st = ui.state.borrow_mut();
+                        for user in authors {
+                            st.users.insert(user.id.clone(), user);
+                        }
+                        st.apply_statuses(statuses);
+                        let feed = st.feeds.entry(channel_id).or_default();
+                        for post in ChannelFeed::from_list(&before).posts {
+                            feed.upsert(post);
+                        }
+                        for post in ChannelFeed::from_list(&after).posts {
+                            feed.upsert(post);
+                        }
+                        feed.upsert(target);
+                        // The feed no longer runs to the newest post, so the
+                        // view must not claim it does.
+                        feed.at_latest = false;
+                    }
+                    ui.refresh_messages();
+                    let ui = ui.clone();
+                    glib::idle_add_local_once(move || {
+                        ui.chat.scroll_to_post(&post_id);
+                    });
+                },
+            );
+        });
+    }
+
     /// Fetches everything posted in a channel *after* the newest post we
     /// hold. Used when the socket has been away long enough that the feed has
     /// a hole in it — scrolling up finds older messages, and nothing else
@@ -4350,6 +4426,7 @@ impl Ui {
                     self.open_thread(root_id);
                 }
             }
+            Action::JumpToPost(channel_id, post_id) => self.jump_to_post(channel_id, post_id),
             Action::OpenDirectMessage(user_id) => self.open_direct_message(user_id),
             Action::Post(post_id, what) => self.post_action(post_id, what),
             Action::Search(terms) => self.search(terms),

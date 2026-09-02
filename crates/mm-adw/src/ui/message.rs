@@ -91,6 +91,10 @@ pub fn build(
         .spacing(10)
         .margin_top(if options.grouped { 0 } else { 8 })
         .build();
+    // Tagged with its post id so the feed can be scrolled to a particular
+    // message — that is how a search hit or an inbox entry lands on the thing
+    // it named rather than merely in the right channel.
+    unsafe { row.set_data("post-id", post.id.clone()) };
     // The hover-reveal CSS needs a class to hang off: a plain GtkBox's CSS node
     // is `box`, so a `row:hover` selector would never match and the react and
     // reply buttons would stay invisible forever.
