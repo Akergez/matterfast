@@ -4,6 +4,7 @@
 //! a "N replies" footer, because you are already in the thread), so the
 //! rendering lives here and the differences are parameters.
 
+use std::cell::Cell;
 use std::ops::Range;
 use std::rc::Rc;
 
@@ -18,6 +19,31 @@ use crate::state::SharedState;
 /// Messages from the same author within this window are drawn as one group,
 /// without repeating the avatar and name.
 pub const GROUPING_WINDOW_MS: Millis = 5 * 60 * 1000;
+
+/// The largest pointer movement between press and release that still reads
+/// as a click rather than the start of a text selection.
+const CLICK_DRAG_THRESHOLD: f64 = 4.0;
+
+/// Whether a press-then-release at these two points was a click (as opposed
+/// to a drag that grew a text selection). Pulled out of the gesture handlers
+/// below so it is the same test either way `released` fails to fire: on an
+/// ordinary release, and on the cancellation GTK sends instead when a
+/// selectable label's own gesture claims the sequence first.
+fn is_click(from: (f64, f64), to: (f64, f64)) -> bool {
+    (from.0 - to.0).hypot(from.1 - to.1) < CLICK_DRAG_THRESHOLD
+}
+
+#[cfg(test)]
+mod click_tests {
+    use super::is_click;
+
+    #[test]
+    fn a_small_wobble_is_a_click_a_real_drag_is_not() {
+        assert!(is_click((10.0, 10.0), (10.0, 10.0)));
+        assert!(is_click((10.0, 10.0), (12.0, 11.0)));
+        assert!(!is_click((10.0, 10.0), (30.0, 10.0)));
+    }
+}
 
 /// What a message row can ask the application to do.
 #[derive(Clone)]
@@ -334,39 +360,59 @@ pub fn build(
     // Clicking the message opens its thread — the whole row, not just the
     // reply count, which is what every other client does and what people try
     // first. A secondary click is left alone so the context menu still works,
-    // and text selection is unaffected because this only fires on a click that
-    // did not become a drag.
+    // and text selection is unaffected because the decision is made from how
+    // far the pointer moved, not by asking the label afterwards.
     {
         let click = gtk::GestureClick::new();
         click.set_button(gtk::gdk::BUTTON_PRIMARY);
         // Bubble phase would never see the click at all on a message whose
-        // text is selectable: the label claims the sequence for its own
-        // selection handling and the gesture below it never fires. That is
-        // why this worked only on the gaps between words.
+        // text is selectable: whichever gesture claims a sequence first wins
+        // it — denying every other gesture in the same widget tree, ancestors
+        // included — and the label's own selection gesture, living on a
+        // descendant, would get there first. Capture runs top-down, so this
+        // one sees press and release ahead of that.
         click.set_propagation_phase(gtk::PropagationPhase::Capture);
+
+        let press_at: Rc<Cell<(f64, f64)>> = Rc::new(Cell::new((0.0, 0.0)));
+        click.connect_pressed({
+            let press_at = press_at.clone();
+            move |_, _, x, y| press_at.set((x, y))
+        });
+
         click.connect_released({
             let actions = actions.clone();
             let root = post.thread_root().to_string();
             let allow_thread = options.show_thread_footer;
-            move |gesture, presses, _, _| {
+            let press_at = press_at.clone();
+            move |_, presses, x, y| {
                 // A double click is somebody selecting a word.
-                if presses > 1 || !allow_thread {
+                if presses > 1 || !allow_thread || !is_click(press_at.get(), (x, y)) {
                     return;
                 }
-                // Not while text is selected: the click that ends a selection
-                // must not also navigate. Checked on the *next* idle rather
-                // than now, because in the capture phase the label has not
-                // updated its selection yet — asking here would always say
-                // "nothing selected" and swallow every drag.
-                let actions = actions.clone();
-                let root = root.clone();
-                let widget = gesture.widget();
-                glib::idle_add_local_once(move || {
-                    if widget.is_some_and(|w| has_selection(&w)) {
-                        return;
+                (actions.open_thread)(root.clone());
+            }
+        });
+
+        // A drag long enough to start a text selection makes GTK cancel this
+        // gesture in favour of the label's, so `released` above never fires —
+        // even for a click that only *looked* like it might become a drag (a
+        // stray pixel of jitter is enough to trip that). The decision is
+        // repeated here from wherever the pointer was when the cancellation
+        // happened, which is what makes a plain click reliable rather than
+        // working only "most of the time".
+        click.connect_cancel({
+            let actions = actions.clone();
+            let root = post.thread_root().to_string();
+            let allow_thread = options.show_thread_footer;
+            move |gesture, sequence| {
+                if !allow_thread {
+                    return;
+                }
+                if let Some(released_at) = gesture.point(sequence) {
+                    if is_click(press_at.get(), released_at) {
+                        (actions.open_thread)(root.clone());
                     }
-                    (actions.open_thread)(root.clone());
-                });
+                }
             }
         });
         row.add_controller(click);
@@ -788,8 +834,13 @@ fn attachment(
         // both die with the row. Its Drop removes the temp file it wrote.
         let player = Rc::new_cyclic(|weak: &std::rc::Weak<super::media::Player>| {
             let weak = weak.clone();
-            // Video gets a still from the same thumbnail route images use.
-            super::media::Player::new(file, avatars.file_thumbnail(&file.id), move |file_id| {
+            // Only images have a thumbnail on the server — it makes none for
+            // video, so asking would be a round trip that always fails.
+            let poster = file
+                .is_image()
+                .then(|| avatars.file_thumbnail(&file.id))
+                .flatten();
+            super::media::Player::new(file, poster, move |file_id| {
                 let Some(player) = weak.upgrade() else { return };
                 let client = client.clone();
                 crate::runtime::spawn(
@@ -1087,7 +1138,9 @@ fn rich_text(markup: &str, emoji: &[(Range<usize>, gtk::gdk::Texture)]) -> gtk::
         buffer.delete(&mut close, &mut close_end);
         // Anonymous: the tag is only a way to ask "is this character a link?",
         // and two identical URLs in one message must not collide over a name.
-        let Some(tag) = buffer.create_tag(None, &[]) else {
+        // A tag takes no CSS class, so the colour is set here rather than in
+        // `style.css` where the label path gets it. No underline, to match.
+        let Some(tag) = buffer.create_tag(None, &[("foreground", &link_colour())]) else {
             break;
         };
         buffer.apply_tag(&tag, &buffer.iter_at_offset(start), &close);
@@ -1095,6 +1148,27 @@ fn rich_text(markup: &str, emoji: &[(Range<usize>, gtk::gdk::Texture)]) -> gtk::
     }
 
     if !link_tags.is_empty() {
+        let link_tags = Rc::new(link_tags);
+
+        // A text view shows an I-beam everywhere; over a link it has to show
+        // the hand a label would. Nothing else tells you it can be clicked.
+        let motion = gtk::EventControllerMotion::new();
+        motion.connect_motion({
+            let link_tags = link_tags.clone();
+            move |controller, x, y| {
+                let Some(view) = controller.widget().and_downcast::<gtk::TextView>() else {
+                    return;
+                };
+                let name = if over_link(&view, x, y, &link_tags).is_some() {
+                    "pointer"
+                } else {
+                    "text"
+                };
+                view.set_cursor_from_name(Some(name));
+            }
+        });
+        view.add_controller(motion);
+
         let click = gtk::GestureClick::new();
         // Ahead of the text view's own selection handling, which claims the
         // sequence on a drag and would otherwise swallow the release.
@@ -1108,14 +1182,9 @@ fn rich_text(markup: &str, emoji: &[(Range<usize>, gtk::gdk::Texture)]) -> gtk::
             if presses != 1 || view.buffer().has_selection() {
                 return;
             }
-            let (x, y) =
-                view.window_to_buffer_coords(gtk::TextWindowType::Widget, x as i32, y as i32);
-            let Some(iter) = view.iter_at_location(x, y) else {
-                return;
-            };
-            if let Some((_, url)) = link_tags.iter().find(|(tag, _)| iter.has_tag(tag)) {
+            if let Some(url) = over_link(&view, x, y, &link_tags) {
                 let _ = gtk::gio::AppInfo::launch_default_for_uri(
-                    url,
+                    &url,
                     None::<&gtk::gio::AppLaunchContext>,
                 );
             }
@@ -1124,6 +1193,34 @@ fn rich_text(markup: &str, emoji: &[(Range<usize>, gtk::gdk::Texture)]) -> gtk::
     }
 
     view.upcast()
+}
+
+/// The URL under a point in a text view, if there is one.
+fn over_link(
+    view: &gtk::TextView,
+    x: f64,
+    y: f64,
+    links: &[(gtk::TextTag, String)],
+) -> Option<String> {
+    let (x, y) = view.window_to_buffer_coords(gtk::TextWindowType::Widget, x as i32, y as i32);
+    let iter = view.iter_at_location(x, y)?;
+    links
+        .iter()
+        .find(|(tag, _)| iter.has_tag(tag))
+        .map(|(_, url)| url.clone())
+}
+
+/// What a link is painted in, for the one path that cannot use CSS.
+///
+/// libadwaita only exposes the accent colour to code from 1.6, and this app
+/// targets 1.5, so these are the two Adwaita link blues picked by hand — the
+/// dark one is lighter because the dark theme's own is.
+fn link_colour() -> &'static str {
+    if adw::StyleManager::default().is_dark() {
+        "#78aeed"
+    } else {
+        "#1b6acb"
+    }
 }
 
 /// Every `:shortcode:` in a block of Pango markup that has no Unicode glyph —
@@ -1484,47 +1581,42 @@ fn reaction_strip(
     Some(strip.upcast())
 }
 
-/// A join, a leave, a rename.
+/// Adds the `@` sigil to a bare handle so `markdown::inline`'s mention
+/// scanner — which only ever looks for `@handle` — notices it. The server
+/// writes some system messages with a bare handle ("sin joined the
+/// channel") and others already `@`-prefixed; either way the names involved
+/// live in `props` under `username`, `addedUsername` and `removedUsername`,
+/// which is what gets marked up here rather than scanning the sentence for
+/// anything that looks like a name — the wording is localised, so
+/// pattern-matching it would work in English and nowhere else.
 ///
-/// The server writes the raw handle into the text — "sin joined the channel",
-/// not the name anyone recognises — and names the people involved in `props`
-/// under `username`, `addedUsername` and `removedUsername`. Those are what
-/// gets swapped, rather than scanning the sentence for anything that looks
-/// like a name: the wording is localised, so pattern-matching it would work in
-/// English and nowhere else.
-fn system_row(post: &Post, state: &SharedState, actions: &MessageActions) -> gtk::Widget {
-    let text = {
-        let st = state.borrow();
-        let display = st.teammate_name_display().to_string();
-        let mut text = post.message.clone();
-
-        for (key, value) in &post.props {
-            if !key.to_lowercase().ends_with("username") {
-                continue;
-            }
-            let Some(handle) = value.as_str().filter(|h| !h.is_empty()) else {
-                continue;
-            };
-            let Some(name) = st
-                .users
-                .values()
-                .find(|u| u.username == handle)
-                .map(|u| u.display_name(&display))
-                .filter(|name| !name.is_empty() && name != handle)
-            else {
-                continue;
-            };
-            // The `@` form first, or replacing the bare handle would leave a
-            // stray `@` in front of the display name.
-            text = text.replace(&format!("@{handle}"), &name);
-            text = replace_word(&text, handle, &name);
+/// The display-name swap and the click-through are left to the same
+/// machinery an ordinary mention uses (the `known` callback and
+/// `follow_link`), rather than being done here as plain text: a plain-text
+/// swap never produces the `mm-mention:` link, so the result reads correctly
+/// but nothing happens when you click it.
+fn with_mention_sigils(post: &Post) -> String {
+    let mut text = post.message.clone();
+    for (key, value) in &post.props {
+        if !key.to_lowercase().ends_with("username") {
+            continue;
         }
-        text
-    };
+        let Some(handle) = value.as_str().filter(|h| !h.is_empty()) else {
+            continue;
+        };
+        if !text.contains(&format!("@{handle}")) {
+            text = replace_word(&text, handle, &format!("@{handle}"));
+        }
+    }
+    text
+}
 
-    // Rendered rather than printed: the names in it are mentions, and they
-    // should read like the ones in an ordinary message rather than as plain
-    // grey text.
+/// Renders one system-message line: prose that may contain `@handle`
+/// mentions, turned into clickable links exactly like an ordinary message —
+/// then stripped of the sigil that only existed to trigger that machinery,
+/// so the line reads "Anna joined the channel", not "@Anna joined the
+/// channel".
+fn render_system_text(text: &str, state: &SharedState, actions: &MessageActions) -> gtk::Widget {
     let known = {
         let state = state.clone();
         move |handle: &str| -> Option<String> {
@@ -1543,9 +1635,11 @@ fn system_row(post: &Post, state: &SharedState, actions: &MessageActions) -> gtk
         .wrap(true)
         .margin_start(52)
         .build();
-    match crate::markdown::parse_with(&text, &known).first() {
-        Some(crate::markdown::Block::Text(markup)) => label.set_markup(markup),
-        _ => label.set_text(&text),
+    match crate::markdown::parse_with(text, &known).first() {
+        Some(crate::markdown::Block::Text(markup)) => {
+            label.set_markup(&markup.replace("\">@", "\">"))
+        }
+        _ => label.set_text(text),
     }
     label.connect_activate_link({
         let actions = actions.clone();
@@ -1554,6 +1648,160 @@ fn system_row(post: &Post, state: &SharedState, actions: &MessageActions) -> gtk
     label.add_css_class("message-system");
     label.add_css_class("dim-label");
     label.upcast()
+}
+
+/// A join, a leave, an add, a remove, or anything else the server marks as a
+/// single system event.
+fn system_row(post: &Post, state: &SharedState, actions: &MessageActions) -> gtk::Widget {
+    render_system_text(&with_mention_sigils(post), state, actions)
+}
+
+/// The channel/team activity types the webapp combines client-side when
+/// several happen back to back (`combineUserActivityPosts` in
+/// `post_list.ts`): joins, leaves, adds and removes. A header change, a
+/// rename or anything else stays its own row — there is nothing to list for
+/// those.
+fn is_combinable_system(post: &Post) -> bool {
+    matches!(
+        post.r#type.as_str(),
+        "system_join_channel"
+            | "system_leave_channel"
+            | "system_add_to_channel"
+            | "system_remove_from_channel"
+            | "system_join_team"
+            | "system_leave_team"
+            | "system_add_to_team"
+            | "system_remove_from_team"
+    )
+}
+
+/// "@anna", "@anna and @bob", or "@anna and 3 others" past the small
+/// limit — the same threshold `combined_system_message`'s `LastUsers`
+/// collapses at (two named, then a count).
+fn mention_list(handles: &[String]) -> String {
+    match handles {
+        [] => String::new(),
+        [a] => format!("@{a}"),
+        [a, b] => format!("@{a} and @{b}"),
+        [a, rest @ ..] => format!("@{a} and {} others", rest.len()),
+    }
+}
+
+/// One combined line per (post type, actor) pair found in the run — "Anna
+/// and 3 others joined the channel." — mirroring `CombinedSystemMessage`'s
+/// `postTypeMessage` table, minus the "you"/expand-in-place wrinkles: this is
+/// a chat row, not a redux-connected React tree.
+fn system_sentence(post_type: &str, handles: &[String], actor: Option<&str>) -> String {
+    let who = mention_list(handles);
+    let were = if handles.len() == 1 { "was" } else { "were" };
+    match post_type {
+        "system_join_channel" => format!("{who} joined the channel."),
+        "system_leave_channel" => format!("{who} left the channel."),
+        "system_join_team" => format!("{who} joined the team."),
+        "system_leave_team" => format!("{who} left the team."),
+        "system_add_to_channel" => match actor {
+            Some(a) => format!("{who} {were} added to the channel by @{a}."),
+            None => format!("{who} {were} added to the channel."),
+        },
+        "system_add_to_team" => match actor {
+            Some(a) => format!("{who} {were} added to the team by @{a}."),
+            None => format!("{who} {were} added to the team."),
+        },
+        "system_remove_from_channel" => format!("{who} {were} removed from the channel."),
+        "system_remove_from_team" => format!("{who} {were} removed from the team."),
+        _ => who,
+    }
+}
+
+/// The prop key naming who the event happened to, and — where the event has
+/// one — who did it. `remove_*` messages name no actor in the webapp either
+/// (`props.username` on those posts identifies the admin's session, not
+/// someone worth crediting in the sentence).
+fn system_subject_and_actor(post_type: &str) -> (&'static str, Option<&'static str>) {
+    match post_type {
+        "system_add_to_channel" | "system_add_to_team" => ("addedUsername", Some("username")),
+        "system_remove_from_channel" | "system_remove_from_team" => ("removedUsername", None),
+        _ => ("username", None),
+    }
+}
+
+/// One line per run of combinable system posts, per distinct (type, actor)
+/// pair within it — so "Anna joined" and "Bob was added by Carol" arriving
+/// back to back become two lines in one block rather than one line each with
+/// its own avatar-width margin.
+fn combined_system_text(posts: &[&Post]) -> String {
+    let mut groups: Vec<(String, Option<String>, Vec<String>)> = Vec::new();
+    for post in posts {
+        let (subject_key, actor_key) = system_subject_and_actor(&post.r#type);
+        let Some(handle) = post
+            .props
+            .get(subject_key)
+            .and_then(|v| v.as_str())
+            .filter(|h| !h.is_empty())
+        else {
+            continue;
+        };
+        let actor = actor_key
+            .and_then(|k| post.props.get(k))
+            .and_then(|v| v.as_str())
+            .filter(|a| !a.is_empty())
+            .map(str::to_string);
+
+        match groups
+            .iter_mut()
+            .find(|(t, a, _)| *t == post.r#type && *a == actor)
+        {
+            Some((_, _, handles)) => {
+                if !handles.iter().any(|h| h == handle) {
+                    handles.push(handle.to_string());
+                }
+            }
+            None => groups.push((post.r#type.clone(), actor, vec![handle.to_string()])),
+        }
+    }
+
+    groups
+        .into_iter()
+        .map(|(post_type, actor, handles)| system_sentence(&post_type, &handles, actor.as_deref()))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Renders a run of consecutive system posts: the combinable ones (joins,
+/// leaves, adds, removes) collapse into one row per run, everything else
+/// keeps its own row. `posts` is expected to hold no more than one such run
+/// interleaved with non-combinable posts — exactly what `chat.rs` buffers
+/// between the messages that are not system posts at all.
+pub fn system_block(
+    posts: &[&Post],
+    state: &SharedState,
+    actions: &MessageActions,
+) -> Vec<gtk::Widget> {
+    let mut widgets = Vec::new();
+    let mut run: Vec<&Post> = Vec::new();
+    for &post in posts {
+        if is_combinable_system(post) {
+            run.push(post);
+            continue;
+        }
+        if !run.is_empty() {
+            widgets.push(render_system_text(
+                &combined_system_text(&run),
+                state,
+                actions,
+            ));
+            run.clear();
+        }
+        widgets.push(system_row(post, state, actions));
+    }
+    if !run.is_empty() {
+        widgets.push(render_system_text(
+            &combined_system_text(&run),
+            state,
+            actions,
+        ));
+    }
+    widgets
 }
 
 pub fn day_separator(day: &str) -> gtk::Widget {
@@ -1687,37 +1935,13 @@ fn expiry_phrase(expires_at: &str) -> Option<String> {
     Some(phrase)
 }
 
-/// Whether anything inside this row has selected text. A click that ends a
-/// selection is a selection, not navigation.
-fn has_selection(widget: &gtk::Widget) -> bool {
-    if let Some(label) = widget.downcast_ref::<gtk::Label>() {
-        let (start, end) = label.selection_bounds().unwrap_or((0, 0));
-        if start != end {
-            return true;
-        }
-    }
-    if let Some(view) = widget.downcast_ref::<gtk::TextView>() {
-        if view.buffer().has_selection() {
-            return true;
-        }
-    }
-    let mut child = widget.first_child();
-    while let Some(node) = child {
-        if has_selection(&node) {
-            return true;
-        }
-        child = node.next_sibling();
-    }
-    false
-}
-
 /// The size to draw an attached image at: its own proportions, fitted inside
 /// a box big enough to see and small enough to scroll past.
 ///
 /// A file with no dimensions — some servers omit them — gets the full box and
 /// `Contain` sorts it out once the picture arrives.
 fn scaled_size(width: i32, height: i32) -> (i32, i32) {
-    const MAX_WIDTH: f64 = 420.0;
+    const MAX_WIDTH: f64 = 500.0;
     const MAX_HEIGHT: f64 = 350.0;
 
     if width <= 0 || height <= 0 {
@@ -1844,11 +2068,11 @@ mod size_tests {
     fn fits_the_box_without_enlarging() {
         // A tall photo is bounded by height, a wide one by width.
         assert_eq!(scaled_size(3000, 4000), (263, 350));
-        assert_eq!(scaled_size(4000, 1000), (420, 105));
+        assert_eq!(scaled_size(4000, 1000), (500, 125));
         // Smaller than the box: left alone.
         assert_eq!(scaled_size(64, 64), (64, 64));
         // Unknown: the full box, and Contain sorts it out.
-        assert_eq!(scaled_size(0, 0), (420, 350));
+        assert_eq!(scaled_size(0, 0), (500, 350));
     }
 }
 
@@ -1962,5 +2186,149 @@ mod tests {
         assert!(names("<tt><span background=\"#00000018\"> :shipit: </span></tt>").is_empty());
         // The visible text of a link still counts.
         assert_eq!(names("<a href=\"https://x.test\">:shipit:</a>"), ["shipit"]);
+    }
+}
+
+#[cfg(test)]
+mod system_message_tests {
+    use super::*;
+
+    fn post_with(post_type: &str, message: &str, props: &[(&str, &str)]) -> Post {
+        Post {
+            r#type: post_type.to_string(),
+            message: message.to_string(),
+            props: props
+                .iter()
+                .map(|(k, v)| (k.to_string(), serde_json::json!(v)))
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_bare_handle_gets_a_sigil_so_it_becomes_a_mention() {
+        let post = post_with(
+            "system_join_channel",
+            "sin joined the channel.",
+            &[("username", "sin")],
+        );
+        assert_eq!(with_mention_sigils(&post), "@sin joined the channel.");
+    }
+
+    #[test]
+    fn a_handle_already_written_with_a_sigil_is_left_alone() {
+        // Would otherwise double up into "@@sin".
+        let post = post_with(
+            "system_add_to_channel",
+            "@sin added to the channel by @admin",
+            &[("addedUsername", "sin"), ("username", "admin")],
+        );
+        assert_eq!(
+            with_mention_sigils(&post),
+            "@sin added to the channel by @admin"
+        );
+    }
+
+    /// What `render_system_text` does, without instantiating a GTK label —
+    /// the point being that this is the exact pipeline a click has to travel
+    /// to become a profile popover, so the test has to exercise it, not just
+    /// the surrounding string plumbing.
+    fn rendered(text: &str) -> String {
+        let known = |handle: &str| (handle == "sin").then(|| "Семён Фомченко".to_string());
+        match crate::markdown::parse_with(text, &known).first() {
+            Some(crate::markdown::Block::Text(markup)) => markup.replace("\">@", "\">"),
+            _ => text.to_string(),
+        }
+    }
+
+    #[test]
+    fn a_join_message_reads_as_the_display_name_with_no_stray_at_and_a_working_link() {
+        let post = post_with(
+            "system_join_channel",
+            "sin joined the channel.",
+            &[("username", "sin")],
+        );
+        let markup = rendered(&with_mention_sigils(&post));
+        assert_eq!(
+            markup,
+            "<a href=\"mm-mention:sin\">Семён Фомченко</a> joined the channel."
+        );
+    }
+
+    #[test]
+    fn combinable_types_are_exactly_the_ones_the_webapp_merges() {
+        for combinable in [
+            "system_join_channel",
+            "system_leave_channel",
+            "system_add_to_channel",
+            "system_remove_from_channel",
+            "system_join_team",
+            "system_leave_team",
+            "system_add_to_team",
+            "system_remove_from_team",
+        ] {
+            assert!(is_combinable_system(&post_with(combinable, "", &[])));
+        }
+        // A header change has nobody to list, so it stays its own row.
+        assert!(!is_combinable_system(&post_with(
+            "system_header_change",
+            "",
+            &[]
+        )));
+    }
+
+    #[test]
+    fn mention_list_collapses_past_two_names() {
+        let names = |n: usize| (0..n).map(|i| format!("u{i}")).collect::<Vec<_>>();
+        assert_eq!(mention_list(&names(1)), "@u0");
+        assert_eq!(mention_list(&names(2)), "@u0 and @u1");
+        assert_eq!(mention_list(&names(3)), "@u0 and 2 others");
+        assert_eq!(mention_list(&names(5)), "@u0 and 4 others");
+    }
+
+    #[test]
+    fn system_sentence_agrees_singular_and_plural() {
+        assert_eq!(
+            system_sentence("system_join_channel", &["a".into()], None),
+            "@a joined the channel."
+        );
+        assert_eq!(
+            system_sentence(
+                "system_add_to_channel",
+                &["a".into(), "b".into()],
+                Some("admin")
+            ),
+            "@a and @b were added to the channel by @admin."
+        );
+        assert_eq!(
+            system_sentence("system_remove_from_team", &["a".into()], None),
+            "@a was removed from the team."
+        );
+    }
+
+    #[test]
+    fn a_run_combines_into_one_line_per_type_and_actor() {
+        // Two joins and an add-by-someone-else, back to back — three system
+        // posts, but only the joins belong on the same line.
+        let joined_a = post_with("system_join_channel", "", &[("username", "anna")]);
+        let joined_b = post_with("system_join_channel", "", &[("username", "bob")]);
+        let added = post_with(
+            "system_add_to_channel",
+            "",
+            &[("addedUsername", "carol"), ("username", "dave")],
+        );
+        let run = [&joined_a, &joined_b, &added];
+        assert_eq!(
+            combined_system_text(&run),
+            "@anna and @bob joined the channel.\n@carol was added to the channel by @dave."
+        );
+    }
+
+    #[test]
+    fn the_same_person_named_twice_in_a_run_is_not_duplicated() {
+        let a = post_with("system_join_channel", "", &[("username", "anna")]);
+        let b = post_with("system_join_channel", "", &[("username", "anna")]);
+        let run = [&a, &b];
+        assert_eq!(combined_system_text(&run), "@anna joined the channel.");
     }
 }

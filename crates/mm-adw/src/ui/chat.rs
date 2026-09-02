@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use adw::prelude::*;
 use gtk::glib;
-use mattermost_api::models::Millis;
+use mattermost_api::models::{Millis, Post};
 
 use crate::avatars::Avatars;
 use crate::state::SharedState;
@@ -982,11 +982,13 @@ impl ChatView {
         }
 
         let mut last_author: Option<String> = None;
-        // Whether the previous row was a system message, so a run of them
-        // draws as one block.
-        let mut last_was_system = false;
         let mut last_at: Millis = 0;
         let mut last_day: Option<String> = None;
+        // System posts are buffered rather than drawn as they arrive: a run
+        // of joins/leaves/adds/removes only turns into its combined row (see
+        // `message::system_block`) once it is known to be complete, i.e. the
+        // next thing is not another system post.
+        let mut system_run: Vec<&Post> = Vec::new();
 
         for post in &posts {
             if post.is_deleted() {
@@ -1004,6 +1006,10 @@ impl ChatView {
             // makes "what did I miss" answerable without counting.
             if let Some(at) = unread_since {
                 if post.create_at > at && !unread_drawn {
+                    for widget in message::system_block(&system_run, state, actions) {
+                        self.messages.append(&widget);
+                    }
+                    system_run.clear();
                     self.messages.append(&message::unread_line());
                     unread_drawn = true;
                 }
@@ -1011,36 +1017,32 @@ impl ChatView {
 
             let day = message::format_day(post.create_at);
             if last_day.as_deref() != Some(day.as_str()) {
+                // A run does not span a day boundary, or a join from
+                // yesterday would read as having just happened.
+                for widget in message::system_block(&system_run, state, actions) {
+                    self.messages.append(&widget);
+                }
+                system_run.clear();
                 self.messages.append(&message::day_separator(&day));
                 last_day = Some(day);
                 last_author = None;
             }
 
             if post.is_system() {
-                // Consecutive system messages are one event as far as anybody
-                // reading is concerned — three people invited in the same
-                // minute should not take three lines' worth of separation.
-                let grouped = last_was_system;
-                last_was_system = true;
-                self.messages.append(&message::build(
-                    post,
-                    state,
-                    avatars,
-                    actions,
-                    RowOptions {
-                        grouped,
-                        show_thread_footer: false,
-                    },
-                ));
+                system_run.push(post);
                 last_author = None;
                 continue;
             }
+
+            for widget in message::system_block(&system_run, state, actions) {
+                self.messages.append(&widget);
+            }
+            system_run.clear();
 
             let author = state.borrow().author_name(post);
             let grouped = last_author.as_deref() == Some(author.as_str())
                 && post.create_at - last_at < message::GROUPING_WINDOW_MS;
 
-            last_was_system = false;
             self.messages.append(&message::build(
                 post,
                 state,
@@ -1053,6 +1055,9 @@ impl ChatView {
             ));
             last_author = Some(author);
             last_at = post.create_at;
+        }
+        for widget in message::system_block(&system_run, state, actions) {
+            self.messages.append(&widget);
         }
 
         // Scrolling to the bottom only makes sense when the bottom is the
