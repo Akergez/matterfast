@@ -5344,7 +5344,7 @@ impl Ui {
                 ..
             }) => {
                 let who = self.user_name(&user_id);
-                self.dock.set_caption(&who, &text);
+                self.dock.set_caption(&format!("{who}:"), &text);
             }
             // Host controls are advisory: the server asks, and the client is
             // what actually mutes or stops sharing. Ignoring them meant a host
@@ -5431,8 +5431,20 @@ impl Ui {
                 reaction,
                 ..
             }) => {
+                // In the dock rather than as a toast: a reaction is about the
+                // call, and it belongs where the call is. It clears itself,
+                // because a reaction is a moment and not a state.
                 let who = self.user_name(&user_id);
-                self.toast(&format!("{who} reacted {}", reaction.literal));
+                let glyph = if reaction.literal.is_empty() {
+                    crate::emoji::label(&reaction.name)
+                } else {
+                    reaction.literal.clone()
+                };
+                self.dock.set_caption(&who, &glyph);
+                let ui = self.clone();
+                glib::timeout_add_local_once(std::time::Duration::from_secs(4), move || {
+                    ui.dock.set_caption("", "");
+                });
             }
             CallUpdate::MuteChanged { muted } => {
                 if let Some(call) = self.state.borrow_mut().call.as_mut() {

@@ -254,7 +254,10 @@ impl CallDock {
         let show = !text.trim().is_empty();
         self.caption.set_visible(show);
         if show {
-            self.caption.set_text(&format!("{who}: {text}"));
+            // A reaction arrives with no words around it, so it reads better
+            // as "Anna 👏" than as "Anna: 👏".
+            let separator = if who.is_empty() { "" } else { " " };
+            self.caption.set_text(&format!("{who}{separator}{text}"));
         }
     }
 
