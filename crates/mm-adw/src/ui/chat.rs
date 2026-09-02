@@ -918,37 +918,14 @@ impl ChatView {
     }
 
     /// Restores the view after older messages were prepended: whatever the
-    /// feed grew by, the scroll position moves down by the same amount.
+    /// feed grew by, the scroll position moves down by the same amount. See
+    /// `after_relayout` for why this waits rather than reading `upper` here.
     pub fn restore_scroll(&self, anchor: (f64, f64)) {
         let adjustment = self.scroller.vadjustment();
         let (value, previous_upper) = anchor;
-
-        // `upper` only tells the truth once the new rows have been laid out,
-        // which is a frame away — reading it here gives the height from
-        // before the prepend, so the view is left pinned at the top. The top
-        // is what asks for the page before this one, so it asked again
-        // immediately, and again, walking back to the beginning of the
-        // channel as fast as the server would answer while building every
-        // row on the way. That is what "not responding" was.
-        //
-        // `changed` is the adjustment saying its own bounds moved, which is
-        // exactly the moment to move with them. One shot: the handler takes
-        // itself off again.
-        let handler = Rc::new(RefCell::new(None));
-        let id = adjustment.connect_changed({
-            let handler = handler.clone();
-            move |adjustment| {
-                let grew = adjustment.upper() - previous_upper;
-                if grew <= 0.0 {
-                    return;
-                }
-                adjustment.set_value(value + grew);
-                if let Some(id) = handler.borrow_mut().take() {
-                    adjustment.disconnect(id);
-                }
-            }
+        after_relayout(&adjustment, previous_upper, move |adjustment| {
+            adjustment.set_value(value + (adjustment.upper() - previous_upper));
         });
-        *handler.borrow_mut() = Some(id);
     }
 
     /// Adds the just-fetched older page to the top of the feed without
@@ -1073,6 +1050,130 @@ impl ChatView {
         for widget in prefix {
             self.messages.insert_child_after(&widget, anchor.as_ref());
             anchor = Some(widget);
+        }
+    }
+
+    /// Appends a just-arrived post as one row, instead of rebuilding the
+    /// whole feed for it — the live-event counterpart of `prepend_older`.
+    /// Only sound when it lands at the very end of the channel already on
+    /// screen and there is a real message row to append after; anything else
+    /// (a different channel, CRT hiding a reply, an empty or still-loading
+    /// feed) returns false so the caller falls back to `refresh`.
+    pub fn append_post(
+        &self,
+        post: &Post,
+        state: &SharedState,
+        avatars: &Avatars,
+        actions: &MessageActions,
+    ) -> bool {
+        if self.showing.borrow().as_deref() != Some(post.channel_id.as_str())
+            || post.is_deleted()
+            || post.is_system()
+            || (state.borrow().crt_enabled && post.is_reply())
+        {
+            return false;
+        }
+
+        // The trailing widget has to be an actual message row — a day
+        // separator, a system block, or the empty/loading placeholder means
+        // there is nothing sound to append after.
+        let Some(prev_id) = self
+            .messages
+            .last_child()
+            .and_then(|w| unsafe { w.data::<String>("post-id") })
+            .map(|p| unsafe { p.as_ref() }.clone())
+        else {
+            return false;
+        };
+        let prev_post = state.borrow().post(&prev_id);
+
+        let day = message::format_day(post.create_at);
+        let same_day = prev_post
+            .as_ref()
+            .is_some_and(|p| message::format_day(p.create_at) == day);
+        if !same_day {
+            self.messages.append(&message::day_separator(&day));
+        }
+
+        self.messages.append(&message::build(
+            post,
+            state,
+            avatars,
+            actions,
+            RowOptions {
+                grouped: groups_with(prev_post.as_ref(), post, state),
+                show_thread_footer: true,
+            },
+        ));
+
+        if *self.pinned_to_bottom.borrow() {
+            let adjustment = self.scroller.vadjustment();
+            // Not laid out yet — same one-frame wait `refresh` uses below.
+            glib::idle_add_local_once(move || {
+                adjustment.set_value(adjustment.upper() - adjustment.page_size());
+            });
+        }
+        true
+    }
+
+    /// Rebuilds exactly the row for `post`, in place — used for an edit, a
+    /// reaction, or an acknowledgement, none of which move a post or change
+    /// its neighbours. Returns false when the row is not on screen (a
+    /// different channel, or history not paged in this far), so the caller
+    /// falls back to `refresh`.
+    pub fn replace_post(
+        &self,
+        post: &Post,
+        state: &SharedState,
+        avatars: &Avatars,
+        actions: &MessageActions,
+    ) -> bool {
+        let mut child = self.messages.first_child();
+        while let Some(row) = child {
+            let matches = unsafe { row.data::<String>("post-id") }
+                .map(|id| unsafe { id.as_ref() } == &post.id)
+                .unwrap_or(false);
+            if matches {
+                let prev_post = row
+                    .prev_sibling()
+                    .and_then(|w| unsafe { w.data::<String>("post-id") })
+                    .and_then(|id| state.borrow().post(unsafe { id.as_ref() }));
+                let built = message::build(
+                    post,
+                    state,
+                    avatars,
+                    actions,
+                    RowOptions {
+                        grouped: groups_with(prev_post.as_ref(), post, state),
+                        show_thread_footer: true,
+                    },
+                );
+                self.messages.insert_child_after(&built, Some(&row));
+                self.messages.remove(&row);
+                return true;
+            }
+            child = row.next_sibling();
+        }
+        false
+    }
+
+    /// Drops the row for a deleted post, if it is on screen. The post itself
+    /// already left the feed with the delete event, so there is nothing to
+    /// rebuild it into. A day separator or system block that turns out to
+    /// have nothing left under it after this is a small cosmetic leftover,
+    /// gone on the next full `refresh` (a channel switch, for instance).
+    pub fn remove_post(&self, post_id: &str) {
+        let mut child = self.messages.first_child();
+        while let Some(row) = child {
+            let matches = unsafe { row.data::<String>("post-id") }
+                .map(|id| unsafe { id.as_ref() } == post_id)
+                .unwrap_or(false);
+            let next = row.next_sibling();
+            if matches {
+                self.messages.remove(&row);
+                return;
+            }
+            child = next;
         }
     }
 
@@ -1241,8 +1342,8 @@ impl ChatView {
         // newest message; in a history block it would jump into the past.
         if at_latest && *self.pinned_to_bottom.borrow() {
             let adjustment = self.scroller.vadjustment();
-            // The new rows are not allocated yet, so defer a frame.
-            glib::idle_add_local_once(move || {
+            let previous_upper = adjustment.upper();
+            after_relayout(&adjustment, previous_upper, |adjustment| {
                 adjustment.set_value(adjustment.upper() - adjustment.page_size());
             });
         } else if same_channel {
@@ -1254,15 +1355,52 @@ impl ChatView {
             let adjustment = self.scroller.vadjustment();
             let keep = adjustment.value();
             let was = adjustment.upper();
-            glib::idle_add_local_once(move || {
-                // Anchored to the *bottom*: rows are added below and above
-                // during a session, and the distance to the end is what the
-                // reader is actually looking at.
+            // Anchored to the *bottom*: rows are added below and above during
+            // a session, and the distance to the end is what the reader is
+            // actually looking at.
+            after_relayout(&adjustment, was, move |adjustment| {
                 let from_end = (was - keep).max(0.0);
                 adjustment.set_value((adjustment.upper() - from_end).max(0.0));
             });
         }
     }
+}
+
+/// Runs `apply` once the feed's scrollable height actually changes from
+/// `previous_upper`, instead of on whatever `changed` fires first.
+///
+/// `upper` only tells the truth once the rows just added or rebuilt have
+/// been laid out, which is a frame away — reading it right after the append
+/// gives the height from before, so a caller that acted immediately would be
+/// working from stale numbers. Worse, for a scrollback prepend specifically,
+/// landing at the wrong position reads as "still at the top", which asks for
+/// the page before this one again immediately, and again — that runaway is
+/// what made this app "not responding" in the first place.
+///
+/// `changed` is the adjustment saying its own bounds moved, but it can fire
+/// before the new layout has landed too; skipping calls where `upper` still
+/// matches the recorded baseline waits past those. One shot: the handler
+/// takes itself off once it acts. Shared by every place a message row gets
+/// added or rebuilt and the scroll position has to follow.
+fn after_relayout(
+    adjustment: &gtk::Adjustment,
+    previous_upper: f64,
+    apply: impl Fn(&gtk::Adjustment) + 'static,
+) {
+    let handler: Rc<RefCell<Option<glib::SignalHandlerId>>> = Rc::new(RefCell::new(None));
+    let id = adjustment.connect_changed({
+        let handler = handler.clone();
+        move |adjustment| {
+            if adjustment.upper() == previous_upper {
+                return;
+            }
+            apply(adjustment);
+            if let Some(id) = handler.borrow_mut().take() {
+                adjustment.disconnect(id);
+            }
+        }
+    });
+    *handler.borrow_mut() = Some(id);
 }
 
 /// The label marking the true start of a channel's history. Shared by a full
@@ -1279,6 +1417,20 @@ fn start_label(channel_title: &str) -> gtk::Widget {
     start.upcast()
 }
 
+/// Whether `post` groups with the post drawn immediately before it: same
+/// author, same day, close enough in time — the rule `refresh` and
+/// `prepend_older` apply while walking the whole feed, answered here for one
+/// row instead. Author is compared by name rather than user id because a
+/// webhook can post under a different name per message with the same id.
+fn groups_with(prev: Option<&Post>, post: &Post, state: &SharedState) -> bool {
+    let Some(prev) = prev else {
+        return false;
+    };
+    message::format_day(post.create_at) == message::format_day(prev.create_at)
+        && state.borrow().author_name(post) == state.borrow().author_name(prev)
+        && post.create_at.saturating_sub(prev.create_at) < message::GROUPING_WINDOW_MS
+}
+
 /// Colours a header button while its feature is on.
 ///
 /// `.flat` paints the background transparent and comes later in the Adwaita
@@ -1291,5 +1443,81 @@ fn set_active(button: &gtk::Button, active: bool, class: &str) {
     } else {
         button.remove_css_class(class);
         button.add_css_class("flat");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mattermost_api::models::{ClientConfig, User};
+    use mattermost_api::Client;
+
+    fn state_with(users: &[User]) -> SharedState {
+        let client = Client::new("http://x.test").unwrap();
+        let mut app =
+            crate::state::AppState::new(client, User::default(), ClientConfig::default(), false);
+        for user in users {
+            app.users.insert(user.id.clone(), user.clone());
+        }
+        Rc::new(RefCell::new(app))
+    }
+
+    fn post(user_id: &str, at: Millis) -> Post {
+        Post {
+            id: format!("p{at}"),
+            user_id: user_id.into(),
+            create_at: at,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn same_author_within_the_window_groups() {
+        let state = state_with(&[User {
+            id: "u1".into(),
+            username: "anna".into(),
+            ..Default::default()
+        }]);
+        let prev = post("u1", 1_000);
+        let next = post("u1", 1_000 + message::GROUPING_WINDOW_MS - 1);
+        assert!(groups_with(Some(&prev), &next, &state));
+    }
+
+    #[test]
+    fn a_gap_past_the_window_does_not_group() {
+        let state = state_with(&[User {
+            id: "u1".into(),
+            username: "anna".into(),
+            ..Default::default()
+        }]);
+        let prev = post("u1", 1_000);
+        let next = post("u1", 1_000 + message::GROUPING_WINDOW_MS);
+        assert!(!groups_with(Some(&prev), &next, &state));
+    }
+
+    #[test]
+    fn a_different_author_never_groups_even_seconds_apart() {
+        let state = state_with(&[
+            User {
+                id: "u1".into(),
+                username: "anna".into(),
+                ..Default::default()
+            },
+            User {
+                id: "u2".into(),
+                username: "bob".into(),
+                ..Default::default()
+            },
+        ]);
+        let prev = post("u1", 1_000);
+        let next = post("u2", 1_001);
+        assert!(!groups_with(Some(&prev), &next, &state));
+    }
+
+    #[test]
+    fn nothing_before_it_never_groups() {
+        let state = state_with(&[]);
+        let next = post("u1", 1_000);
+        assert!(!groups_with(None, &next, &state));
     }
 }

@@ -105,6 +105,10 @@ pub fn create_channel(
 /// answer back in through [`Self::set_results`].
 pub struct ChannelBrowser {
     list: gtk::ListBox,
+    /// The box these results answer. A search is a round trip, and a narrow
+    /// term can come back before the broad one typed before it — without
+    /// this, the broad answer lands last and replaces the filtered list.
+    search: gtk::SearchEntry,
     on_join: Rc<dyn Fn(String)>,
 }
 
@@ -173,11 +177,15 @@ impl ChannelBrowser {
 
         ChannelBrowser {
             list,
+            search,
             on_join: Rc::new(on_join),
         }
     }
 
-    pub fn set_results(&self, channels: Vec<(String, String, String, bool)>) {
+    pub fn set_results(&self, term: &str, channels: Vec<(String, String, String, bool)>) {
+        if self.search.text().trim() != term.trim() {
+            return; // Answered a question nobody is asking any more.
+        }
         while let Some(child) = self.list.first_child() {
             self.list.remove(&child);
         }
@@ -533,6 +541,8 @@ fn slugify(name: &str) -> String {
 pub struct MemberList {
     members: gtk::ListBox,
     candidates: gtk::ListBox,
+    /// See `ChannelBrowser::search`: the term these candidates answer.
+    search: gtk::SearchEntry,
     on_add: Rc<dyn Fn(String)>,
     on_remove: Rc<dyn Fn(String)>,
 }
@@ -578,6 +588,7 @@ impl MemberList {
         MemberList {
             members,
             candidates,
+            search,
             on_add: Rc::new(on_add),
             on_remove: Rc::new(on_remove),
         }
@@ -624,7 +635,10 @@ impl MemberList {
     }
 
     /// `users` is (user_id, display_name, @username).
-    pub fn set_candidates(&self, users: Vec<(String, String, String)>) {
+    pub fn set_candidates(&self, term: &str, users: Vec<(String, String, String)>) {
+        if self.search.text().trim() != term.trim() {
+            return; // Answered a question nobody is asking any more.
+        }
         clear_list(&self.candidates);
 
         for (id, display_name, username) in users {

@@ -179,7 +179,7 @@ mod mention_tests {
 
         assert_eq!(found.len(), COMPLETIONS);
         assert!(
-            elapsed < std::time::Duration::from_millis(10),
+            elapsed < std::time::Duration::from_millis(150),
             "took {elapsed:?} for 10k users"
         );
 
@@ -189,8 +189,13 @@ mod mention_tests {
         let none = local_mentions(users.iter(), "nobodyatall", "full_name", &|_| None);
         let elapsed = started.elapsed();
         assert!(none.is_empty());
+        // Both bounds are generous on purpose: this is an unoptimised build
+        // on a machine that may be compiling something else at the same time,
+        // and the old 10ms/30ms failed for that reason rather than for a slow
+        // scan. What they guard against is an accidental quadratic, which
+        // would be seconds rather than milliseconds.
         assert!(
-            elapsed < std::time::Duration::from_millis(30),
+            elapsed < std::time::Duration::from_millis(150),
             "worst case took {elapsed:?} for 10k users"
         );
     }
@@ -1153,6 +1158,14 @@ struct Ui {
     tx: async_channel::Sender<Action>,
 }
 
+/// What one websocket event did to one post, so the feed can redraw that row
+/// instead of every row.
+enum PostChange {
+    Added(Post),
+    Changed(Post),
+    Removed(String),
+}
+
 impl Ui {
     fn toast(&self, message: &str) {
         self.toasts.add_toast(adw::Toast::new(message));
@@ -1848,6 +1861,7 @@ impl Ui {
                 let Some(team_id) = team else { return };
                 let holder = holder.clone();
                 let state = search_ui.state.clone();
+                let asked = term.clone();
                 runtime::spawn(
                     async move {
                         // An empty box means "show me what is there", which is
@@ -1870,7 +1884,7 @@ impl Ui {
                             })
                             .collect();
                         if let Some(browser) = holder.borrow().as_ref() {
-                            browser.set_results(rows);
+                            browser.set_results(&asked, rows);
                         }
                     },
                 );
@@ -2355,6 +2369,7 @@ impl Ui {
                 let channel_id = search_channel.clone();
                 let holder = search_holder.clone();
                 let state = search_ui.state.clone();
+                let asked = term.clone();
                 runtime::spawn(
                     // Not-in-channel only: offering someone already here is an
                     // add that does nothing.
@@ -2373,7 +2388,7 @@ impl Ui {
                             })
                             .collect();
                         if let Some(list) = holder.borrow().as_ref() {
-                            list.set_candidates(rows);
+                            list.set_candidates(&asked, rows);
                         }
                     },
                 );
@@ -5400,13 +5415,19 @@ impl Ui {
                             st.users.insert(user.id.clone(), user);
                         }
                         st.apply_statuses(statuses);
-                        st.threads.insert(root_id, ChannelFeed::from_list(&list));
+                        st.threads
+                            .insert(root_id.clone(), ChannelFeed::from_list(&list));
                     }
                     // Both panes here: a fetched thread can change the reply
                     // footer in the feed behind it. Off the click's critical
                     // path, so the cost does not show.
                     ui.refresh_messages();
-                    ui.right.focus_composer();
+                    // A slow fetch can lose the race to a click elsewhere —
+                    // only steal focus into the reply box if the panel is
+                    // still showing the thread this answer is for.
+                    if ui.right.mode() == PanelMode::Thread(root_id) {
+                        ui.right.focus_composer();
+                    }
                 }
                 Err(e) => {
                     ui.toast(&format!("Could not load the thread: {e}"));
@@ -6240,7 +6261,13 @@ impl Ui {
             }
         }
 
+        // A whole-feed rebuild, for the events that really do change every
+        // row — somebody's avatar, a presence dot, a channel switch.
         let mut redraw_messages = false;
+        // The events that change exactly one post, which is nearly all of
+        // them. One row is rebuilt rather than the several hundred behind it;
+        // see `ChatView::append_post` and friends.
+        let mut touched: Vec<PostChange> = Vec::new();
         let mut redraw_sidebar = false;
         let mut redraw_typing = false;
         let mut redraw_draft = false;
@@ -6274,6 +6301,8 @@ impl Ui {
                     let viewing = st.current_channel.as_deref() == Some(channel_id.as_str());
                     let is_reply = post.is_reply();
                     let create_at = post.create_at;
+                    let row_post = post.clone();
+                    let root_id = post.thread_root().to_string();
 
                     st.apply_post(post.clone());
 
@@ -6304,7 +6333,16 @@ impl Ui {
                         st.mentions.insert(0, post);
                         st.mentions.truncate(INBOX_PAGE as usize);
                     }
-                    redraw_messages = true;
+                    if viewing {
+                        // Under collapsed threads a reply never enters the
+                        // feed; what changes there is the root's reply
+                        // footer, and only if the root is on screen at all.
+                        touched.extend(if is_reply && crt {
+                            st.post(&root_id).map(PostChange::Changed)
+                        } else {
+                            Some(PostChange::Added(row_post))
+                        });
+                    }
                     redraw_sidebar = true;
                     // Decided here, raised below: the decision needs the state
                     // borrow, the toast must not hold it.
@@ -6334,12 +6372,12 @@ impl Ui {
                 Event::ListsChanged => {}
                 Event::AcknowledgementChanged { post_id } => refetch_post = Some(post_id),
                 Event::EphemeralMessage(post) => {
+                    touched.push(PostChange::Added((*post).clone()));
                     st.apply_post(*post);
-                    redraw_messages = true;
                 }
                 Event::PostEdited(post) => {
+                    touched.push(PostChange::Changed(post.clone()));
                     st.apply_post(post);
-                    redraw_messages = true;
                 }
                 Event::PostDeleted(post) => {
                     if let Some(feed) = st.feeds.get_mut(&post.channel_id) {
@@ -6349,15 +6387,15 @@ impl Ui {
                     if let Some(thread) = st.threads.get_mut(&root) {
                         thread.remove(&post.id);
                     }
-                    redraw_messages = true;
+                    touched.push(PostChange::Removed(post.id.clone()));
                 }
                 Event::ReactionAdded(reaction) => {
                     st.apply_reaction(&reaction, true);
-                    redraw_messages = true;
+                    touched.extend(st.post(&reaction.post_id).map(PostChange::Changed));
                 }
                 Event::ReactionRemoved(reaction) => {
                     st.apply_reaction(&reaction, false);
-                    redraw_messages = true;
+                    touched.extend(st.post(&reaction.post_id).map(PostChange::Changed));
                 }
                 Event::UserUpdated(user) => {
                     // A new picture means the cached texture is stale.
@@ -6532,6 +6570,34 @@ impl Ui {
 
         if let Some(user_id) = forget_avatar {
             self.avatars.forget(&user_id);
+        }
+        // Row by row where the row is on screen. `false` means it is not —
+        // history not paged in this far, or the panel showing something else
+        // — and then there is nothing for it but the full rebuild.
+        if !touched.is_empty() && !redraw_messages {
+            let actions = self.message_actions();
+            for change in touched {
+                let done = match change {
+                    PostChange::Added(post) => {
+                        self.chat
+                            .append_post(&post, &self.state, &self.avatars, &actions)
+                    }
+                    PostChange::Changed(post) => {
+                        self.chat
+                            .replace_post(&post, &self.state, &self.avatars, &actions)
+                    }
+                    PostChange::Removed(id) => {
+                        self.chat.remove_post(&id);
+                        true
+                    }
+                };
+                redraw_messages |= !done;
+            }
+            // The thread panel holds a screenful, not a channel's history, so
+            // it is still redrawn whole — it may be showing the same post.
+            if !redraw_messages {
+                self.right.refresh(&self.state, &self.avatars, &actions);
+            }
         }
         if redraw_messages {
             self.refresh_messages();

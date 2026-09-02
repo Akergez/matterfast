@@ -31,6 +31,33 @@ struct Inner {
     /// Fetches that failed. Retried only via [`Avatars::forget`], so a broken
     /// avatar cannot turn into a request loop driven by every redraw.
     failed: HashSet<String>,
+    /// Insertion order, so the oldest can be dropped when the cache is full.
+    order: Vec<String>,
+}
+
+impl Inner {
+    /// Keeps the caches to their bounds. Called after every insert.
+    fn trim(&mut self) {
+        while self.heads.len() > MAX_HEADS {
+            let Some(oldest) = self.heads.keys().next().cloned() else {
+                break;
+            };
+            self.heads.remove(&oldest);
+        }
+        if self.textures.len() > MAX_TEXTURES {
+            tracing::debug!(
+                held = self.textures.len(),
+                "picture cache full, dropping the oldest"
+            );
+        }
+        while self.textures.len() > MAX_TEXTURES {
+            let Some(oldest) = self.order.first().cloned() else {
+                break;
+            };
+            self.order.remove(0);
+            self.textures.remove(&oldest);
+        }
+    }
 }
 
 /// Fired on the GTK thread when a texture lands.
@@ -53,6 +80,49 @@ const VIDEO_HEAD_PREFIX: &str = "video-head:";
 /// cheaply from what did come back, and the caller gives up rather than
 /// asking for more.
 const VIDEO_HEAD_BYTES: u64 = 1_500_000;
+
+/// How many pictures to hold. Faces are small, but a channel's worth of
+/// posted images at preview size is hundreds of megabytes — this cache used
+/// to be unbounded, and scrolling back through a busy channel grew the
+/// process without limit. Evicting one costs a refetch, nothing more: a
+/// picture still on screen is held by the widget showing it.
+///
+/// ponytail: oldest-inserted rather than least-recently-used. An LRU needs
+/// the read path to write, and the read path here is every redraw.
+const MAX_TEXTURES: usize = 150;
+
+/// Video heads are a megabyte and a half each and are only read once, to make
+/// a poster out of. A handful is plenty.
+const MAX_HEADS: usize = 4;
+
+/// The widest a picture is ever drawn: `message::scaled_size`'s cap, doubled
+/// for a HiDPI screen. Decoding a 4000px photo to keep 500 of them is how a
+/// conversation full of screenshots turns into gigabytes.
+const MAX_DECODED: i32 = 1000;
+
+/// Decodes to the size it will be drawn at rather than the size it arrived
+/// in. `Pixbuf` scales during decode, so the full-size image is never held.
+/// Faces and emoji are already small; only the file images are worth scaling.
+fn decode(id: &str, bytes: Vec<u8>) -> Result<gdk::Texture, glib::Error> {
+    let big = id.starts_with(FILE_PREVIEW_PREFIX) || id.starts_with(FILE_PREFIX);
+    let data = glib::Bytes::from_owned(bytes);
+    if !big {
+        return gdk::Texture::from_bytes(&data);
+    }
+    let stream = gtk::gio::MemoryInputStream::from_bytes(&data);
+    match gtk::gdk_pixbuf::Pixbuf::from_stream_at_scale(
+        &stream,
+        MAX_DECODED,
+        MAX_DECODED,
+        true,
+        gtk::gio::Cancellable::NONE,
+    ) {
+        Ok(pixbuf) => Ok(gdk::Texture::for_pixbuf(&pixbuf)),
+        // Pixbuf cannot read every format GdkTexture can, so a failure here
+        // is a reason to try the plain path, not to give up on the picture.
+        Err(_) => gdk::Texture::from_bytes(&data),
+    }
+}
 
 #[derive(Clone)]
 pub struct Avatars {
@@ -144,6 +214,7 @@ impl Avatars {
         let mut inner = self.inner.borrow_mut();
         inner.textures.remove(user_id);
         inner.failed.remove(user_id);
+        inner.order.retain(|key| key != user_id);
     }
 
     fn request(&self, user_id: &str) {
@@ -196,12 +267,15 @@ impl Avatars {
                         // spares it a second fetch on the next redraw.
                         Ok(bytes) if done_id.starts_with(VIDEO_HEAD_PREFIX) => {
                             inner.heads.insert(done_id, Rc::new(bytes));
+                            inner.trim();
                             loaded = true;
                         }
                         Ok(bytes) => {
-                            match gdk::Texture::from_bytes(&glib::Bytes::from_owned(bytes)) {
+                            match decode(&done_id, bytes) {
                                 Ok(texture) => {
+                                    inner.order.push(done_id.clone());
                                     inner.textures.insert(done_id, texture);
+                                    inner.trim();
                                     loaded = true;
                                 }
                                 // A shortcode that is neither Unicode nor uploaded to
