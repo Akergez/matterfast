@@ -22,6 +22,7 @@ impl ChannelSidebar {
     pub fn new(
         on_select: impl Fn(String) + 'static,
         on_select_team: impl Fn(String) + 'static,
+        on_search: impl Fn(String) + 'static,
         dock: &gtk::Widget,
     ) -> Self {
         let list = gtk::ListBox::builder()
@@ -53,6 +54,38 @@ impl ChannelSidebar {
             .build();
         header.pack_start(&switcher.button);
 
+        // A search bar rather than a dialog: it belongs to the list it filters
+        // into, and Escape puts it away without losing your place.
+        let search_entry = gtk::SearchEntry::builder()
+            .placeholder_text("Search messages")
+            .hexpand(true)
+            .build();
+        let search_bar = gtk::SearchBar::builder()
+            .child(&search_entry)
+            .key_capture_widget(&header)
+            .build();
+        let search_button = gtk::ToggleButton::builder()
+            .icon_name("system-search-symbolic")
+            .tooltip_text("Search messages")
+            .build();
+        search_button.add_css_class("flat");
+        search_button
+            .bind_property("active", &search_bar, "search-mode-enabled")
+            .bidirectional()
+            .sync_create()
+            .build();
+        header.pack_end(&search_button);
+
+        // On activate, not on every keystroke: a post search is a round trip
+        // to the server, and searching per character would be a request per
+        // character.
+        search_entry.connect_activate(move |entry| {
+            let terms = entry.text().trim().to_string();
+            if !terms.is_empty() {
+                on_search(terms);
+            }
+        });
+
         // The call dock is the toolbar view's bottom bar rather than another
         // child of a box: that reserves its space, draws the separator, and
         // animates the reveal, none of which a plain box would do.
@@ -61,6 +94,7 @@ impl ChannelSidebar {
             .reveal_bottom_bars(false)
             .build();
         widget.add_top_bar(&header);
+        widget.add_top_bar(&search_bar);
         widget.set_content(Some(&scroller));
         widget.add_bottom_bar(dock);
 

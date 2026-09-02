@@ -22,6 +22,8 @@ pub enum PanelMode {
     Thread(String),
     /// Mentions and unread threads.
     Inbox,
+    /// Results for a search, held so a redraw does not lose them.
+    Search(String),
 }
 
 pub struct RightPanel {
@@ -34,6 +36,8 @@ pub struct RightPanel {
     thread_list: gtk::Box,
     thread_scroller: gtk::ScrolledWindow,
     thread_entry: gtk::TextView,
+
+    search_list: gtk::Box,
 
     inbox_stack: gtk::Stack,
     mentions_list: gtk::Box,
@@ -201,8 +205,18 @@ impl RightPanel {
         inbox_page.append(&inbox_stack);
 
         let stack = gtk::Stack::new();
+        let search_list = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .build();
+        let search_page = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .vexpand(true)
+            .child(&search_list)
+            .build();
+
         stack.add_named(&thread_page, Some("thread"));
         stack.add_named(&inbox_page, Some("inbox"));
+        stack.add_named(&search_page, Some("search"));
 
         let widget = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
@@ -220,6 +234,7 @@ impl RightPanel {
             thread_list,
             thread_scroller,
             thread_entry,
+            search_list,
             inbox_stack,
             mentions_list,
             threads_list,
@@ -246,6 +261,72 @@ impl RightPanel {
             PanelMode::Hidden => {}
             PanelMode::Thread(root_id) => self.render_thread(&root_id, state, avatars, actions),
             PanelMode::Inbox => self.render_inbox(state, avatars),
+            PanelMode::Search(terms) => self.render_search(&terms, state, avatars, actions),
+        }
+    }
+
+    /// Search results, newest first, each one a jump into its channel.
+    fn render_search(
+        &self,
+        terms: &str,
+        state: &SharedState,
+        avatars: &Avatars,
+        actions: &MessageActions,
+    ) {
+        self.stack.set_visible_child_name("search");
+        clear(&self.search_list);
+        self.title.set_text("Search");
+        self.subtitle.set_text(terms);
+        self.subtitle.set_visible(true);
+
+        let st = state.borrow();
+        if st.searching {
+            let spinner = gtk::Spinner::builder()
+                .halign(gtk::Align::Center)
+                .margin_top(24)
+                .build();
+            spinner.start();
+            self.search_list.append(&spinner);
+            return;
+        }
+        if st.search_results.is_empty() {
+            self.search_list.append(
+                &adw::StatusPage::builder()
+                    .icon_name("system-search-symbolic")
+                    .title("No matches")
+                    .description("Nothing here matched that search.")
+                    .css_classes(["compact"])
+                    .build(),
+            );
+            return;
+        }
+
+        for post in &st.search_results {
+            let channel = st
+                .channel(&post.channel_id)
+                .map(|c| st.channel_title(c))
+                .unwrap_or_default();
+            let row = message::build(
+                post,
+                state,
+                avatars,
+                actions,
+                RowOptions {
+                    grouped: false,
+                    show_thread_footer: false,
+                },
+            );
+            // Which channel a hit came from is most of what makes it useful.
+            let label = gtk::Label::builder()
+                .label(&channel)
+                .xalign(0.0)
+                .margin_start(14)
+                .margin_top(8)
+                .build();
+            label.add_css_class("caption-heading");
+            label.add_css_class("dim-label");
+            self.search_list.append(&label);
+            self.search_list.append(&row);
         }
     }
 

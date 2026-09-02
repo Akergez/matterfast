@@ -142,6 +142,9 @@ pub struct AppState {
     /// Unsent text, keyed by channel id. Mirrors what the server has, so the
     /// same half-written message is waiting on every device.
     pub drafts: HashMap<String, String>,
+    /// The last search's hits, newest first, and whether one is in flight.
+    pub search_results: Vec<Post>,
+    pub searching: bool,
     /// Posts you saved. Mattermost has no "saved" flag on a post — it is a
     /// preference in the `flagged_post` category, one row per post id.
     pub saved_posts: HashSet<String>,
@@ -208,6 +211,8 @@ impl AppState {
             call: None,
             drafts: HashMap::new(),
             drafts_synced: true,
+            search_results: Vec::new(),
+            searching: false,
             saved_posts: HashSet::new(),
             reaction_unread: 0,
             typing: HashMap::new(),

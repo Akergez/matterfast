@@ -83,6 +83,8 @@ enum Action {
     ComposerChanged(bool),
     /// Something from a message's own menu.
     Post(String, PostAction),
+    /// Search this team's messages.
+    Search(String),
 }
 
 pub fn build_window(app: &adw::Application) {
@@ -380,6 +382,12 @@ fn build_session_ui(
             let tx = tx.clone();
             move |id| {
                 let _ = tx.send_blocking(Action::SelectTeam(id));
+            }
+        },
+        {
+            let tx = tx.clone();
+            move |terms| {
+                let _ = tx.send_blocking(Action::Search(terms));
             }
         },
         dock.widget.upcast_ref(),
@@ -699,6 +707,60 @@ impl Ui {
                 if let Err(e) = result {
                     ui.toast(&format!("Could not save the edit: {e}"));
                 }
+            },
+        );
+    }
+
+    /// Runs a search and shows the hits in the right panel.
+    ///
+    /// Search is one of the routes the server refuses while it is busy, so a
+    /// failure here is worth saying out loud rather than showing as "no
+    /// results" — those mean very different things to whoever is looking.
+    fn search(self: &Rc<Self>, terms: String) {
+        let (client, team) = {
+            let mut st = self.state.borrow_mut();
+            st.searching = true;
+            st.search_results.clear();
+            (st.client.clone(), st.current_team.clone())
+        };
+        let Some(team_id) = team else { return };
+
+        self.right.set_mode(rhs::PanelMode::Search(terms.clone()));
+        self.refresh_panel_mode();
+        self.overlay.set_show_sidebar(true);
+        self.refresh_messages();
+
+        let ui = self.clone();
+        runtime::spawn(
+            async move {
+                let hits = client.search_posts(&team_id, &terms, false).await?;
+                let (authors, statuses) = hydrate_authors(&client, &hits.posts).await;
+                Ok::<_, mattermost_api::Error>((hits.posts, authors, statuses))
+            },
+            move |result| {
+                {
+                    let mut st = ui.state.borrow_mut();
+                    st.searching = false;
+                    match result {
+                        Ok((posts, authors, statuses)) => {
+                            for user in authors {
+                                st.users.insert(user.id.clone(), user);
+                            }
+                            st.apply_statuses(statuses);
+                            st.search_results = ChannelFeed::from_list(&posts).posts;
+                            // Newest first reads better for a search than the
+                            // oldest-first order a channel wants.
+                            st.search_results.reverse();
+                        }
+                        Err(e) => {
+                            drop(st);
+                            ui.toast(&format!("Search failed: {e}"));
+                            ui.refresh_messages();
+                            return;
+                        }
+                    }
+                }
+                ui.refresh_messages();
             },
         );
     }
@@ -1206,7 +1268,11 @@ impl Ui {
     /// dismiss, so it always overlays — pushing the conversation aside for it
     /// would be a heavier gesture than the content deserves.
     fn refresh_panel_mode(&self) {
-        let overlays = self.narrow.get() || matches!(self.right.mode(), PanelMode::Inbox);
+        let overlays = self.narrow.get()
+            || matches!(
+                self.right.mode(),
+                PanelMode::Inbox | PanelMode::Search(_)
+            );
         self.overlay.set_collapsed(overlays);
     }
 
@@ -1265,6 +1331,7 @@ impl Ui {
             }
             Action::OpenDirectMessage(user_id) => self.open_direct_message(user_id),
             Action::Post(post_id, what) => self.post_action(post_id, what),
+            Action::Search(terms) => self.search(terms),
             Action::ComposerChanged(has_text) => {
                 if has_text {
                     self.notify_typing();
