@@ -5256,6 +5256,9 @@ impl Ui {
                 // will never mention them again — no edit, no delete, and
                 // they are gone on the next fetch. That is the intent.
                 Event::ThreadsChanged => reload_inbox = true,
+                // Nothing on screen depends on these continuously; they matter
+                // when one of those windows is open, and it refills on open.
+                Event::ListsChanged => {}
                 Event::AcknowledgementChanged { post_id } => refetch_post = Some(post_id),
                 Event::EphemeralMessage(post) => {
                     st.apply_post(*post);

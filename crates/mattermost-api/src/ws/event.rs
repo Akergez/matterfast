@@ -205,6 +205,9 @@ pub enum Event {
     /// A draft you wrote on another device. Both create and update arrive as
     /// `draft_created` — `draft_updated` exists in the server's enum but is
     /// never published.
+    /// A list this client can show — scheduled posts, channel bookmarks —
+    /// changed elsewhere.
+    ListsChanged,
     /// Something about a followed thread moved: new reply, follow toggled,
     /// or read state changed. Carries no useful delta, so it means "refetch".
     ThreadsChanged,
@@ -240,6 +243,16 @@ impl Event {
                 Some(p) => Event::Posted(p),
                 None => Event::other(frame),
             },
+            // A scheduled post was created, sent or cancelled somewhere, and
+            // a bookmark likewise. Neither carries a usable delta for us, so
+            // both mean "the list you may be looking at is stale".
+            "scheduled_post_created"
+            | "scheduled_post_updated"
+            | "scheduled_post_deleted"
+            | "channel_bookmark_created"
+            | "channel_bookmark_updated"
+            | "channel_bookmark_deleted"
+            | "channel_bookmark_sorted" => Event::ListsChanged,
             // CRT bookkeeping: a thread you follow changed, or your follow
             // state for one did. Both mean the inbox is stale.
             "thread_updated" | "thread_follow_changed" | "thread_read_changed" => {
