@@ -299,6 +299,12 @@ impl Player {
                     .build();
                 still.add_css_class("attachment-image");
 
+                // Out of the row before into the overlay: a widget cannot be
+                // given a second parent while it still has the first.
+                controls.remove(&play);
+                controls.remove(&spinner);
+                controls.remove(&label);
+
                 play.set_halign(gtk::Align::Center);
                 play.set_valign(gtk::Align::Center);
                 play.add_css_class("osd");

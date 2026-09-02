@@ -1382,7 +1382,19 @@ fn hover_actions(
         .build();
     react.add_css_class("flat");
     react.add_css_class("circular");
-    react.set_popover(Some(&reaction_picker(post, actions)));
+    // Built on first open. A popover per message — with its quick-reaction
+    // buttons, its search entry and its list — is a hundred widgets nobody
+    // asked for, times every message in the channel, thrown away on the next
+    // redraw.
+    react.set_create_popup_func({
+        let post_id = post.id.clone();
+        let actions = actions.clone();
+        move |button| {
+            if button.popover().is_none() {
+                button.set_popover(Some(&reaction_picker(&post_id, &actions)));
+            }
+        }
+    });
     bar.append(&react);
 
     // Saving is one click in every other client, so it is a button here too
@@ -1436,6 +1448,37 @@ fn hover_actions(
 /// the server would refuse anyway, and an option that always fails is worse
 /// than no option.
 fn overflow_menu(post: &Post, actions: &MessageActions, mine: bool) -> gtk::Widget {
+    let button = gtk::MenuButton::builder()
+        .icon_name("view-more-symbolic")
+        .tooltip_text("More actions")
+        .build();
+    button.add_css_class("flat");
+    button.add_css_class("circular");
+
+    // Same reason as the reaction picker: a dozen `GSimpleAction`s and a menu
+    // model for every message on screen, rebuilt on every redraw, for a menu
+    // almost nobody opens. GTK will ask for it when it is wanted.
+    button.set_create_popup_func({
+        let post = post.clone();
+        let actions = actions.clone();
+        move |button| {
+            if button.menu_model().is_some() {
+                return;
+            }
+            let (menu, group) = post_menu(&post, &actions, mine);
+            button.insert_action_group("post", Some(&group));
+            button.set_menu_model(Some(&menu));
+        }
+    });
+    button.upcast()
+}
+
+/// The menu itself, built the first time it is asked for.
+fn post_menu(
+    post: &Post,
+    actions: &MessageActions,
+    mine: bool,
+) -> (gtk::gio::Menu, gtk::gio::SimpleActionGroup) {
     let menu = gtk::gio::Menu::new();
     let group = gtk::gio::SimpleActionGroup::new();
 
@@ -1475,18 +1518,10 @@ fn overflow_menu(post: &Post, actions: &MessageActions, mine: bool) -> gtk::Widg
         menu.append(Some(label), Some(&format!("post.{name}")));
     }
 
-    let button = gtk::MenuButton::builder()
-        .icon_name("view-more-symbolic")
-        .tooltip_text("More actions")
-        .menu_model(&menu)
-        .build();
-    button.add_css_class("flat");
-    button.add_css_class("circular");
-    button.insert_action_group("post", Some(&group));
-    button.upcast()
+    (menu, group)
 }
 
-fn reaction_picker(post: &Post, actions: &MessageActions) -> gtk::Popover {
+fn reaction_picker(post_id: &str, actions: &MessageActions) -> gtk::Popover {
     let quick = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(2)
@@ -1527,7 +1562,7 @@ fn reaction_picker(post: &Post, actions: &MessageActions) -> gtk::Popover {
     let fill = {
         let all = all.clone();
         let actions = actions.clone();
-        let post_id = post.id.clone();
+        let post_id = post_id.to_string();
         let popover = popover.clone();
         move |term: &str| {
             while let Some(child) = all.first_child() {
@@ -1589,7 +1624,7 @@ fn reaction_picker(post: &Post, actions: &MessageActions) -> gtk::Popover {
         button.add_css_class("emoji-button");
         button.connect_clicked({
             let actions = actions.clone();
-            let post_id = post.id.clone();
+            let post_id = post_id.to_string();
             let name = (*name).to_string();
             let popover = popover.clone();
             move |_| {

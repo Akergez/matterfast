@@ -298,9 +298,6 @@ fn attach_row_menu(
     state: &crate::state::AppState,
     categories: &Rc<dyn Fn(String, RowAction)>,
 ) {
-    let menu = gtk::gio::Menu::new();
-    let group = gtk::gio::SimpleActionGroup::new();
-
     let muted = state
         .memberships
         .get(channel_id)
@@ -344,36 +341,58 @@ fn attach_row_menu(
         ));
     }
 
-    for (label, name, action) in entries {
-        let item = gtk::gio::SimpleAction::new(&name, None);
-        item.connect_activate({
-            let categories = categories.clone();
-            let channel_id = channel_id.to_string();
-            let action = action.clone();
-            move |_, _| categories(channel_id.clone(), action.clone())
-        });
-        group.add_action(&item);
-        menu.append(Some(&label), Some(&format!("row.{name}")));
-    }
-
-    let popover = gtk::PopoverMenu::from_model(Some(&menu));
-    popover.set_parent(row);
-    popover.set_has_arrow(false);
-    popover.set_halign(gtk::Align::Start);
-    // A parented popover is a child of the row, and the sidebar rebuilds its
-    // rows constantly — without this, every rebuild finalises a row that still
-    // owns a popover and GTK says so, once per row, forever.
-    row.connect_destroy({
-        let popover = popover.clone();
-        move |_| popover.unparent()
-    });
-    row.insert_action_group("row", Some(&group));
-
+    // Nothing above this line is a GTK object: `entries` is a handful of
+    // strings. Everything below is, and none of it is built until somebody
+    // actually right-clicks — a menu, an action group and an action per item
+    // for every channel in the sidebar, rebuilt on every sidebar refresh, was
+    // twenty thousand allocations for menus that are almost never opened.
+    let built: Rc<RefCell<Option<gtk::PopoverMenu>>> = Rc::new(RefCell::new(None));
     let click = gtk::GestureClick::new();
     click.set_button(gtk::gdk::BUTTON_SECONDARY);
-    click.connect_pressed(move |_, _, x, y| {
-        popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
-        popover.popup();
+    click.connect_pressed({
+        let categories = categories.clone();
+        let channel_id = channel_id.to_string();
+        // The row comes from the gesture rather than being captured: a
+        // controller belongs to its widget, so a closure holding that widget
+        // is a cycle and the row would never be freed.
+        move |gesture, _, x, y| {
+            let Some(row) = gesture.widget().and_downcast::<gtk::ListBoxRow>() else {
+                return;
+            };
+            let mut slot = built.borrow_mut();
+            let popover = slot.get_or_insert_with(|| {
+                let menu = gtk::gio::Menu::new();
+                let group = gtk::gio::SimpleActionGroup::new();
+                for (label, name, action) in &entries {
+                    let item = gtk::gio::SimpleAction::new(name, None);
+                    item.connect_activate({
+                        let categories = categories.clone();
+                        let channel_id = channel_id.clone();
+                        let action = action.clone();
+                        move |_, _| categories(channel_id.clone(), action.clone())
+                    });
+                    group.add_action(&item);
+                    menu.append(Some(label), Some(&format!("row.{name}")));
+                }
+
+                let popover = gtk::PopoverMenu::from_model(Some(&menu));
+                popover.set_parent(&row);
+                popover.set_has_arrow(false);
+                popover.set_halign(gtk::Align::Start);
+                // A parented popover is a child of the row, and the sidebar
+                // rebuilds its rows constantly — without this, every rebuild
+                // finalises a row that still owns a popover and GTK says so,
+                // once per row, forever.
+                row.connect_destroy({
+                    let popover = popover.clone();
+                    move |_| popover.unparent()
+                });
+                row.insert_action_group("row", Some(&group));
+                popover
+            });
+            popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+            popover.popup();
+        }
     });
     row.add_controller(click);
 }

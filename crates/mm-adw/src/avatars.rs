@@ -33,6 +33,16 @@ struct Inner {
     failed: HashSet<String>,
     /// Insertion order, so the oldest can be dropped when the cache is full.
     order: Vec<String>,
+    /// What the textures add up to, kept as they go in and out rather than
+    /// recomputed: the answer is wanted on every insert.
+    held: usize,
+}
+
+/// What a decoded texture costs in memory: four bytes a pixel, whatever it
+/// was compressed to on the wire.
+fn texture_bytes(texture: &gdk::Texture) -> usize {
+    use gdk::prelude::TextureExt;
+    (texture.width().max(0) as usize) * (texture.height().max(0) as usize) * 4
 }
 
 impl Inner {
@@ -44,18 +54,18 @@ impl Inner {
             };
             self.heads.remove(&oldest);
         }
-        if self.textures.len() > MAX_TEXTURES {
-            tracing::debug!(
-                held = self.textures.len(),
-                "picture cache full, dropping the oldest"
-            );
-        }
-        while self.textures.len() > MAX_TEXTURES {
+        while self.held > MAX_TEXTURE_BYTES {
             let Some(oldest) = self.order.first().cloned() else {
                 break;
             };
             self.order.remove(0);
-            self.textures.remove(&oldest);
+            if let Some(texture) = self.textures.remove(&oldest) {
+                self.held = self.held.saturating_sub(texture_bytes(&texture));
+                tracing::debug!(
+                    held_mb = self.held / (1024 * 1024),
+                    "picture cache full, dropped the oldest"
+                );
+            }
         }
     }
 }
@@ -81,15 +91,16 @@ const VIDEO_HEAD_PREFIX: &str = "video-head:";
 /// asking for more.
 const VIDEO_HEAD_BYTES: u64 = 1_500_000;
 
-/// How many pictures to hold. Faces are small, but a channel's worth of
-/// posted images at preview size is hundreds of megabytes — this cache used
-/// to be unbounded, and scrolling back through a busy channel grew the
-/// process without limit. Evicting one costs a refetch, nothing more: a
-/// picture still on screen is held by the widget showing it.
+/// How much decoded picture to hold, in bytes. Counting entries was the wrong
+/// unit by two orders of magnitude: an avatar is a few kilobytes and a posted
+/// screenshot at draw size is four megabytes, so "a hundred and fifty of
+/// them" meant anywhere between half a megabyte and six hundred. Evicting one
+/// costs a refetch and nothing else — a picture still on screen is held by
+/// the widget showing it.
 ///
 /// ponytail: oldest-inserted rather than least-recently-used. An LRU needs
 /// the read path to write, and the read path here is every redraw.
-const MAX_TEXTURES: usize = 150;
+const MAX_TEXTURE_BYTES: usize = 96 * 1024 * 1024;
 
 /// Video heads are a megabyte and a half each and are only read once, to make
 /// a poster out of. A handful is plenty.
@@ -217,7 +228,9 @@ impl Avatars {
     /// user's `last_picture_update` moves.
     pub fn forget(&self, user_id: &str) {
         let mut inner = self.inner.borrow_mut();
-        inner.textures.remove(user_id);
+        if let Some(texture) = inner.textures.remove(user_id) {
+            inner.held = inner.held.saturating_sub(texture_bytes(&texture));
+        }
         inner.failed.remove(user_id);
         inner.order.retain(|key| key != user_id);
     }
@@ -278,8 +291,11 @@ impl Avatars {
                         Ok(bytes) => {
                             match decode(&done_id, bytes) {
                                 Ok(texture) => {
+                                    inner.held += texture_bytes(&texture);
                                     inner.order.push(done_id.clone());
-                                    inner.textures.insert(done_id, texture);
+                                    if let Some(old) = inner.textures.insert(done_id, texture) {
+                                        inner.held = inner.held.saturating_sub(texture_bytes(&old));
+                                    }
                                     inner.trim();
                                     loaded = true;
                                 }
