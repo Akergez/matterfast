@@ -83,7 +83,7 @@ pub fn build(
     drop(st);
 
     if post.is_system() {
-        return system_row(post);
+        return system_row(post, state);
     }
 
     let row = gtk::Box::builder()
@@ -1316,9 +1316,34 @@ fn reaction_strip(
     Some(strip.upcast())
 }
 
-fn system_row(post: &Post) -> gtk::Widget {
+/// A join, a leave, a rename. The server writes these with `@username` in the
+/// text — the raw handle, not the name anyone recognises — so they are swapped
+/// for display names before drawing, the same way a mention is elsewhere.
+fn system_row(post: &Post, state: &SharedState) -> gtk::Widget {
+    let text = {
+        let st = state.borrow();
+        let display = st.teammate_name_display().to_string();
+        // Longest handle first: without it "@ann" would be substituted inside
+        // "@anna" and leave the remainder dangling.
+        let mut people: Vec<(&String, String)> = st
+            .users
+            .values()
+            .map(|u| (&u.username, u.display_name(&display)))
+            .collect();
+        people.sort_by_key(|(username, _)| std::cmp::Reverse(username.len()));
+
+        let mut text = post.message.clone();
+        for (username, name) in people {
+            if name.is_empty() || &name == username {
+                continue;
+            }
+            text = text.replace(&format!("@{username}"), &name);
+        }
+        text
+    };
+
     let label = gtk::Label::builder()
-        .label(&post.message)
+        .label(&text)
         .xalign(0.0)
         .wrap(true)
         .margin_start(52)

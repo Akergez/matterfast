@@ -47,6 +47,9 @@ pub struct ChatView {
     call_banner_label: gtk::Label,
     join_button: gtk::Button,
     stack: gtk::Stack,
+    /// Which channel the feed currently holds, so a redraw can tell itself
+    /// apart from a channel switch.
+    showing: RefCell<Option<String>>,
     /// Shown instead of an empty feed while the first page is in flight, so a
     /// slow channel reads as loading rather than as empty.
     loading: Rc<RefCell<bool>>,
@@ -558,6 +561,7 @@ impl ChatView {
             edit_banner,
             editing,
             restoring,
+            showing: RefCell::new(None),
             loading: Rc::new(RefCell::new(false)),
             connection,
             pinned_to_bottom,
@@ -932,6 +936,12 @@ impl ChatView {
             .filter(|at| *at > 0);
         let mut unread_drawn = false;
 
+        // Whether this is a redraw of what is already on screen, as opposed
+        // to arriving in a different channel — the scroll position is only
+        // worth keeping in the first case.
+        let same_channel = self.showing.borrow().as_deref() == Some(channel_id.as_str());
+        *self.showing.borrow_mut() = Some(channel_id.clone());
+
         let empty = crate::state::ChannelFeed::default();
         let feed = st.feeds.get(&channel_id).unwrap_or(&empty);
         let posts = feed.posts.clone();
@@ -1043,6 +1053,22 @@ impl ChatView {
             // The new rows are not allocated yet, so defer a frame.
             glib::idle_add_local_once(move || {
                 adjustment.set_value(adjustment.upper() - adjustment.page_size());
+            });
+        } else if same_channel {
+            // Reading somewhere up the history and something redrew the feed —
+            // a reaction, an edit, a message arriving below. Every row was
+            // rebuilt, so the scroll position means nothing until the new rows
+            // are allocated; without putting it back, reacting to a message
+            // throws the reader somewhere else entirely.
+            let adjustment = self.scroller.vadjustment();
+            let keep = adjustment.value();
+            let was = adjustment.upper();
+            glib::idle_add_local_once(move || {
+                // Anchored to the *bottom*: rows are added below and above
+                // during a session, and the distance to the end is what the
+                // reader is actually looking at.
+                let from_end = (was - keep).max(0.0);
+                adjustment.set_value((adjustment.upper() - from_end).max(0.0));
             });
         }
     }
