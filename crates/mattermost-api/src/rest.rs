@@ -413,11 +413,8 @@ impl Client {
         body.insert("user_id", user_id);
         body.insert("status", status);
         self.json(
-            self.request(
-                Method::PUT,
-                &self.api(&format!("/users/{user_id}/status")),
-            )
-            .json(&body),
+            self.request(Method::PUT, &self.api(&format!("/users/{user_id}/status")))
+                .json(&body),
             "set status",
         )
         .await
@@ -447,6 +444,95 @@ impl Client {
         )
     }
 
+    /// `POST /api/v4/users/search`.
+    ///
+    /// Every filter is a plain string where `""` means "do not filter", and the
+    /// server picks a different query per filter rather than combining them:
+    /// `in_channel` wins over `not_in_channel`, which itself is rejected
+    /// without a `team_id`.
+    pub async fn search_users(
+        &self,
+        term: &str,
+        team_id: &str,
+        in_channel: &str,
+        not_in_channel: &str,
+    ) -> Result<Vec<User>> {
+        #[derive(Serialize)]
+        struct Search<'a> {
+            term: &'a str,
+            team_id: &'a str,
+            in_channel_id: &'a str,
+            not_in_channel_id: &'a str,
+        }
+        self.post_json(
+            "/users/search",
+            &Search {
+                term,
+                team_id,
+                in_channel_id: in_channel,
+                not_in_channel_id: not_in_channel,
+            },
+            "search users",
+        )
+        .await
+    }
+
+    /// `GET /api/v4/users/autocomplete` — the @-mention picker's backend.
+    ///
+    /// The query parameter is `name`, not `term`. With `channel_id` set the
+    /// response also carries `out_of_channel`: users who match but are not in
+    /// the channel, which the webapp shows greyed out so mentioning them can
+    /// offer to add them.
+    pub async fn autocomplete_users(
+        &self,
+        term: &str,
+        team_id: &str,
+        channel_id: &str,
+    ) -> Result<UserAutocomplete> {
+        self.get_q(
+            "/users/autocomplete",
+            &[
+                ("name", term),
+                ("team_id", team_id),
+                ("in_channel", channel_id),
+            ],
+            "autocomplete users",
+        )
+        .await
+    }
+
+    /// `PUT /api/v4/users/{user}/patch` — profile fields and `notify_props`.
+    ///
+    /// Untyped on purpose: a patch must omit what it does not change, and
+    /// sending a full [`User`] with defaults would blank half the profile.
+    /// `notify_props` is the exception to *that* — it is replaced wholesale, so
+    /// read the current bag, change one key, and send it back whole.
+    pub async fn patch_user(&self, user_id: &str, patch: &serde_json::Value) -> Result<User> {
+        self.put_json(&format!("/users/{user_id}/patch"), patch, "patch user")
+            .await
+    }
+
+    /// `POST /api/v4/users/{user}/image` (multipart, field `image`).
+    ///
+    /// Answers `{"status":"OK"}` rather than the user, and `last_picture_update`
+    /// only changes on the *next* fetch of the profile — so refetch the user if
+    /// you cache avatar URLs by that timestamp.
+    pub async fn set_profile_image(
+        &self,
+        user_id: &str,
+        filename: &str,
+        bytes: Vec<u8>,
+    ) -> Result<()> {
+        let part = reqwest::multipart::Part::bytes(bytes).file_name(filename.to_string());
+        let form = reqwest::multipart::Form::new().part("image", part);
+        self.send(
+            self.request(Method::POST, &self.api(&format!("/users/{user_id}/image")))
+                .multipart(form),
+        )
+        .await?;
+        Ok(())
+    }
+
     // ------------------------------------------------------------------- teams
 
     pub async fn my_teams(&self) -> Result<Vec<Team>> {
@@ -464,6 +550,41 @@ impl Client {
             "team unreads",
         )
         .await
+    }
+
+    /// `GET /api/v4/teams` — the teams you could join.
+    ///
+    /// Not "all teams" for a normal user: without `manage_system` the server
+    /// filters this down to open teams with `allow_open_invite`, which is
+    /// exactly what a join-a-team picker wants and why there is no separate
+    /// endpoint for one.
+    pub async fn all_teams(&self, page: u32, per_page: u32) -> Result<Vec<Team>> {
+        self.get_q(
+            "/teams",
+            &[
+                ("page", page.to_string()),
+                ("per_page", per_page.min(PER_PAGE_MAX).to_string()),
+            ],
+            "all teams",
+        )
+        .await
+    }
+
+    /// `POST /api/v4/teams/{team}/members` — adds `user_id` to the team.
+    ///
+    /// Joining yourself and being added by someone else are the same call; the
+    /// server decides which permission to check from whether `user_id` is you.
+    pub async fn join_team(&self, team_id: &str, user_id: &str) -> Result<TeamMember> {
+        let mut body = std::collections::HashMap::new();
+        body.insert("team_id", team_id);
+        body.insert("user_id", user_id);
+        self.post_json(&format!("/teams/{team_id}/members"), &body, "join team")
+            .await
+    }
+
+    pub async fn leave_team(&self, team_id: &str, user_id: &str) -> Result<()> {
+        self.delete_ok(&format!("/teams/{team_id}/members/{user_id}"))
+            .await
     }
 
     // ---------------------------------------------------------------- channels
@@ -526,14 +647,6 @@ impl Client {
             .await
     }
 
-    pub async fn sidebar_categories(&self, team_id: &str) -> Result<OrderedSidebarCategories> {
-        self.get(
-            &format!("/users/me/teams/{team_id}/channels/categories"),
-            "sidebar categories",
-        )
-        .await
-    }
-
     /// `POST /channels/members/me/view` — marks a channel read and tells other
     /// sessions, which arrive as a `multiple_channels_viewed` websocket event.
     pub async fn view_channel(
@@ -554,6 +667,272 @@ impl Client {
     /// Creates (or fetches) the DM channel between two users.
     pub async fn create_direct_channel(&self, me: &str, other: &str) -> Result<Channel> {
         self.post_json("/channels/direct", &[me, other], "direct channel")
+            .await
+    }
+
+    /// `POST /channels`.
+    ///
+    /// `name` is the URL slug and must be lowercase — the server 400s rather
+    /// than slugifying `display_name` for you. Creating a channel does *not*
+    /// join you to it as a member; the creator is added automatically only for
+    /// [`ChannelType::Open`] and [`ChannelType::Private`].
+    pub async fn create_channel(
+        &self,
+        team_id: &str,
+        name: &str,
+        display_name: &str,
+        r#type: ChannelType,
+    ) -> Result<Channel> {
+        let body = Channel {
+            team_id: team_id.to_string(),
+            name: name.to_string(),
+            display_name: display_name.to_string(),
+            r#type,
+            ..Default::default()
+        };
+        self.post_json("/channels", &body, "create channel").await
+    }
+
+    /// `POST /channels/{channel}/members`.
+    ///
+    /// Joining yourself and inviting someone else are the same call, so the
+    /// membership that comes back is the one for `user_id`, not for you.
+    pub async fn join_channel(&self, channel_id: &str, user_id: &str) -> Result<ChannelMember> {
+        let mut body = std::collections::HashMap::new();
+        body.insert("user_id", user_id);
+        self.post_json(
+            &format!("/channels/{channel_id}/members"),
+            &body,
+            "join channel",
+        )
+        .await
+    }
+
+    pub async fn leave_channel(&self, channel_id: &str, user_id: &str) -> Result<()> {
+        self.delete_ok(&format!("/channels/{channel_id}/members/{user_id}"))
+            .await
+    }
+
+    /// `PUT /channels/{channel}/patch`.
+    ///
+    /// A patch leaves out what it does not send; the plain `PUT /channels/{id}`
+    /// replaces the whole record and would blank the purpose and display name.
+    pub async fn update_channel_header(&self, channel_id: &str, header: &str) -> Result<Channel> {
+        #[derive(Serialize)]
+        struct Patch<'a> {
+            header: &'a str,
+        }
+        self.put_json(
+            &format!("/channels/{channel_id}/patch"),
+            &Patch { header },
+            "update channel header",
+        )
+        .await
+    }
+
+    /// Renames the channel's *displayed* name only — the slug in `name`, and so
+    /// every permalink, is left alone.
+    pub async fn rename_channel(&self, channel_id: &str, display_name: &str) -> Result<Channel> {
+        #[derive(Serialize)]
+        struct Patch<'a> {
+            display_name: &'a str,
+        }
+        self.put_json(
+            &format!("/channels/{channel_id}/patch"),
+            &Patch { display_name },
+            "rename channel",
+        )
+        .await
+    }
+
+    /// `DELETE /channels/{channel}` — archives, it does not delete.
+    ///
+    /// The channel keeps its posts and stays readable; only with
+    /// `ServiceSettings.EnableAPIChannelDeletion` does this destroy anything.
+    pub async fn archive_channel(&self, channel_id: &str) -> Result<()> {
+        self.delete_ok(&format!("/channels/{channel_id}")).await
+    }
+
+    /// `GET /teams/{team}/channels` — the public channels of a team, for a
+    /// browse-and-join dialog.
+    ///
+    /// Public only, and it includes ones you are already in, so subtract your
+    /// own membership list yourself.
+    pub async fn channels_for_team(
+        &self,
+        team_id: &str,
+        page: u32,
+        per_page: u32,
+    ) -> Result<Vec<Channel>> {
+        self.get_q(
+            &format!("/teams/{team_id}/channels"),
+            &[
+                ("page", page.to_string()),
+                ("per_page", per_page.min(PER_PAGE_MAX).to_string()),
+            ],
+            "team channels",
+        )
+        .await
+    }
+
+    /// `POST /teams/{team}/channels/search` — same public-channel scope as
+    /// [`channels_for_team`](Client::channels_for_team), matched on both the
+    /// slug and the display name.
+    pub async fn search_channels(&self, team_id: &str, term: &str) -> Result<Vec<Channel>> {
+        #[derive(Serialize)]
+        struct Search<'a> {
+            term: &'a str,
+        }
+        self.post_json(
+            &format!("/teams/{team_id}/channels/search"),
+            &Search { term },
+            "search channels",
+        )
+        .await
+    }
+
+    /// `PUT /channels/{channel}/members/{user}/notify_props`.
+    ///
+    /// A merge, not a replacement: the server copies over only the keys it
+    /// recognises (`mark_unread`, `desktop`, `push`, `email`, …) and leaves the
+    /// rest of the bag as it was. Answers `{"status":"OK"}`, so refetch the
+    /// membership if you need the merged result.
+    pub async fn set_channel_notify_props(
+        &self,
+        channel_id: &str,
+        user_id: &str,
+        props: &StringMap,
+    ) -> Result<()> {
+        self.send(
+            self.request(
+                Method::PUT,
+                &self.api(&format!(
+                    "/channels/{channel_id}/members/{user_id}/notify_props"
+                )),
+            )
+            .json(props),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Marks a channel unread from its most recent post.
+    ///
+    /// There is no channel-level route for this — the server only knows how to
+    /// mark a *post* unread — so this costs one extra round trip to find that
+    /// post. Call [`set_post_unread`](Client::set_post_unread) directly when
+    /// you already have one.
+    pub async fn mark_channel_unread(
+        &self,
+        user_id: &str,
+        channel_id: &str,
+        crt_enabled: bool,
+    ) -> Result<()> {
+        let list = self
+            .posts_for_channel(channel_id, 0, 1, crt_enabled)
+            .await?;
+        match list.newest() {
+            Some(post) => self.set_post_unread(user_id, &post.id, crt_enabled).await,
+            // Nothing was ever posted here, so there is nothing to be unread.
+            None => Ok(()),
+        }
+    }
+
+    // ------------------------------------------------------ sidebar categories
+
+    pub async fn sidebar_categories(&self, team_id: &str) -> Result<OrderedSidebarCategories> {
+        self.get(
+            &format!("/users/me/teams/{team_id}/channels/categories"),
+            "sidebar categories",
+        )
+        .await
+    }
+
+    /// `POST /users/{user}/teams/{team}/channels/categories`.
+    ///
+    /// Categories are per user *and* per team, so the same channel sits in a
+    /// different category on each team. Send the new category with an empty
+    /// `id`; the server assigns one.
+    pub async fn create_category(
+        &self,
+        user_id: &str,
+        team_id: &str,
+        category: &SidebarCategory,
+    ) -> Result<SidebarCategory> {
+        self.post_json(
+            &format!("/users/{user_id}/teams/{team_id}/channels/categories"),
+            category,
+            "create category",
+        )
+        .await
+    }
+
+    /// `PUT /users/{user}/teams/{team}/channels/categories`.
+    ///
+    /// This is also how a channel is *moved*: a channel belongs to exactly one
+    /// category per team, so listing it in one silently removes it from its
+    /// old one. Send both affected categories in the same call, or the server
+    /// resolves the conflict on its own terms.
+    pub async fn update_categories(
+        &self,
+        user_id: &str,
+        team_id: &str,
+        categories: &[SidebarCategory],
+    ) -> Result<Vec<SidebarCategory>> {
+        self.put_json(
+            &format!("/users/{user_id}/teams/{team_id}/channels/categories"),
+            categories,
+            "update categories",
+        )
+        .await
+    }
+
+    /// Deletes a custom category; its channels fall back to the default
+    /// Channels or Direct Messages category rather than disappearing.
+    pub async fn delete_category(
+        &self,
+        user_id: &str,
+        team_id: &str,
+        category_id: &str,
+    ) -> Result<()> {
+        self.delete_ok(&format!(
+            "/users/{user_id}/teams/{team_id}/channels/categories/{category_id}"
+        ))
+        .await
+    }
+
+    // ------------------------------------------------------- channel bookmarks
+
+    /// `GET /channels/{channel}/bookmarks` — **server 9.4+**.
+    ///
+    /// Older servers 404 the whole route, and the client config carries no flag
+    /// for the feature, so a 404 here is the feature detection.
+    pub async fn list_bookmarks(&self, channel_id: &str) -> Result<Vec<ChannelBookmark>> {
+        self.get(
+            &format!("/channels/{channel_id}/bookmarks"),
+            "channel bookmarks",
+        )
+        .await
+    }
+
+    /// Set `link_url` for a link bookmark or `file_id` for a file one — the
+    /// server rejects both at once, and `type` must agree with whichever you
+    /// filled in.
+    pub async fn create_bookmark(
+        &self,
+        channel_id: &str,
+        bookmark: &ChannelBookmark,
+    ) -> Result<ChannelBookmark> {
+        self.post_json(
+            &format!("/channels/{channel_id}/bookmarks"),
+            bookmark,
+            "create bookmark",
+        )
+        .await
+    }
+
+    pub async fn delete_bookmark(&self, channel_id: &str, bookmark_id: &str) -> Result<()> {
+        self.delete_ok(&format!("/channels/{channel_id}/bookmarks/{bookmark_id}"))
             .await
     }
 
@@ -802,6 +1181,147 @@ impl Client {
         .await
     }
 
+    /// `GET /posts/{post}/edit_history` — the *previous* versions of a post.
+    ///
+    /// Old versions are stored as ordinary posts pointing at the live one
+    /// through `original_id`, which is why this is a plain `Vec<Post>`. The
+    /// current version is not in the list, and an unedited post yields an empty
+    /// one rather than a 404.
+    pub async fn post_edit_history(&self, post_id: &str) -> Result<Vec<Post>> {
+        self.get(&format!("/posts/{post_id}/edit_history"), "edit history")
+            .await
+    }
+
+    /// Restores `post_id` to one of the versions from
+    /// [`post_edit_history`](Client::post_edit_history).
+    ///
+    /// This is itself an edit: the version being replaced is appended to the
+    /// history rather than dropped.
+    pub async fn restore_post_version(&self, post_id: &str, version_id: &str) -> Result<Post> {
+        self.json(
+            self.request(
+                Method::POST,
+                &self.api(&format!("/posts/{post_id}/restore/{version_id}")),
+            ),
+            "restore post version",
+        )
+        .await
+    }
+
+    /// `POST /posts/{post}/move` — moves a whole thread to another channel.
+    ///
+    /// `post_id` must be a thread *root*; the replies follow it. The posts are
+    /// recreated in the target channel, so their ids change and any permalink
+    /// to the old ones dies.
+    pub async fn move_thread(&self, post_id: &str, channel_id: &str) -> Result<()> {
+        let mut body = std::collections::HashMap::new();
+        body.insert("channel_id", channel_id);
+        self.send(
+            self.request(Method::POST, &self.api(&format!("/posts/{post_id}/move")))
+                .json(&body),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// `POST /users/{user}/posts/{post}/reminder`.
+    ///
+    /// `target_time` is Unix **seconds**, not the milliseconds every other
+    /// timestamp in this API uses — pass milliseconds and the reminder lands
+    /// somewhere in the year 56000.
+    pub async fn set_post_reminder(
+        &self,
+        user_id: &str,
+        post_id: &str,
+        target_time: i64,
+    ) -> Result<()> {
+        let mut body = std::collections::HashMap::new();
+        body.insert("target_time", target_time);
+        self.send(
+            self.request(
+                Method::POST,
+                &self.api(&format!("/users/{user_id}/posts/{post_id}/reminder")),
+            )
+            .json(&body),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Acknowledges a post that was sent with `requested_ack`.
+    pub async fn acknowledge_post(
+        &self,
+        user_id: &str,
+        post_id: &str,
+    ) -> Result<PostAcknowledgement> {
+        self.json(
+            self.request(
+                Method::POST,
+                &self.api(&format!("/users/{user_id}/posts/{post_id}/ack")),
+            ),
+            "acknowledge post",
+        )
+        .await
+    }
+
+    pub async fn unacknowledge_post(&self, user_id: &str, post_id: &str) -> Result<()> {
+        self.delete_ok(&format!("/users/{user_id}/posts/{post_id}/ack"))
+            .await
+    }
+
+    /// `GET /channels/{channel}/pinned` — every pinned post, unpaged.
+    pub async fn pinned_posts(&self, channel_id: &str) -> Result<PostList> {
+        self.get(&format!("/channels/{channel_id}/pinned"), "pinned posts")
+            .await
+    }
+
+    // --------------------------------------------------------- scheduled posts
+
+    /// `POST /posts/schedule`.
+    ///
+    /// The post is stored on the side and only becomes a real post at
+    /// `scheduled_at`, so the id you get back is a *scheduled post* id and
+    /// cannot be fed to any `/posts/{id}` route.
+    pub async fn create_scheduled_post(&self, post: &ScheduledPost) -> Result<ScheduledPost> {
+        self.post_json("/posts/schedule", post, "create scheduled post")
+            .await
+    }
+
+    /// Rescheduling and editing are the same call — send the whole scheduled
+    /// post back, not a patch.
+    pub async fn update_scheduled_post(
+        &self,
+        scheduled_post_id: &str,
+        post: &ScheduledPost,
+    ) -> Result<ScheduledPost> {
+        self.put_json(
+            &format!("/posts/schedule/{scheduled_post_id}"),
+            post,
+            "update scheduled post",
+        )
+        .await
+    }
+
+    pub async fn delete_scheduled_post(&self, scheduled_post_id: &str) -> Result<()> {
+        self.delete_ok(&format!("/posts/schedule/{scheduled_post_id}"))
+            .await
+    }
+
+    /// `GET /posts/scheduled/team/{team}`.
+    ///
+    /// Left untyped: the response is a map of buckets rather than a list —
+    /// team id to its scheduled posts, plus a separate bucket for DMs and GMs,
+    /// which are not scoped to a team at all — and the bucket keys have not
+    /// been pinned down across server versions.
+    pub async fn scheduled_posts_for_team(&self, team_id: &str) -> Result<serde_json::Value> {
+        self.get_q(
+            &format!("/posts/scheduled/team/{team_id}"),
+            &[("includeDirectChannels", "true")],
+            "scheduled posts",
+        )
+        .await
+    }
+
     // ------------------------------------------------------------------- files
 
     /// Absolute URL for a file's contents. `update_at` busts caches.
@@ -864,6 +1384,92 @@ impl Client {
             "upload file",
         )
         .await
+    }
+
+    /// `POST /teams/{team}/files/search` — the same search grammar as
+    /// [`search_posts`](Client::search_posts), scoped to attachments.
+    pub async fn search_files(&self, team_id: &str, terms: &str) -> Result<FileInfoList> {
+        #[derive(Serialize)]
+        struct Search<'a> {
+            terms: &'a str,
+            is_or_search: bool,
+        }
+        self.post_json(
+            &format!("/teams/{team_id}/files/search"),
+            &Search {
+                terms,
+                is_or_search: false,
+            },
+            "search files",
+        )
+        .await
+    }
+
+    /// `POST /uploads` — opens a resumable upload for a file of `file_size`
+    /// bytes, to be filled with [`upload_data`](Client::upload_data).
+    ///
+    /// The size is fixed here and checked on every write, so it has to be the
+    /// real one. Use this instead of [`upload_file`](Client::upload_file) for
+    /// anything large enough that a dropped connection matters.
+    pub async fn create_upload_session(
+        &self,
+        channel_id: &str,
+        filename: &str,
+        file_size: i64,
+    ) -> Result<UploadSession> {
+        #[derive(Serialize)]
+        struct New<'a> {
+            channel_id: &'a str,
+            filename: &'a str,
+            file_size: i64,
+        }
+        self.post_json(
+            "/uploads",
+            &New {
+                channel_id,
+                filename,
+                file_size,
+            },
+            "create upload session",
+        )
+        .await
+    }
+
+    /// Re-reads a session to find out how much of it the server already has.
+    pub async fn upload_session(&self, upload_id: &str) -> Result<UploadSession> {
+        self.get(&format!("/uploads/{upload_id}"), "upload session")
+            .await
+    }
+
+    /// `POST /uploads/{id}` — appends raw bytes to the session.
+    ///
+    /// There is no `Content-Range` header in this protocol: the body is always
+    /// taken as starting at the session's current `file_offset`, and the server
+    /// rejects a body longer than `file_size - file_offset`. So to resume,
+    /// re-read the session with [`upload_session`](Client::upload_session) and
+    /// send the remainder from that offset.
+    ///
+    /// `None` until the last byte lands — the server answers `204 No Content`
+    /// for a partial write and only returns the [`FileInfo`] once the file is
+    /// complete.
+    pub async fn upload_data(&self, upload_id: &str, bytes: Vec<u8>) -> Result<Option<FileInfo>> {
+        let resp = self
+            .send(
+                self.request(Method::POST, &self.api(&format!("/uploads/{upload_id}")))
+                    .header(CONTENT_TYPE, "application/octet-stream")
+                    .body(bytes),
+            )
+            .await?;
+        let body = resp.text().await?;
+        if body.trim().is_empty() {
+            return Ok(None);
+        }
+        serde_json::from_str(&body)
+            .map(Some)
+            .map_err(|source| Error::Decode {
+                context: "upload data",
+                source,
+            })
     }
 
     // ----------------------------------------------------------------- threads
@@ -1045,6 +1651,17 @@ impl Client {
             "custom emoji",
         )
         .await
+    }
+
+    /// `POST /emoji/search` — custom emoji only; the Unicode set is client-side
+    /// and never reaches the server.
+    pub async fn search_emoji(&self, term: &str) -> Result<Vec<Emoji>> {
+        #[derive(Serialize)]
+        struct Search<'a> {
+            term: &'a str,
+        }
+        self.post_json("/emoji/search", &Search { term }, "search emoji")
+            .await
     }
 
     pub fn custom_emoji_url(&self, emoji_id: &str) -> String {

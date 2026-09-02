@@ -8,8 +8,10 @@
 //! The one exception is the profile popover, which needs the widget it anchors
 //! to; it is built inline from an `Rc<Ui>` capture instead.
 
+mod autocomplete;
 mod call_dock;
 mod chat;
+mod dialogs;
 mod login;
 mod message;
 mod notify;
@@ -44,6 +46,21 @@ use sidebar::ChannelSidebar;
 /// The websocket prefix of <https://github.com/Toxblh/mattermost-reactions-notify-plugin>,
 /// which notifies you about reactions to your own posts.
 const REACTION_NOTIFY_PREFIX: &str = "custom_ru.toxblh.reactions-notify_";
+
+/// The entries in the two header menus.
+#[derive(Debug, Clone, Copy)]
+enum MenuAction {
+    NewChannel,
+    BrowseChannels,
+    AccountNotifications,
+    ChannelNotifications,
+    LeaveChannel,
+    PinnedPosts,
+}
+
+/// How many completion candidates to offer. More than this and the popover is
+/// a list to read rather than a shortcut.
+const COMPLETIONS: usize = 8;
 
 /// How many messages to pull when a channel is first opened.
 const INITIAL_POSTS: u32 = 60;
@@ -95,6 +112,12 @@ enum Action {
     ToggleHand,
     /// Drop an uploaded file before it is sent.
     DropAttachment(String),
+    /// Files arrived by drag and drop.
+    AttachFiles(Vec<std::path::PathBuf>),
+    /// The composer wants candidates for the token under the cursor.
+    Complete(Option<autocomplete::Query>),
+    /// Send what is in the composer at a chosen time instead of now.
+    ScheduleMessage,
 }
 
 pub fn build_window(app: &adw::Application) {
@@ -193,9 +216,7 @@ pub fn build_window(app: &adw::Application) {
         toast_overlay.set_child(Some(&spinner));
 
         runtime::spawn(crate::session::load_async(), move |stored| match stored {
-            Some((server, token)) => {
-                restore_session(&window_, &toasts, server, token, show_login)
-            }
+            Some((server, token)) => restore_session(&window_, &toasts, server, token, show_login),
             None => show_login(),
         });
     }
@@ -294,44 +315,62 @@ fn build_session_ui(
     let (tx, rx) = async_channel::unbounded::<Action>();
 
     // --- pane 3: the conversation
-    let chat = Rc::new(ChatView::new(
-        {
+    let chat = Rc::new(ChatView::new(chat::ChatCallbacks {
+        on_send: Box::new({
             let tx = tx.clone();
             move |text| {
                 let _ = tx.send_blocking(Action::Send(text));
             }
-        },
-        {
+        }),
+        on_typing: Box::new({
             let tx = tx.clone();
             move |has_text| {
                 let _ = tx.send_blocking(Action::ComposerChanged(has_text));
             }
-        },
-        {
+        }),
+        on_attach: Box::new({
             let tx = tx.clone();
             move || {
                 let _ = tx.send_blocking(Action::PickAttachment);
             }
-        },
-        {
+        }),
+        on_files: Box::new({
+            let tx = tx.clone();
+            move |paths| {
+                let _ = tx.send_blocking(Action::AttachFiles(paths));
+            }
+        }),
+        on_complete: Box::new({
+            let tx = tx.clone();
+            move |query| {
+                let _ = tx.send_blocking(Action::Complete(query));
+            }
+        }),
+        on_schedule: Box::new({
+            let tx = tx.clone();
+            move || {
+                let _ = tx.send_blocking(Action::ScheduleMessage);
+            }
+        }),
+        on_agent: Box::new({
             let tx = tx.clone();
             move || {
                 let _ = tx.send_blocking(Action::SummariseUnreads);
             }
-        },
-        {
+        }),
+        on_call: Box::new({
             let tx = tx.clone();
             move || {
                 let _ = tx.send_blocking(Action::ToggleCall);
             }
-        },
-        {
+        }),
+        on_inbox: Box::new({
             let tx = tx.clone();
             move || {
                 let _ = tx.send_blocking(Action::OpenInbox);
             }
-        },
-    ));
+        }),
+    }));
 
     // --- pane 4: thread / inbox
     let right = RightPanel::new(
@@ -556,14 +595,30 @@ fn build_session_ui(
         }
     });
 
+    // The header menus drive these. They are window actions rather than
+    // callbacks so the menu models can name them declaratively.
+    for (name, action) in [
+        ("new-channel", MenuAction::NewChannel),
+        ("browse-channels", MenuAction::BrowseChannels),
+        ("notification-settings", MenuAction::AccountNotifications),
+        ("channel-notifications", MenuAction::ChannelNotifications),
+        ("leave-channel", MenuAction::LeaveChannel),
+        ("pinned-posts", MenuAction::PinnedPosts),
+    ] {
+        let entry = gtk::gio::SimpleAction::new(name, None);
+        entry.connect_activate({
+            let ui = ui.clone();
+            move |_, _| ui.menu_action(action)
+        });
+        window.add_action(&entry);
+    }
+
     // Clicking a notification lands here. The action is on the application so
     // it stays valid while the app is running, which is what the notification
     // holds a reference to.
     if let Some(app) = window.application() {
-        let action = gtk::gio::SimpleAction::new(
-            "open-channel",
-            Some(&String::static_variant_type()),
-        );
+        let action =
+            gtk::gio::SimpleAction::new("open-channel", Some(&String::static_variant_type()));
         action.connect_activate({
             let ui = ui.clone();
             move |_, target| {
@@ -765,7 +820,9 @@ impl Ui {
     fn save_snapshot(&self) {
         let st = self.state.borrow();
         let feeds = crate::cache::trim_feeds(
-            st.feeds.iter().map(|(id, feed)| (id, feed.posts.as_slice())),
+            st.feeds
+                .iter()
+                .map(|(id, feed)| (id, feed.posts.as_slice())),
             st.current_channel.as_deref(),
         );
         // Only the people who appear in what we kept — the whole user map is
@@ -774,7 +831,11 @@ impl Ui {
             .values()
             .flatten()
             .map(|p| p.user_id.as_str())
-            .chain(st.channels.values().filter_map(|c| c.dm_teammate_id(&st.me.id)))
+            .chain(
+                st.channels
+                    .values()
+                    .filter_map(|c| c.dm_teammate_id(&st.me.id)),
+            )
             .collect();
 
         crate::cache::save(&crate::cache::Snapshot {
@@ -864,13 +925,12 @@ impl Ui {
             .collect();
 
         let ui = self.clone();
-        self.chat.set_agents(&bots, move |target| {
-            match target.split_once(':') {
+        self.chat
+            .set_agents(&bots, move |target| match target.split_once(':') {
                 Some(("channel", id)) => ui.dispatch(Action::SelectChannel(id.to_string())),
                 Some(("user", id)) => ui.dispatch(Action::OpenDirectMessage(id.to_string())),
                 _ => {}
-            }
-        });
+            });
     }
 
     /// "Catch me up": asks the default bot to summarise what you have not read
@@ -923,7 +983,11 @@ impl Ui {
                 }
                 let channel_id = string("channel_id");
                 let title = match string("channel_name").as_str() {
-                    "" => format!(":{}: from {}", string("emoji_name"), string("reactor_username")),
+                    "" => format!(
+                        ":{}: from {}",
+                        string("emoji_name"),
+                        string("reactor_username")
+                    ),
                     channel => format!("{channel} — :{}:", string("emoji_name")),
                 };
                 let body = match string("text").as_str() {
@@ -973,6 +1037,443 @@ impl Ui {
                 }
             },
         );
+    }
+
+    fn menu_action(self: &Rc<Self>, action: MenuAction) {
+        match action {
+            MenuAction::NewChannel => self.new_channel(),
+            MenuAction::BrowseChannels => self.browse_channels(),
+            MenuAction::AccountNotifications => self.account_notifications(),
+            MenuAction::ChannelNotifications => self.channel_notifications(),
+            MenuAction::LeaveChannel => self.leave_channel(),
+            MenuAction::PinnedPosts => self.show_pinned(),
+        }
+    }
+
+    fn new_channel(self: &Rc<Self>) {
+        let ui = self.clone();
+        dialogs::create_channel(&self.window, move |display_name, url, purpose, private| {
+            let (client, team) = {
+                let st = ui.state.borrow();
+                (st.client.clone(), st.current_team.clone())
+            };
+            let Some(team_id) = team else { return };
+            let kind = if private {
+                ChannelType::Private
+            } else {
+                ChannelType::Open
+            };
+            let ui = ui.clone();
+            let purpose = purpose.clone();
+            runtime::spawn(
+                async move {
+                    let channel = client
+                        .create_channel(&team_id, &url, &display_name, kind)
+                        .await?;
+                    // Purpose is a separate patch; a create that succeeds and
+                    // a purpose that does not is still a usable channel.
+                    if !purpose.is_empty() {
+                        let _ = client.update_channel_header(&channel.id, &purpose).await;
+                    }
+                    Ok::<_, mattermost_api::Error>(channel)
+                },
+                move |result| match result {
+                    Ok(channel) => {
+                        ui.schedule_sidebar_reload();
+                        ui.dispatch(Action::SelectChannel(channel.id));
+                    }
+                    Err(e) => ui.toast(&format!("Could not create it: {e}")),
+                },
+            );
+        });
+    }
+
+    fn browse_channels(self: &Rc<Self>) {
+        let browser = Rc::new(RefCell::new(None::<Rc<dialogs::ChannelBrowser>>));
+        let ui = self.clone();
+        let search_ui = self.clone();
+        let holder = browser.clone();
+
+        let opened = Rc::new(dialogs::ChannelBrowser::present(
+            &self.window,
+            move |term| {
+                let (client, team) = {
+                    let st = search_ui.state.borrow();
+                    (st.client.clone(), st.current_team.clone())
+                };
+                let Some(team_id) = team else { return };
+                let holder = holder.clone();
+                let state = search_ui.state.clone();
+                runtime::spawn(
+                    async move {
+                        // An empty box means "show me what is there", which is
+                        // the browse list rather than a search for nothing.
+                        if term.trim().is_empty() {
+                            client.channels_for_team(&team_id, 0, 100).await
+                        } else {
+                            client.search_channels(&team_id, &term).await
+                        }
+                    },
+                    move |result| {
+                        let Ok(channels) = result else { return };
+                        let joined = &state.borrow().channels;
+                        let rows = channels
+                            .into_iter()
+                            .filter(|c| c.delete_at == 0)
+                            .map(|c| {
+                                let member = joined.contains_key(&c.id);
+                                (c.id, c.display_name, c.purpose, member)
+                            })
+                            .collect();
+                        if let Some(browser) = holder.borrow().as_ref() {
+                            browser.set_results(rows);
+                        }
+                    },
+                );
+            },
+            move |channel_id| {
+                let (client, me) = {
+                    let st = ui.state.borrow();
+                    (st.client.clone(), st.me.id.clone())
+                };
+                let ui = ui.clone();
+                runtime::spawn(
+                    async move { client.join_channel(&channel_id, &me).await },
+                    move |result| match result {
+                        Ok(member) => {
+                            ui.schedule_sidebar_reload();
+                            ui.dispatch(Action::SelectChannel(member.channel_id));
+                        }
+                        Err(e) => ui.toast(&format!("Could not join: {e}")),
+                    },
+                );
+            },
+        ));
+        // The browser asks for its first page as it opens, and that request
+        // needs the handle to fill — which only exists once present returns.
+        // Storing it here is what closes that loop.
+        *browser.borrow_mut() = Some(opened);
+    }
+
+    /// Sends what is in the composer at a chosen time.
+    ///
+    /// The server keeps it and posts it for you, so this works with the app
+    /// closed — which is the only reason to use it over waiting.
+    fn schedule_message(self: &Rc<Self>) {
+        let text = self.chat.composer_text();
+        if text.trim().is_empty() {
+            self.toast("Write the message first.");
+            return;
+        }
+        let (client, channel_id) = {
+            let st = self.state.borrow();
+            (st.client.clone(), st.current_channel.clone())
+        };
+        let Some(channel_id) = channel_id else { return };
+
+        let ui = self.clone();
+        dialogs::schedule_message(&self.window, move |when_ms| {
+            let scheduled = mattermost_api::models::ScheduledPost {
+                post: Post {
+                    channel_id: channel_id.clone(),
+                    message: text.clone(),
+                    ..Default::default()
+                },
+                scheduled_at: when_ms,
+                error_code: String::new(),
+            };
+            let client = client.clone();
+            let ui = ui.clone();
+            runtime::spawn(
+                async move { client.create_scheduled_post(&scheduled).await },
+                move |result| match result {
+                    Ok(_) => {
+                        // The composer is empty now, so the draft goes too.
+                        ui.chat.set_composer_text("");
+                        ui.save_draft();
+                        ui.toast("Scheduled.");
+                    }
+                    Err(e) => ui.toast(&format!("Could not schedule it: {e}")),
+                },
+            );
+        });
+    }
+
+    /// Per-channel notification overrides. The dialog is shown with what the
+    /// membership currently says, and only what changed is written.
+    fn channel_notifications(self: &Rc<Self>) {
+        let (client, me, channel_id, name, current) = {
+            let st = self.state.borrow();
+            let Some(channel_id) = st.current_channel.clone() else {
+                return;
+            };
+            let name = st
+                .channel(&channel_id)
+                .map(|c| st.channel_title(c))
+                .unwrap_or_default();
+            let props = st
+                .memberships
+                .get(&channel_id)
+                .map(|m| m.notify_props.clone())
+                .unwrap_or_default();
+            let desktop = props
+                .get("desktop")
+                .cloned()
+                .unwrap_or_else(|| "default".to_string());
+            // "mark_unread: mention" is how Mattermost stores a muted channel,
+            // so the switch is the inverse of it.
+            let all_activity = props.get("mark_unread").map(String::as_str) != Some("mention");
+            let ignore_mentions =
+                props.get("ignore_channel_mentions").map(String::as_str) == Some("on");
+            (
+                st.client.clone(),
+                st.me.id.clone(),
+                channel_id,
+                name,
+                (desktop, all_activity, ignore_mentions),
+            )
+        };
+
+        let ui = self.clone();
+        dialogs::channel_notifications(
+            &self.window,
+            &name,
+            current,
+            move |desktop, all_activity, ignore_mentions| {
+                let mut props = mattermost_api::models::StringMap::new();
+                props.insert("desktop".into(), desktop.clone());
+                props.insert(
+                    "mark_unread".into(),
+                    if all_activity { "all" } else { "mention" }.into(),
+                );
+                props.insert(
+                    "ignore_channel_mentions".into(),
+                    if ignore_mentions { "on" } else { "off" }.into(),
+                );
+
+                let client = client.clone();
+                let me = me.clone();
+                let channel_id = channel_id.clone();
+                let ui = ui.clone();
+                runtime::spawn(
+                    async move {
+                        client
+                            .set_channel_notify_props(&channel_id, &me, &props)
+                            .await
+                    },
+                    move |result| match result {
+                        // The server broadcasts channel_member_updated, which
+                        // is what refreshes the muted styling in the sidebar.
+                        Ok(()) => ui.schedule_sidebar_reload(),
+                        Err(e) => ui.toast(&format!("Could not save that: {e}")),
+                    },
+                );
+            },
+        );
+    }
+
+    /// Account-wide notification settings. These live on the user object's
+    /// notify_props, not in preferences — a distinction that trips up most
+    /// third-party clients.
+    fn account_notifications(self: &Rc<Self>) {
+        let (client, me, current) = {
+            let st = self.state.borrow();
+            let props = &st.me.notify_props;
+            let desktop = props
+                .get("desktop")
+                .cloned()
+                .unwrap_or_else(|| "mention".to_string());
+            let sound = props.get("desktop_sound").map(String::as_str) != Some("false");
+            let keys = props.get("mention_keys").cloned().unwrap_or_default();
+            let first_name = props.get("first_name").map(String::as_str) == Some("true");
+            (
+                st.client.clone(),
+                st.me.id.clone(),
+                (desktop, sound, keys, first_name),
+            )
+        };
+
+        let ui = self.clone();
+        dialogs::account_notifications(
+            &self.window,
+            current,
+            move |desktop, sound, keys, first_name| {
+                let patch = serde_json::json!({
+                    "notify_props": {
+                        "desktop": desktop,
+                        "desktop_sound": sound.to_string(),
+                        "mention_keys": keys,
+                        "first_name": first_name.to_string(),
+                    }
+                });
+                let client = client.clone();
+                let me = me.clone();
+                let ui = ui.clone();
+                runtime::spawn(
+                    async move { client.patch_user(&me, &patch).await },
+                    move |result| match result {
+                        Ok(user) => {
+                            // These decide every future toast, so the local
+                            // copy has to be the server's answer, not ours.
+                            ui.state.borrow_mut().me = user;
+                        }
+                        Err(e) => ui.toast(&format!("Could not save that: {e}")),
+                    },
+                );
+            },
+        );
+    }
+
+    fn leave_channel(self: &Rc<Self>) {
+        let (client, me, channel_id, name) = {
+            let st = self.state.borrow();
+            let Some(channel_id) = st.current_channel.clone() else {
+                return;
+            };
+            let name = st
+                .channel(&channel_id)
+                .map(|c| st.channel_title(c))
+                .unwrap_or_default();
+            (st.client.clone(), st.me.id.clone(), channel_id, name)
+        };
+
+        let ui = self.clone();
+        dialogs::confirm_leave(&self.window, &name, move || {
+            let client = client.clone();
+            let me = me.clone();
+            let channel_id = channel_id.clone();
+            let ui = ui.clone();
+            runtime::spawn(
+                async move { client.leave_channel(&channel_id, &me).await },
+                move |result| match result {
+                    Ok(()) => {
+                        ui.state.borrow_mut().current_channel = None;
+                        ui.schedule_sidebar_reload();
+                        ui.refresh_messages();
+                    }
+                    Err(e) => ui.toast(&format!("Could not leave: {e}")),
+                },
+            );
+        });
+    }
+
+    /// Pinned messages, in the right panel. They are a property of the channel
+    /// rather than of any list we already hold, so they are fetched.
+    fn show_pinned(self: &Rc<Self>) {
+        let (client, channel_id) = {
+            let st = self.state.borrow();
+            (st.client.clone(), st.current_channel.clone())
+        };
+        let Some(channel_id) = channel_id else { return };
+
+        let ui = self.clone();
+        runtime::spawn(
+            async move {
+                let posts = client.pinned_posts(&channel_id).await?;
+                let (authors, statuses) = hydrate_authors(&client, &posts).await;
+                Ok::<_, mattermost_api::Error>((posts, authors, statuses))
+            },
+            move |result| match result {
+                Ok((posts, authors, statuses)) => {
+                    {
+                        let mut st = ui.state.borrow_mut();
+                        for user in authors {
+                            st.users.insert(user.id.clone(), user);
+                        }
+                        st.apply_statuses(statuses);
+                        st.search_results = ChannelFeed::from_list(&posts).posts;
+                        st.search_results.reverse();
+                        st.searching = false;
+                    }
+                    ui.right
+                        .set_mode(rhs::PanelMode::Search("Pinned messages".into()));
+                    ui.refresh_panel_mode();
+                    ui.overlay.set_show_sidebar(true);
+                    ui.refresh_messages();
+                }
+                Err(e) => ui.toast(&format!("Could not load the pinned messages: {e}")),
+            },
+        );
+    }
+
+    /// Answers the composer's completion query.
+    ///
+    /// Emoji come from the built-in table, which is local and therefore
+    /// instant. Mentions have to be asked for, because who is in a channel is
+    /// not something the client holds in full.
+    fn complete(self: &Rc<Self>, query: Option<autocomplete::Query>) {
+        use autocomplete::Query;
+        let Some(query) = query else {
+            self.chat.set_completions(Vec::new());
+            return;
+        };
+
+        match query {
+            Query::Emoji(term) => {
+                let term = term.to_lowercase();
+                let mut items: Vec<(String, String, String)> = emojis::iter()
+                    .filter_map(|e| {
+                        let name = e.shortcode()?;
+                        name.contains(&term).then(|| {
+                            (
+                                format!(":{name}:"),
+                                format!("{}  :{name}:", e.as_str()),
+                                String::new(),
+                            )
+                        })
+                    })
+                    .take(COMPLETIONS)
+                    .collect();
+                // Exact prefixes first: typing ":sm" wants "smile", not
+                // "cosmic".
+                items.sort_by_key(|(insert, _, _)| {
+                    !insert.trim_start_matches(':').starts_with(&term)
+                });
+                self.chat.set_completions(items);
+            }
+            Query::Mention(term) => {
+                let (client, team_id, channel_id) = {
+                    let st = self.state.borrow();
+                    (
+                        st.client.clone(),
+                        st.current_team.clone().unwrap_or_default(),
+                        st.current_channel.clone().unwrap_or_default(),
+                    )
+                };
+                if channel_id.is_empty() {
+                    return;
+                }
+                let ui = self.clone();
+                runtime::spawn(
+                    async move {
+                        client
+                            .autocomplete_users(&term, &team_id, &channel_id)
+                            .await
+                    },
+                    move |result| {
+                        let Ok(found) = result else { return };
+                        let display = ui.state.borrow().teammate_name_display().to_string();
+                        // People in the channel first; the server already
+                        // separates them, and suggesting someone who is not
+                        // here would post a mention that notifies nobody.
+                        let items = found
+                            .users
+                            .iter()
+                            .chain(found.out_of_channel.iter())
+                            .take(COMPLETIONS)
+                            .map(|user| {
+                                (
+                                    format!("@{}", user.username),
+                                    format!("@{}", user.username),
+                                    user.display_name(&display),
+                                )
+                            })
+                            .collect();
+                        ui.chat.set_completions(items);
+                    },
+                );
+            }
+        }
     }
 
     /// Asks for files and uploads them straight away.
@@ -1146,6 +1647,29 @@ impl Ui {
                         Err(e) => ui.toast(&format!("The agent could not answer: {e}")),
                     },
                 );
+            }
+            PostAction::Remind => {
+                let ui = self.clone();
+                let me = me.clone();
+                dialogs::post_reminder(&self.window, move |when_ms| {
+                    let client = client.clone();
+                    let me = me.clone();
+                    let post_id = post_id.clone();
+                    let ui = ui.clone();
+                    runtime::spawn(
+                        // The reminder route takes seconds, unlike everything
+                        // else in this API.
+                        async move {
+                            client
+                                .set_post_reminder(&me, &post_id, when_ms / 1000)
+                                .await
+                        },
+                        move |result| match result {
+                            Ok(()) => ui.toast("You will be reminded."),
+                            Err(e) => ui.toast(&format!("Could not set that: {e}")),
+                        },
+                    );
+                });
             }
             PostAction::Edit => self.chat.begin_edit(&post_id, post.source_text()),
             PostAction::Delete => self.confirm_delete(post_id),
@@ -1498,15 +2022,12 @@ impl Ui {
     fn reload_teams(self: &Rc<Self>) {
         let client = self.state.borrow().client.clone();
         let ui = self.clone();
-        runtime::spawn(
-            async move { client.my_teams().await },
-            move |result| {
-                if let Ok(teams) = result {
-                    ui.state.borrow_mut().teams = teams;
-                    ui.channels.refresh(&ui.state, &ui.avatars);
-                }
-            },
-        );
+        runtime::spawn(async move { client.my_teams().await }, move |result| {
+            if let Ok(teams) = result {
+                ui.state.borrow_mut().teams = teams;
+                ui.channels.refresh(&ui.state, &ui.avatars);
+            }
+        });
     }
 
     /// A DM channel carries no display name — just `"<idA>__<idB>"` — so until
@@ -1625,10 +2146,7 @@ impl Ui {
     /// would be a heavier gesture than the content deserves.
     fn refresh_panel_mode(&self) {
         let overlays = self.narrow.get()
-            || matches!(
-                self.right.mode(),
-                PanelMode::Inbox | PanelMode::Search(_)
-            );
+            || matches!(self.right.mode(), PanelMode::Inbox | PanelMode::Search(_));
         self.overlay.set_collapsed(overlays);
     }
 
@@ -1688,7 +2206,18 @@ impl Ui {
             Action::OpenDirectMessage(user_id) => self.open_direct_message(user_id),
             Action::Post(post_id, what) => self.post_action(post_id, what),
             Action::Search(terms) => self.search(terms),
+            Action::Complete(query) => self.complete(query),
+            Action::ScheduleMessage => self.schedule_message(),
             Action::PickAttachment => self.pick_attachment(),
+            Action::AttachFiles(paths) => {
+                let Some(channel_id) = self.state.borrow().current_channel.clone() else {
+                    return;
+                };
+                self.chat.set_uploading(paths.len());
+                for path in paths {
+                    self.upload(&channel_id, path);
+                }
+            }
             Action::SummariseUnreads => self.summarise_unreads(),
             Action::SetStatus(status) => self.set_status(status),
             Action::ToggleHand => self.toggle_hand(),
@@ -1708,7 +2237,12 @@ impl Ui {
                 self.schedule_draft_save();
             }
             Action::OpenCallChannel => {
-                let channel = self.state.borrow().call.as_ref().map(|c| c.channel_id.clone());
+                let channel = self
+                    .state
+                    .borrow()
+                    .call
+                    .as_ref()
+                    .map(|c| c.channel_id.clone());
                 if let Some(id) = channel {
                     self.select_channel(id);
                 }
@@ -1763,7 +2297,7 @@ impl Ui {
                     ui.refresh_all();
                     ui.load_inbox();
                     ui.load_drafts();
-            ui.load_bots();
+                    ui.load_bots();
                     if let Some(id) = first {
                         ui.dispatch(Action::SelectChannel(id));
                     }
@@ -2072,6 +2606,8 @@ impl Ui {
         if text.trim().is_empty() && file_ids.is_empty() {
             return;
         }
+        let priority = self.chat.priority();
+        self.chat.reset_priority();
         self.refresh_attachments();
 
         // Show it immediately. The websocket echo replaces this copy — matched
@@ -2097,7 +2633,7 @@ impl Ui {
         let placeholder_id = pending_id.clone();
         runtime::spawn(
             async move {
-                let post = Post {
+                let mut post = Post {
                     channel_id,
                     message: text,
                     root_id: reply_to.unwrap_or_default(),
@@ -2105,6 +2641,16 @@ impl Ui {
                     file_ids,
                     ..Default::default()
                 };
+                if !priority.is_empty() {
+                    // Priority travels in the post's metadata, which the
+                    // server reads on create and echoes back on the result.
+                    post.metadata.get_or_insert_with(Default::default).priority =
+                        Some(mattermost_api::models::PostPriority {
+                            priority: Some(priority),
+                            requested_ack: None,
+                            persistent_notifications: None,
+                        });
+                }
                 client.create_post(&post).await
             },
             move |result| match result {
@@ -2523,7 +3069,9 @@ impl Ui {
                 self.refresh_call_ui();
             }
             CallUpdate::Participant(mattermost_calls::CallsEvent::UserMuted {
-                user_id, muted, ..
+                user_id,
+                muted,
+                ..
             }) => {
                 if let Some(call) = self.state.borrow_mut().call.as_mut() {
                     if muted {
@@ -2635,7 +3183,10 @@ impl Ui {
             self.apply_calls_event(calls);
             return;
         }
-        if let Event::Other { event: name, data, .. } = &event {
+        if let Event::Other {
+            event: name, data, ..
+        } = &event
+        {
             if let Some(kind) = name.strip_prefix(REACTION_NOTIFY_PREFIX) {
                 self.apply_reaction_notice(kind, data);
                 return;
@@ -3237,11 +3788,7 @@ fn screenshot_and_quit(window: &adw::ApplicationWindow) {
     glib::timeout_add_local_once(std::time::Duration::from_millis(800), move || {
         let paintable = gtk::WidgetPaintable::new(Some(&window));
         let snapshot = gtk::Snapshot::new();
-        paintable.snapshot(
-            &snapshot,
-            window.width() as f64,
-            window.height() as f64,
-        );
+        paintable.snapshot(&snapshot, window.width() as f64, window.height() as f64);
         match snapshot.to_node().and_then(|node| {
             window
                 .native()

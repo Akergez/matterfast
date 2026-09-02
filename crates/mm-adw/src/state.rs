@@ -285,7 +285,10 @@ impl AppState {
     /// The current team's URL name, for building permalinks.
     pub fn current_team_name(&self) -> Option<String> {
         let id = self.current_team.as_ref()?;
-        self.teams.iter().find(|t| &t.id == id).map(|t| t.name.clone())
+        self.teams
+            .iter()
+            .find(|t| &t.id == id)
+            .map(|t| t.name.clone())
     }
 
     pub fn channel(&self, id: &str) -> Option<&Channel> {

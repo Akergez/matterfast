@@ -14,6 +14,7 @@ pub mod draft;
 pub mod file;
 pub mod post;
 pub mod team;
+pub mod upload;
 pub mod user;
 
 use std::collections::HashMap;
@@ -25,17 +26,19 @@ pub type Millis = i64;
 
 pub type StringMap = HashMap<String, String>;
 
-pub use draft::Draft;
 pub use channel::{
-    CategoryType, Channel, ChannelMember, ChannelStats, ChannelType, ChannelUnread, ChannelView,
-    ChannelViewResponse, OrderedSidebarCategories, SidebarCategory, UnreadState,
+    CategoryType, Channel, ChannelBookmark, ChannelMember, ChannelStats, ChannelType,
+    ChannelUnread, ChannelView, ChannelViewResponse, OrderedSidebarCategories, SidebarCategory,
+    UnreadState,
 };
-pub use file::{FileInfo, FileUploadResponse};
+pub use draft::Draft;
+pub use file::{FileInfo, FileInfoList, FileUploadResponse};
 pub use post::{
     Emoji, Participant, Post, PostAcknowledgement, PostEmbed, PostList, PostMetadata, PostPriority,
-    PostSearchResults, Reaction, UserThread, UserThreads,
+    PostSearchResults, Reaction, ScheduledPost, UserThread, UserThreads,
 };
 pub use team::{Team, TeamMember, TeamUnread};
+pub use upload::UploadSession;
 pub use user::{CustomStatus, Presence, Status, User, UserAutocomplete};
 
 /// `server/public/model/preference.go`. `value` is *always* a string, even for

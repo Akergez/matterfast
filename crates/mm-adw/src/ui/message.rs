@@ -47,6 +47,8 @@ pub enum PostAction {
     CopyText,
     /// Ask the LLM agent to summarise this thread.
     Summarise,
+    /// Have the server DM you about this later.
+    Remind,
 }
 
 pub struct RowOptions {
@@ -264,11 +266,7 @@ fn attachment(
 
 /// Opens the full-size image in its own window. The original is behind the
 /// session token, so it is fetched rather than handed to an external viewer.
-fn open_image(
-    state: &SharedState,
-    file: &mattermost_api::models::FileInfo,
-    anchor: &gtk::Button,
-) {
+fn open_image(state: &SharedState, file: &mattermost_api::models::FileInfo, anchor: &gtk::Button) {
     let client = state.borrow().client.clone();
     let file_id = file.id.clone();
     let title = file.name.clone();
@@ -278,8 +276,7 @@ fn open_image(
         async move { client.download_file(&file_id).await },
         move |result| {
             let Ok(bytes) = result else { return };
-            let Ok(texture) =
-                gtk::gdk::Texture::from_bytes(&gtk::glib::Bytes::from_owned(bytes))
+            let Ok(texture) = gtk::gdk::Texture::from_bytes(&gtk::glib::Bytes::from_owned(bytes))
             else {
                 return;
             };
@@ -422,6 +419,7 @@ fn overflow_menu(post: &Post, actions: &MessageActions, mine: bool) -> gtk::Widg
         ("Copy text", "copy-text", PostAction::CopyText),
         ("Copy link", "copy-link", PostAction::CopyLink),
         ("Mark as unread", "mark-unread", PostAction::MarkUnread),
+        ("Remind me about this…", "remind", PostAction::Remind),
     ];
     if post.is_pinned {
         entries.push(("Unpin from channel", "unpin", PostAction::Unpin));

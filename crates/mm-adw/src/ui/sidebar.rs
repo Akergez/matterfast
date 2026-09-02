@@ -77,6 +77,26 @@ impl ChannelSidebar {
             .build();
         header.pack_end(&search_button);
 
+        // The main menu, where the things you do to the *list* live rather
+        // than to any one channel.
+        let menu = gtk::gio::Menu::new();
+        let channels_section = gtk::gio::Menu::new();
+        channels_section.append(Some("New Channel…"), Some("win.new-channel"));
+        channels_section.append(Some("Browse Channels…"), Some("win.browse-channels"));
+        menu.append_section(None, &channels_section);
+        let account_section = gtk::gio::Menu::new();
+        account_section.append(Some("Notifications…"), Some("win.notification-settings"));
+        menu.append_section(None, &account_section);
+
+        let menu_button = gtk::MenuButton::builder()
+            .icon_name("open-menu-symbolic")
+            .tooltip_text("Main menu")
+            .menu_model(&menu)
+            .primary(true)
+            .build();
+        menu_button.add_css_class("flat");
+        header.pack_end(&menu_button);
+
         // On activate, not on every keystroke: a post search is a round trip
         // to the server, and searching per character would be a request per
         // character.
@@ -227,17 +247,17 @@ fn channel_row(
     let icon: gtk::Widget = match icon {
         Some(widget) => widget,
         None => match channel.r#type {
-        ChannelType::Open => {
-            let hash = gtk::Label::new(Some("#"));
-            hash.add_css_class("dim-label");
-            hash.set_width_request(16);
-            hash.upcast()
-        }
-        _ => {
-            let image = gtk::Image::from_icon_name(channel_icon(&channel.r#type));
-            image.add_css_class("dim-label");
-            image.upcast()
-        }
+            ChannelType::Open => {
+                let hash = gtk::Label::new(Some("#"));
+                hash.add_css_class("dim-label");
+                hash.set_width_request(16);
+                hash.upcast()
+            }
+            _ => {
+                let image = gtk::Image::from_icon_name(channel_icon(&channel.r#type));
+                image.add_css_class("dim-label");
+                image.upcast()
+            }
         },
     };
 
@@ -302,11 +322,7 @@ fn channel_row(
 
 /// Who is in the call, the way Slack marks a channel: a few faces and the
 /// count. Faces beat an icon here — the reason to join is usually who is there.
-fn call_badge(
-    people: &[String],
-    avatars: &Avatars,
-    state: &crate::state::AppState,
-) -> gtk::Widget {
+fn call_badge(people: &[String], avatars: &Avatars, state: &crate::state::AppState) -> gtk::Widget {
     /// Beyond this the faces are unreadable at 16px and the count carries it.
     const FACES: usize = 3;
 
@@ -334,7 +350,10 @@ fn call_badge(
 
     // The count is only news once it exceeds the faces already shown.
     if people.len() > FACES {
-        badge.append(&gtk::Label::new(Some(&format!("+{}", people.len() - FACES))));
+        badge.append(&gtk::Label::new(Some(&format!(
+            "+{}",
+            people.len() - FACES
+        ))));
     }
 
     badge.set_tooltip_text(Some(&match people.len() {

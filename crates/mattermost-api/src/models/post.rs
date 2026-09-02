@@ -357,3 +357,21 @@ pub struct PostSearchResults {
     #[serde(default)]
     pub matches: HashMap<String, Vec<String>>,
 }
+
+/// `server/public/model/scheduled_post.go` — a [`Post`] plus the time to send
+/// it. The server stores it separately and only creates the real post at
+/// `scheduled_at`.
+///
+/// `error_code` is filled in when a send *later* failed (`channel_archived`,
+/// `no_channel_permission`, `unknown`): the scheduled post stays in the list
+/// with the error on it rather than disappearing, so the client can show why.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct ScheduledPost {
+    /// The post to send — same wire fields, flattened into this object.
+    #[serde(flatten)]
+    pub post: Post,
+    #[serde(default)]
+    pub scheduled_at: Millis,
+    #[serde(default)]
+    pub error_code: String,
+}

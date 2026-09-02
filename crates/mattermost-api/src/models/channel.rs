@@ -265,3 +265,27 @@ pub struct OrderedSidebarCategories {
     #[serde(default)]
     pub order: Vec<String>,
 }
+
+/// `server/public/model/channel_bookmark.go` — the pinned links/files strip at
+/// the top of a channel. **Server 9.4+**: older servers answer 404 for the
+/// whole `/channels/{channel}/bookmarks` route, which is how you feature-detect
+/// it, since the client config carries no flag for it.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct ChannelBookmark {
+    pub id: String,
+    #[serde(default)]
+    pub channel_id: String,
+    #[serde(default)]
+    pub display_name: String,
+    /// Set for `type == "link"`, empty for a file bookmark.
+    #[serde(default)]
+    pub link_url: String,
+    /// Set for `type == "file"`, empty for a link bookmark.
+    #[serde(default)]
+    pub file_id: String,
+    /// `"link"` | `"file"`
+    #[serde(default)]
+    pub r#type: String,
+    #[serde(default)]
+    pub sort_order: i64,
+}

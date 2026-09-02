@@ -9,8 +9,8 @@
 
 mod agents;
 mod audio;
-mod cache;
 mod avatars;
+mod cache;
 mod demo;
 mod emoji;
 mod markdown;

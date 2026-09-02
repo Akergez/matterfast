@@ -160,7 +160,10 @@ mod tests {
 
     #[test]
     fn inline_styles_become_pango_spans() {
-        assert_eq!(text_of("**bold** and *soft*"), "<b>bold</b> and <i>soft</i>");
+        assert_eq!(
+            text_of("**bold** and *soft*"),
+            "<b>bold</b> and <i>soft</i>"
+        );
         assert_eq!(text_of("~~gone~~"), "<s>gone</s>");
     }
 

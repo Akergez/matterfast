@@ -11,6 +11,21 @@ use crate::avatars::Avatars;
 use crate::state::SharedState;
 use crate::ui::message::{self, MessageActions, RowOptions};
 
+/// Everything the conversation pane reports back to the action loop. A struct
+/// rather than nine positional closures: at that count the compiler stops
+/// catching a swapped pair, and the caller cannot see which is which.
+pub struct ChatCallbacks {
+    pub on_send: Box<dyn Fn(String)>,
+    pub on_typing: Box<dyn Fn(bool)>,
+    pub on_attach: Box<dyn Fn()>,
+    pub on_files: Box<dyn Fn(Vec<std::path::PathBuf>)>,
+    pub on_complete: Box<dyn Fn(Option<super::autocomplete::Query>)>,
+    pub on_schedule: Box<dyn Fn()>,
+    pub on_agent: Box<dyn Fn()>,
+    pub on_call: Box<dyn Fn()>,
+    pub on_inbox: Box<dyn Fn()>,
+}
+
 pub struct ChatView {
     pub widget: adw::ToolbarView,
     title: gtk::Label,
@@ -20,6 +35,9 @@ pub struct ChatView {
     entry: gtk::TextView,
     call_button: gtk::Button,
     inbox_button: gtk::Button,
+    complete: Rc<super::autocomplete::Autocomplete>,
+    /// The priority chosen for the next message, as a stateful action.
+    priority_action: gtk::gio::SimpleAction,
     agent_button: gtk::MenuButton,
     /// Kept so the menu can be rebuilt without losing the fixed entries.
     agent_actions: Rc<RefCell<Vec<gtk::gio::SimpleAction>>>,
@@ -46,14 +64,18 @@ pub struct ChatView {
 }
 
 impl ChatView {
-    pub fn new(
-        on_send: impl Fn(String) + 'static,
-        on_typing: impl Fn(bool) + 'static,
-        on_attach: impl Fn() + 'static,
-        on_agent: impl Fn() + 'static,
-        on_call: impl Fn() + 'static,
-        on_inbox: impl Fn() + 'static,
-    ) -> Self {
+    pub fn new(callbacks: ChatCallbacks) -> Self {
+        let ChatCallbacks {
+            on_send,
+            on_typing,
+            on_attach,
+            on_files,
+            on_complete,
+            on_schedule,
+            on_agent,
+            on_call,
+            on_inbox,
+        } = callbacks;
         let title = gtk::Label::builder()
             .ellipsize(gtk::pango::EllipsizeMode::End)
             .build();
@@ -119,6 +141,20 @@ impl ChatView {
         agent_actions.add_action(&catch_up);
         agent_button.insert_action_group("agent", Some(&agent_actions));
 
+        // What you do to *this* channel, as opposed to the message under the
+        // pointer or the list in the sidebar.
+        let channel_menu = gtk::gio::Menu::new();
+        channel_menu.append(Some("Pinned Messages"), Some("win.pinned-posts"));
+        channel_menu.append(Some("Notifications…"), Some("win.channel-notifications"));
+        channel_menu.append(Some("Leave Channel"), Some("win.leave-channel"));
+        let channel_button = gtk::MenuButton::builder()
+            .icon_name("view-more-symbolic")
+            .tooltip_text("Channel menu")
+            .menu_model(&channel_menu)
+            .build();
+        channel_button.add_css_class("flat");
+
+        header.pack_end(&channel_button);
         header.pack_end(&call_button);
         header.pack_end(&agent_button);
         header.pack_end(&inbox_button);
@@ -197,6 +233,48 @@ impl ChatView {
         send.add_css_class("suggested-action");
         send.add_css_class("circular");
 
+        let priority_menu = gtk::gio::Menu::new();
+        for (label, value) in [
+            ("Standard", "standard"),
+            ("Important", "important"),
+            ("Urgent", "urgent"),
+        ] {
+            priority_menu.append(Some(label), Some(&format!("composer.priority::{value}")));
+        }
+        let priority = gtk::MenuButton::builder()
+            .icon_name("emblem-important-symbolic")
+            .tooltip_text("Message priority")
+            .menu_model(&priority_menu)
+            .valign(gtk::Align::End)
+            .build();
+        priority.add_css_class("flat");
+        priority.add_css_class("circular");
+
+        let priority_action = gtk::gio::SimpleAction::new_stateful(
+            "priority",
+            Some(&String::static_variant_type()),
+            &"standard".to_variant(),
+        );
+        priority_action.connect_activate({
+            let priority = priority.clone();
+            move |action, target| {
+                let Some(value) = target.and_then(|t| t.get::<String>()) else {
+                    return;
+                };
+                // The button carries the current choice: a priority you set
+                // and cannot see is one you will send by accident.
+                priority.set_css_classes(&["flat", "circular"]);
+                match value.as_str() {
+                    "important" => priority.add_css_class("accent"),
+                    "urgent" => priority.add_css_class("error"),
+                    _ => {}
+                }
+                action.set_state(&value.to_variant());
+            }
+        });
+        let composer_actions = gtk::gio::SimpleActionGroup::new();
+        composer_actions.add_action(&priority_action);
+
         let attach = gtk::Button::builder()
             .icon_name("mail-attachment-symbolic")
             .tooltip_text("Attach a file")
@@ -214,7 +292,19 @@ impl ChatView {
             .margin_start(12)
             .margin_end(12)
             .build();
+        composer.insert_action_group("composer", Some(&composer_actions));
+        let schedule = gtk::Button::builder()
+            .icon_name("alarm-symbolic")
+            .tooltip_text("Send later")
+            .valign(gtk::Align::End)
+            .build();
+        schedule.add_css_class("flat");
+        schedule.add_css_class("circular");
+        schedule.connect_clicked(move |_| on_schedule());
+
         composer.append(&attach);
+        composer.append(&priority);
+        composer.append(&schedule);
         composer.append(&entry_frame);
         composer.append(&send);
 
@@ -240,10 +330,21 @@ impl ChatView {
         });
 
         // Enter sends; Shift+Enter inserts a newline.
+        // The completion popover has first refusal on keys: Enter picks a
+        // candidate when the list is open, and only sends when it is not.
+        let complete = Rc::new(super::autocomplete::Autocomplete::new(&entry, {
+            let on_complete = Rc::new(on_complete);
+            move |query| on_complete(query)
+        }));
+
         let keys = gtk::EventControllerKey::new();
         keys.connect_key_pressed({
+            let complete = complete.clone();
             let submit = submit.clone();
             move |_, key, _, modifier| {
+                if complete.handle_key(key) {
+                    return glib::Propagation::Stop;
+                }
                 let enter = matches!(key, gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter);
                 if enter && !modifier.contains(gtk::gdk::ModifierType::SHIFT_MASK) {
                     submit();
@@ -344,6 +445,27 @@ impl ChatView {
         stack.add_named(&conversation, Some("conversation"));
         stack.set_visible_child_name("empty");
 
+        // Dropping files anywhere over the conversation attaches them. The
+        // target is the whole pane rather than the composer: aiming at a
+        // one-line text box is a needlessly precise thing to ask of a drag.
+        let drop = gtk::DropTarget::new(
+            gtk::gdk::FileList::static_type(),
+            gtk::gdk::DragAction::COPY,
+        );
+        drop.connect_drop(move |_, value, _, _| {
+            let Ok(files) = value.get::<gtk::gdk::FileList>() else {
+                return false;
+            };
+            let paths: Vec<std::path::PathBuf> =
+                files.files().iter().filter_map(|f| f.path()).collect();
+            if paths.is_empty() {
+                return false;
+            }
+            on_files(paths);
+            true
+        });
+        conversation.add_controller(drop);
+
         // A toolbar view rather than a plain box: on a narrow window the call
         // dock moves in here as a bottom bar, since the sidebar it normally
         // lives in is off-screen.
@@ -368,6 +490,8 @@ impl ChatView {
             call_banner_label,
             join_button,
             stack,
+            complete,
+            priority_action,
             agent_button,
             agent_actions: Rc::new(RefCell::new(vec![catch_up.clone()])),
             typing,
@@ -448,7 +572,11 @@ impl ChatView {
     }
 
     /// Redraws the row of files waiting to go out with the next message.
-    pub fn set_attachments(&self, files: &[(String, String)], on_remove: impl Fn(String) + 'static) {
+    pub fn set_attachments(
+        &self,
+        files: &[(String, String)],
+        on_remove: impl Fn(String) + 'static,
+    ) {
         while let Some(child) = self.attachments.first_child() {
             self.attachments.remove(&child);
         }
@@ -528,6 +656,26 @@ impl ChatView {
     /// The post being edited, if any.
     pub fn editing(&self) -> Option<String> {
         self.editing.borrow().clone()
+    }
+
+    /// Answers an outstanding completion query.
+    pub fn set_completions(&self, items: Vec<(String, String, String)>) {
+        self.complete.set_candidates(items);
+    }
+
+    /// The priority for the message being written: "", "important" or
+    /// "urgent". Empty means standard, which is what the server expects.
+    pub fn priority(&self) -> String {
+        match self.priority_action.state().and_then(|s| s.get::<String>()) {
+            Some(value) if value != "standard" => value,
+            _ => String::new(),
+        }
+    }
+
+    /// Back to standard once a message has gone out. Priority is per message,
+    /// and a sticky "urgent" would quietly escalate everything after it.
+    pub fn reset_priority(&self) {
+        self.priority_action.set_state(&"standard".to_variant());
     }
 
     /// What is in the composer right now.
@@ -639,8 +787,8 @@ impl ChatView {
 
         // A channel with no posts *yet* and a fetch in flight is loading; one
         // with no posts and nothing in flight is genuinely empty.
-        let waiting = *self.loading.borrow()
-            && st.feeds.get(&channel_id).is_none_or(|f| f.posts.is_empty());
+        let waiting =
+            *self.loading.borrow() && st.feeds.get(&channel_id).is_none_or(|f| f.posts.is_empty());
         self.stack
             .set_visible_child_name(if waiting { "loading" } else { "conversation" });
         self.title.set_text(&st.channel_title(&channel));

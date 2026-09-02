@@ -157,7 +157,10 @@ mod tests {
             parse_callback("mattermost-dev://h/login/desktop?client_token=a"),
             None
         );
-        assert_eq!(parse_callback("https://mm.example.com/login/desktop?a=b"), None);
+        assert_eq!(
+            parse_callback("https://mm.example.com/login/desktop?a=b"),
+            None
+        );
 
         let token = new_client_token();
         assert_eq!(token.len(), 64);

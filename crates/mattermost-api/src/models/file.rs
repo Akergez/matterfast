@@ -75,3 +75,26 @@ pub struct FileUploadResponse {
     #[serde(default)]
     pub client_ids: Vec<String>,
 }
+
+/// `POST /api/v4/teams/{team}/files/search`.
+///
+/// Same order-plus-map shape as [`PostList`](crate::models::PostList): `order`
+/// is newest-first and `file_infos` is keyed by id.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct FileInfoList {
+    #[serde(default)]
+    pub order: Vec<String>,
+    #[serde(default)]
+    pub file_infos: std::collections::HashMap<String, FileInfo>,
+    #[serde(default)]
+    pub next_file_id: String,
+    #[serde(default)]
+    pub prev_file_id: String,
+}
+
+impl FileInfoList {
+    /// Files in `order`, skipping ids the map does not carry.
+    pub fn ordered(&self) -> impl Iterator<Item = &FileInfo> {
+        self.order.iter().filter_map(|id| self.file_infos.get(id))
+    }
+}

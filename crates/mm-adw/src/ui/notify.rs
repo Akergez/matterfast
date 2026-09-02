@@ -84,10 +84,8 @@ pub fn show(app: &gtk::Application, channel_id: &str, title: &str, body: &str) {
     let notification = gtk::gio::Notification::new(title);
     notification.set_body(Some(body));
     notification.set_priority(gtk::gio::NotificationPriority::Normal);
-    notification.set_default_action_and_target_value(
-        "app.open-channel",
-        Some(&channel_id.to_variant()),
-    );
+    notification
+        .set_default_action_and_target_value("app.open-channel", Some(&channel_id.to_variant()));
     app.send_notification(Some(channel_id), &notification);
 }
 
