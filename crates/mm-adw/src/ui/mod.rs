@@ -5632,6 +5632,12 @@ fn screenshot_and_quit(window: &adw::ApplicationWindow) {
             }
             None => tracing::error!("screenshot failed: nothing rendered yet"),
         }
-        window.close();
+        // Quit, not close: closing hides the window and leaves the app
+        // running in the background, which is right for a person and
+        // wrong for a one-shot render that is supposed to end.
+        match window.application() {
+            Some(app) => app.quit(),
+            None => window.close(),
+        }
     });
 }

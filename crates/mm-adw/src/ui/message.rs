@@ -262,6 +262,9 @@ fn acknowledgement(post: &Post, state: &SharedState, actions: &MessageActions) -
         .orientation(gtk::Orientation::Horizontal)
         .spacing(8)
         .margin_top(4)
+        // Start-aligned, or the button stretches to the width of the
+        // conversation and reads as a banner rather than a thing to press.
+        .halign(gtk::Align::Start)
         .build();
 
     let button = gtk::Button::builder()
