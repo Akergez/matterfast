@@ -865,6 +865,7 @@ fn build_session_ui(
         thread_draft_pending: std::cell::Cell::new(false),
         loading_older: std::cell::Cell::new(false),
         snapshot_pending: std::cell::Cell::new(false),
+        pruned_at: std::cell::Cell::new(None),
         store: RefCell::new(None),
         typing_sent_recently: std::cell::Cell::new(false),
         completion_generation: std::cell::Cell::new(0),
@@ -1097,6 +1098,7 @@ struct Ui {
     thread_draft_pending: std::cell::Cell<bool>,
     loading_older: std::cell::Cell<bool>,
     snapshot_pending: std::cell::Cell<bool>,
+    pruned_at: std::cell::Cell<Option<std::time::Instant>>,
     /// The local message store, once it has opened.
     store: RefCell<Option<crate::store::Store>>,
     typing_sent_recently: std::cell::Cell<bool>,
@@ -1400,6 +1402,16 @@ impl Ui {
         let Some(store) = self.store.borrow().clone() else {
             return;
         };
+        // Once every ten minutes of running is plenty for a cache that grows a
+        // screenful at a time.
+        const PRUNE_EVERY: std::time::Duration = std::time::Duration::from_secs(600);
+        let prune = self
+            .pruned_at
+            .get()
+            .is_none_or(|at| at.elapsed() >= PRUNE_EVERY);
+        if prune {
+            self.pruned_at.set(Some(std::time::Instant::now()));
+        }
         runtime::spawn(
             async move {
                 if let Err(e) = store.save_posts(posts).await {
@@ -1439,6 +1451,16 @@ impl Ui {
         let Some(store) = self.store.borrow().clone() else {
             return;
         };
+        // Once every ten minutes of running is plenty for a cache that grows a
+        // screenful at a time.
+        const PRUNE_EVERY: std::time::Duration = std::time::Duration::from_secs(600);
+        let prune = self
+            .pruned_at
+            .get()
+            .is_none_or(|at| at.elapsed() >= PRUNE_EVERY);
+        if prune {
+            self.pruned_at.set(Some(std::time::Instant::now()));
+        }
         let (channels, members, users, posts) = {
             let st = self.state.borrow();
             let posts: Vec<Post> = st
@@ -1466,11 +1488,13 @@ impl Ui {
                 if let Err(e) = store.save_posts(posts).await {
                     tracing::warn!(error = %e, "could not store the messages");
                 }
-                // Trim afterwards rather than on a timer: this is the one
-                // moment we know the writing has stopped, and the cost is a
-                // single statement.
-                if let Err(e) = store.prune(crate::store::DEFAULT_KEEP_PER_CHANNEL).await {
-                    tracing::warn!(error = %e, "could not trim the store");
+                // Occasionally, not on every write: switching channels
+                // writes a snapshot each time, and scanning every post to
+                // delete nothing is pure work.
+                if prune {
+                    if let Err(e) = store.prune(crate::store::DEFAULT_KEEP_PER_CHANNEL).await {
+                        tracing::warn!(error = %e, "could not trim the store");
+                    }
                 }
             },
             |_| {},

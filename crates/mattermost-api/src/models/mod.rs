@@ -43,6 +43,18 @@ pub use team::{Team, TeamMember, TeamUnread};
 pub use upload::UploadSession;
 pub use user::{CustomStatus, Presence, Status, User, UserAutocomplete};
 
+/// Accepts `null` where a list is expected, which Mattermost sends for
+/// several transient fields — `participants` on a post with no replies is the
+/// one that bites, because `#[serde(default)]` covers a *missing* field and
+/// not an explicit null.
+pub(crate) fn null_as_empty<'de, D, T>(d: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Ok(Option::deserialize(d)?.unwrap_or_default())
+}
+
 /// A user group, which can be @-mentioned when the server is licensed for it.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Group {

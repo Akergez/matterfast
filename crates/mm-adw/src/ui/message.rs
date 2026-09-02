@@ -751,7 +751,10 @@ fn attachment(
             .content_fit(gtk::ContentFit::Contain)
             .halign(gtk::Align::Start)
             .can_shrink(true)
-            .width_request(width)
+            // Height only. A width *request* is a minimum, not a maximum, and
+            // the thread panel is narrower than this — GTK then complains that
+            // it cannot give the row the width it insists on. The clamp below
+            // caps the width instead, which is what was actually meant.
             .height_request(height)
             .tooltip_text(&file.name)
             .build();
@@ -760,7 +763,13 @@ fn attachment(
             picture.set_paintable(Some(&texture));
         }
 
-        let open = gtk::Button::builder().child(&picture).build();
+        let sized = adw::Clamp::builder()
+            .maximum_size(width)
+            .halign(gtk::Align::Start)
+            .child(&picture)
+            .build();
+
+        let open = gtk::Button::builder().child(&sized).build();
         open.add_css_class("flat");
         open.add_css_class("attachment-button");
         open.connect_clicked({

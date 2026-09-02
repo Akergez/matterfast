@@ -57,7 +57,10 @@ pub struct Post {
     /// Who has replied, sent with the root post itself under collapsed reply
     /// threads. Transient — the server fills it in on the way out and it is
     /// never stored — which is why it arrives before the thread is fetched.
-    #[serde(default)]
+    ///
+    /// Explicitly `null` on a post with no replies, so a plain default is not
+    /// enough to decode it.
+    #[serde(default, deserialize_with = "super::null_as_empty")]
     pub participants: Vec<Participant>,
     #[serde(default)]
     pub last_reply_at: Millis,
@@ -503,6 +506,27 @@ impl TeamScheduledPosts {
     /// Only ever populated when the request asked for it.
     pub fn direct_channels(&self) -> &[ScheduledPost] {
         self.0.get(Self::DIRECT_CHANNELS).map_or(&[], Vec::as_slice)
+    }
+}
+
+#[cfg(test)]
+mod null_tests {
+    use super::Post;
+
+    #[test]
+    fn a_post_with_no_replies_decodes() {
+        // Exactly what the server sends for a post nobody has replied to:
+        // the field is present and null, not absent.
+        let post: Post = serde_json::from_str(
+            r#"{"id":"p1","message":"hi","participants":null,"reply_count":0}"#,
+        )
+        .expect("null participants must decode");
+        assert!(post.participants.is_empty());
+
+        let with: Post =
+            serde_json::from_str(r#"{"id":"p1","participants":[{"id":"u1","username":"anna"}]}"#)
+                .unwrap();
+        assert_eq!(with.participants.len(), 1);
     }
 }
 

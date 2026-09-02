@@ -162,11 +162,13 @@ impl Player {
         // reads everywhere else. Without one they are all there is.
         let poster: gtk::Widget = match &poster_image {
             Some(texture) => {
+                // Height only, and the width capped by a clamp: a width
+                // request is a floor, and in a narrow panel GTK cannot honour
+                // it.
                 let still = gtk::Picture::builder()
                     .paintable(texture)
                     .content_fit(gtk::ContentFit::Contain)
                     .halign(gtk::Align::Start)
-                    .width_request(POSTER_WIDTH)
                     .height_request(POSTER_HEIGHT)
                     .build();
                 still.add_css_class("attachment-image");
@@ -181,7 +183,12 @@ impl Player {
                 label.set_halign(gtk::Align::Start);
                 label.add_css_class("osd");
 
-                let overlay = gtk::Overlay::builder().child(&still).build();
+                let sized = adw::Clamp::builder()
+                    .maximum_size(POSTER_WIDTH)
+                    .halign(gtk::Align::Start)
+                    .child(&still)
+                    .build();
+                let overlay = gtk::Overlay::builder().child(&sized).build();
                 overlay.add_overlay(&play);
                 overlay.add_overlay(&spinner);
                 overlay.add_overlay(&label);
