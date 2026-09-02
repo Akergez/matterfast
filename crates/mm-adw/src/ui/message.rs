@@ -174,7 +174,16 @@ pub fn build(
         body.append(&meta);
     }
 
-    for block in crate::markdown::parse(&post.message) {
+    // A mention is only tinted when it names somebody we have actually seen —
+    // usernames, and the special ones the server resolves for everyone.
+    let known = {
+        let state = state.clone();
+        move |name: &str| {
+            matches!(name, "here" | "channel" | "all")
+                || state.borrow().users.values().any(|u| u.username == name)
+        }
+    };
+    for block in crate::markdown::parse_with(&post.message, &known) {
         body.append(&render_block(block, avatars));
     }
 

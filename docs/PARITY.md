@@ -69,15 +69,10 @@ plugin or slash command.
 
 ### Worth doing
 
-- **Jump to a message from search or the inbox.** Clicking a hit opens the
-  channel but does not scroll to the post. `posts_around_unread` exists and is
-  used for unread; the same shape would work here.
-- **Group mentions do not highlight.** `@group` completes, but in a message
-  body it renders like any other mention rather than as one that resolves.
-- **No message-level "unread from here".** `set_post_unread` marks it; nothing
-  draws a line at that point on a later visit.
-- **Channel switching does not preload.** Every first visit waits for a fetch
-  unless the store happens to hold it.
+Nothing outstanding that a desktop client should reasonably do. What remains is
+in the two lists below: things that belong to other products or to the server's
+own web console, and known ceilings where a cheaper implementation was chosen
+on purpose and the reason is written down.
 
 ### Deliberately not done
 
@@ -97,9 +92,10 @@ plugin or slash command.
 - **Custom emoji in message bodies use a TextView.** Only blocks containing one
   pay for it; the common path stays a Label. Links in that path are
   re-implemented rather than free, and there is no hover cursor over them.
-- **The store never forgets.** No pruning, no size cap. A year of scrollback in
-  a busy channel will grow the file, and nothing trims it.
-- **`scheduled_posts_for_team` is untyped.** The response is a bucket map whose
-  keys could not be confirmed across server versions, so it is walked as JSON.
-- **Audio has no jitter buffer** — packets play in arrival order.
-- **One window.** Multiple windows onto different teams is not offered.
+- **Pruning is per channel, not per byte.** The store keeps the newest thousand
+  messages in each channel; a server with thousands of channels still grows,
+  just slowly and predictably.
+- **A second window costs a second session.** `app.new-window` opens one, but
+  the session lives inside the window, so two windows means two websockets.
+  Correct, not thrifty; sharing one would mean lifting the session out of the
+  window and rewriting every handler's ownership.

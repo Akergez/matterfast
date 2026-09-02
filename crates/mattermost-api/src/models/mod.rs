@@ -36,8 +36,8 @@ pub use draft::Draft;
 pub use file::{FileInfo, FileInfoList, FileUploadResponse};
 pub use post::{
     AttachmentField, Emoji, MessageAttachment, Participant, Post, PostAcknowledgement, PostEmbed,
-    PostList, PostMetadata, PostPriority, PostSearchResults, Reaction, ScheduledPost, UserThread,
-    UserThreads,
+    PostList, PostMetadata, PostPriority, PostSearchResults, Reaction, ScheduledPost,
+    TeamScheduledPosts, UserThread, UserThreads,
 };
 pub use team::{Team, TeamMember, TeamUnread};
 pub use upload::UploadSession;

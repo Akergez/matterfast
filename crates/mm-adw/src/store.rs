@@ -233,7 +233,6 @@ impl Store {
         // delete everything numbered past the limit. The tiebreak matches
         // `posts()` exactly, so pruning can never drop a post that a read of
         // the same size would have returned.
-        //
         let n = conn.execute(
             "DELETE FROM posts WHERE id IN (
                  SELECT id FROM (

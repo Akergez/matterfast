@@ -135,6 +135,12 @@ fn add_actions(app: &adw::Application) {
     });
     app.add_action(&background);
 
+    // ponytail: a second window means a second session and a second
+    // websocket, because the session is built inside `build_window` and owned
+    // by it. That is honest but wasteful; sharing one session across windows
+    // means lifting `Ui` out of the window, which is a refactor of every
+    // handler. Left as-is because two windows onto one server is rare, and a
+    // duplicated socket is correct, just not thrifty.
     let new_window = gio::SimpleAction::new("new-window", None);
     new_window.connect_activate({
         let app = app.clone();

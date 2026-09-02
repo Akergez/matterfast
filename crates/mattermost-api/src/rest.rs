@@ -1316,16 +1316,15 @@ impl Client {
             .await
     }
 
-    /// `GET /posts/scheduled/team/{team}`.
+    /// `GET /api/v4/posts/scheduled/team/{team}` — messages waiting to go out.
     ///
-    /// Left untyped: the response is a map of buckets rather than a list —
-    /// team id to its scheduled posts, plus a separate bucket for DMs and GMs,
-    /// which are not scoped to a team at all — and the bucket keys have not
-    /// been pinned down across server versions.
-    pub async fn scheduled_posts_for_team(&self, team_id: &str) -> Result<serde_json::Value> {
+    /// The response is a map keyed by team id, plus a `directChannels` bucket
+    /// when asked for — direct messages belong to no team, and treating that
+    /// key as one would count them as a team you are in.
+    pub async fn scheduled_posts_for_team(&self, team_id: &str) -> Result<TeamScheduledPosts> {
         self.get_q(
             &format!("/posts/scheduled/team/{team_id}"),
-            &[("includeDirectChannels", "true")],
+            &[("includeDirectChannels", "true".to_string())],
             "scheduled posts",
         )
         .await

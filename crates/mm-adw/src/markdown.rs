@@ -22,6 +22,13 @@ pub enum Block {
 
 /// Splits a message into blocks, translating inline Markdown into Pango markup.
 pub fn parse(message: &str) -> Vec<Block> {
+    // Everything resolves when nobody says otherwise — used by the tests and
+    // by callers with no roster to check against.
+    parse_with(message, &|_| true)
+}
+
+/// Parses a message, tinting only the mentions `known` recognises.
+pub fn parse_with(message: &str, known: &dyn Fn(&str) -> bool) -> Vec<Block> {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
     options.insert(Options::ENABLE_TABLES);
@@ -62,7 +69,7 @@ pub fn parse(message: &str) -> Vec<Block> {
             }
             Event::Text(t) => match code.as_mut() {
                 Some((_, body)) => body.push_str(&t),
-                None => text.push_str(&inline(&t)),
+                None => text.push_str(&inline(&t, known)),
             },
             // Inline code is a span, not a block: it belongs in the sentence.
             Event::Code(t) => {
@@ -149,7 +156,7 @@ pub fn parse(message: &str) -> Vec<Block> {
 ///
 /// Done after escaping, because both replacements *emit* markup and would
 /// otherwise be escaped along with everything else.
-fn inline(text: &str) -> String {
+fn inline(text: &str, known: &dyn Fn(&str) -> bool) -> String {
     let escaped = escape(text);
     let mut out = String::with_capacity(escaped.len());
     let mut rest = escaped.as_str();
@@ -195,9 +202,12 @@ fn inline(text: &str) -> String {
                 }
                 rest = &after[end + 1..];
             }
-            (b'@', Some(end)) if end > 0 => {
+            (b'@', Some(end)) if end > 0 && known(&after[..end]) => {
                 // Tinted, not linked: a mention is a highlight, and making it
                 // clickable would promise a profile card this does not have.
+                // Only when the name resolves — an unknown @word is somebody's
+                // typo or an email fragment, and tinting it would claim it
+                // reached someone.
                 out.push_str("<span foreground=\"#3584e4\">@");
                 out.push_str(&after[..end]);
                 out.push_str("</span>");
@@ -305,6 +315,17 @@ mod tests {
     fn lists_are_indented_by_depth() {
         assert_eq!(text_of("- one\n- two"), "• one\n• two");
         assert_eq!(text_of("- one\n    - deep"), "• one\n    • deep");
+    }
+
+    #[test]
+    fn an_unknown_mention_is_left_alone() {
+        let blocks = parse_with("hi @nobody and @anna", &|name| name == "anna");
+        let Block::Text(rendered) = &blocks[0] else {
+            panic!("expected text");
+        };
+        assert!(rendered.contains("@nobody"), "got {rendered:?}");
+        assert!(!rendered.contains("#3584e4\">@nobody"), "got {rendered:?}");
+        assert!(rendered.contains("#3584e4\">@anna"), "got {rendered:?}");
     }
 
     #[test]

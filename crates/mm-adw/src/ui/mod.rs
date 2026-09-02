@@ -2274,18 +2274,12 @@ impl Ui {
         );
     }
 
-    fn show_scheduled(self: &Rc<Self>, value: serde_json::Value) {
-        let mut posts: Vec<mattermost_api::models::ScheduledPost> = Vec::new();
-        if let Some(buckets) = value.as_object() {
-            for bucket in buckets.values() {
-                if let Ok(mut found) = serde_json::from_value::<
-                    Vec<mattermost_api::models::ScheduledPost>,
-                >(bucket.clone())
-                {
-                    posts.append(&mut found);
-                }
-            }
-        }
+    fn show_scheduled(self: &Rc<Self>, scheduled: mattermost_api::models::TeamScheduledPosts) {
+        // Every bucket, team and direct alike: they are all messages this
+        // person has waiting, and separating them here would be a
+        // distinction without a difference.
+        let mut posts: Vec<mattermost_api::models::ScheduledPost> =
+            scheduled.0.into_values().flatten().collect();
         posts.sort_by_key(|p| p.scheduled_at);
 
         let list = gtk::Box::builder()
