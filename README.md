@@ -2,7 +2,7 @@
 
 A native Mattermost client for GNOME — GTK4 + libadwaita, in Rust.
 
-<img src="/docs/screenshots/thread.png" />
+<img src="/docs/screenshots/main.png" />
 
 Four crates:
 
