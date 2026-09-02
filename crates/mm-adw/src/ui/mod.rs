@@ -159,6 +159,8 @@ enum Action {
     ScheduleMessage,
     /// The thread panel's reply box changed.
     ThreadDraftChanged,
+    /// The reader reached the top of the feed and wants what came before.
+    LoadOlder,
 }
 
 pub fn build_window(app: &adw::Application) {
@@ -419,6 +421,12 @@ fn build_session_ui(
                 let _ = tx.send_blocking(Action::Complete(query));
             }
         }),
+        on_scrollback: Box::new({
+            let tx = tx.clone();
+            move || {
+                let _ = tx.send_blocking(Action::LoadOlder);
+            }
+        }),
         on_schedule: Box::new({
             let tx = tx.clone();
             move || {
@@ -649,6 +657,7 @@ fn build_session_ui(
         typing_sweep_pending: std::cell::Cell::new(false),
         draft_save_pending: std::cell::Cell::new(false),
         thread_draft_pending: std::cell::Cell::new(false),
+        loading_older: std::cell::Cell::new(false),
         snapshot_pending: std::cell::Cell::new(false),
         typing_sent_recently: std::cell::Cell::new(false),
         dock_in_chat: std::cell::Cell::new(false),
@@ -846,6 +855,7 @@ struct Ui {
     typing_sweep_pending: std::cell::Cell<bool>,
     draft_save_pending: std::cell::Cell<bool>,
     thread_draft_pending: std::cell::Cell<bool>,
+    loading_older: std::cell::Cell<bool>,
     snapshot_pending: std::cell::Cell<bool>,
     typing_sent_recently: std::cell::Cell<bool>,
     dock_in_chat: std::cell::Cell<bool>,
@@ -3081,6 +3091,73 @@ impl Ui {
         );
     }
 
+    /// Fetches the page of messages before the oldest one we hold.
+    ///
+    /// Only one at a time, and never past the beginning: reaching the top of a
+    /// short channel would otherwise ask for the same empty page on every
+    /// scroll event.
+    fn load_older(self: &Rc<Self>) {
+        if self.loading_older.get() {
+            return;
+        }
+        let (client, crt, channel_id, oldest) = {
+            let st = self.state.borrow();
+            let Some(channel_id) = st.current_channel.clone() else {
+                return;
+            };
+            let Some(feed) = st.feeds.get(&channel_id) else {
+                return;
+            };
+            if feed.at_oldest {
+                return;
+            }
+            let Some(oldest) = feed.posts.first().map(|p| p.id.clone()) else {
+                return;
+            };
+            (st.client.clone(), st.crt_enabled, channel_id, oldest)
+        };
+
+        self.loading_older.set(true);
+        let anchor = self.chat.scroll_anchor();
+        let ui = self.clone();
+        runtime::spawn(
+            async move {
+                let posts = client
+                    .posts_before(&channel_id, &oldest, INITIAL_POSTS, crt)
+                    .await?;
+                let (authors, statuses) = hydrate_authors(&client, &posts).await;
+                Ok::<_, mattermost_api::Error>((channel_id, posts, authors, statuses))
+            },
+            move |result| {
+                ui.loading_older.set(false);
+                let Ok((channel_id, posts, authors, statuses)) = result else {
+                    return;
+                };
+                {
+                    let mut st = ui.state.borrow_mut();
+                    for user in authors {
+                        st.users.insert(user.id.clone(), user);
+                    }
+                    st.apply_statuses(statuses);
+                    let older = ChannelFeed::from_list(&posts);
+                    // An empty page means there is nothing before this, and
+                    // the feed should stop asking.
+                    let exhausted = older.posts.is_empty();
+                    if let Some(feed) = st.feeds.get_mut(&channel_id) {
+                        for post in older.posts {
+                            feed.upsert(post);
+                        }
+                        feed.at_oldest = exhausted || older.at_oldest;
+                    }
+                }
+                ui.refresh_messages();
+                // The feed grew upwards, so the view has to move down by the
+                // same amount or the reader is thrown back in time.
+                ui.chat.restore_scroll(anchor);
+            },
+        );
+    }
+
     /// A thread's reply box has its own draft, keyed by the thread root —
     /// which is how the server stores them too, so they sync with the other
     /// clients rather than only surviving locally.
@@ -3560,6 +3637,8 @@ impl Ui {
             Action::Complete(query) => self.complete(query),
             Action::ScheduleMessage => self.schedule_message(),
             Action::ThreadDraftChanged => self.schedule_thread_draft_save(),
+            Action::LoadOlder => self.load_older(),
+            Action::LoadOlder => self.load_older(),
             Action::PickAttachment => self.pick_attachment(),
             Action::AttachFiles(paths) => {
                 let Some(channel_id) = self.state.borrow().current_channel.clone() else {
@@ -4426,6 +4505,56 @@ impl Ui {
                     self.drop_video(&session_id, mattermost_calls::protocol::track_type::SCREEN);
                 }
                 self.refresh_call_ui();
+            }
+            CallUpdate::Participant(mattermost_calls::CallsEvent::Caption {
+                user_id,
+                text,
+                ..
+            }) => {
+                let who = self.user_name(&user_id);
+                self.dock.set_caption(&who, &text);
+            }
+            // Host controls are advisory: the server asks, and the client is
+            // what actually mutes or stops sharing. Ignoring them meant a host
+            // muting someone did nothing at all on their machine.
+            CallUpdate::Participant(mattermost_calls::CallsEvent::HostMuteRequest { .. }) => {
+                let muted = self.state.borrow().call.as_ref().is_some_and(|c| c.muted);
+                if !muted {
+                    self.toggle_mute();
+                    self.toast("The host muted you.");
+                }
+            }
+            CallUpdate::Participant(mattermost_calls::CallsEvent::HostScreenOffRequest {
+                ..
+            }) => {
+                if self
+                    .state
+                    .borrow()
+                    .call
+                    .as_ref()
+                    .is_some_and(|c| c.screen.is_some())
+                {
+                    self.toggle_screen();
+                    self.toast("The host stopped your screen share.");
+                }
+            }
+            CallUpdate::Participant(mattermost_calls::CallsEvent::HostLowerHandRequest {
+                ..
+            }) => {
+                let raised = {
+                    let st = self.state.borrow();
+                    st.call
+                        .as_ref()
+                        .is_some_and(|c| c.hands.iter().any(|id| id == &st.me.id))
+                };
+                if raised {
+                    self.toggle_hand();
+                    self.toast("The host lowered your hand.");
+                }
+            }
+            CallUpdate::Participant(mattermost_calls::CallsEvent::HostRemoved { .. }) => {
+                self.toast("The host removed you from the call.");
+                self.toggle_call();
             }
             CallUpdate::Participant(mattermost_calls::CallsEvent::HostChanged {
                 host_id, ..

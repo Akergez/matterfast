@@ -23,6 +23,9 @@ for a bot, a CLI, or a different front end.
 - Sign in (password + MFA), session token handling, `X-Requested-With`, no cookie jar
 - **Single sign-on** through the browser, using Mattermost's desktop-token
   flow — see below
+- The session token lives in the **Secret Service**, not a file, because it
+  grants the whole account until somebody revokes it. Several servers can be
+  stored side by side; a launch with more than one asks which
 - Startup sequence in the order the official clients use it (config → teams → channels → categories)
 - Adaptive layout: channel sidebar, conversation, and a right-hand panel that
   holds either a thread or the inbox; teams and the signed-in account live in a
@@ -35,34 +38,60 @@ for a bot, a CLI, or a different front end.
   the channel it started in, so its controls cannot live in that channel's
   header. On a phone-sized window the dock moves under the conversation
 - Sidebar rows carry the faces of whoever is in a channel's call
-- Sidebar categories with the real ordering rules, unread/mention/muted styling
+- Sidebar categories with the real ordering rules, unread/mention/muted
+  styling, and a row menu to mute a channel or move it to another category
 - Message list: author grouping, day separators, edits, attachments, message
   priority, system messages, webhook name overrides
 - **Profile pictures**, cached and shared across the message list, sidebar and
   profile card
 - **Reactions as emoji**, not `:shortcodes:` — click a chip to toggle your own,
-  or pick from the hover menu
+  pick one from the hover menu, or search the whole Unicode set. A server's own
+  uploads are drawn as pictures, through the same image cache as avatars
 - **Threads**: the reply count opens the thread in the right panel, replies go
   to the root's channel, and collapsed reply threads (CRT) are respected — a
-  reply never leaks into the channel feed
+  reply never leaks into the channel feed. The thread's reply box keeps its own
+  synced draft, the way the server stores them
 - **Profile card** on any avatar or name: picture, presence, position, custom
   status, the person's local time, and a button that opens the DM
-- **Inbox**: recent mentions and followed threads, with a count on the header
-  button
+- **Inbox**: recent mentions, followed threads and saved posts, with a count on
+  the header button
 - Sending messages, optimistically, with the server echo retiring the local copy
 - **Editing, deleting, pinning, saving and marking unread**, from each
-  message's own menu
-- **Markdown**: bold, italic, links, lists, inline code, and fenced code blocks
-  on their own panel
-- **Attachments**: files upload when picked, images draw themselves and open
+  message's own menu — plus edit history, reminders, and moving a whole thread
+  to another channel
+- **Message priority** set from the composer, and a button to acknowledge a
+  post that asked for one
+- **Scheduled messages**, with a list to change your mind before they go
+- **Autocomplete** for `@names` and `:emoji`, answering from what is already
+  loaded first so a keystroke never waits on a request
+- **Markdown**: bold, italic, strikethrough, links, headings, nested lists,
+  quotes, inline code, and fenced code blocks on their own panel
+- **Permalinks** render as the message they point at, since the server has
+  already resolved it and fetching it again would be work for nothing
+- **Attachments**: pick, drag in, or paste an image. Anything large goes
+  through a resumable upload session, so a stalled upload continues from where
+  the server got to instead of starting over. Images draw themselves and open
   full size
 - **Drafts**, synced through the server so the same unfinished message is
   waiting on every device
-- **Search** across a team, with results in the right panel
+- **Channels**: create, browse, join, leave, rename, edit the header, archive;
+  a member list you can add to and remove from; per-channel notification
+  settings; bookmarks. Teams can be browsed and joined
+- **Your account**: edit the profile and the avatar, set a status and a custom
+  status, and edit the notification settings that decide every toast
+- **Search** across a team, with results in the right panel — `file:` in front
+  of the terms searches attachments instead, rather than adding a second box to
+  find
+- **Ctrl+K** jumps to a channel or a person, opening the DM if there is not one
+  yet
 - **Desktop notifications** following the server's own rules, and a snapshot
-  cache so launching draws last session's channels immediately
+  cache so launching draws last session's channels immediately. Closing the
+  window keeps the process, the socket and the notifications alive — a chat
+  client you have to keep a window open for is not one
 - **Calls**: join, mute, share a screen or camera, raise a hand, see who is in
-  the call, and a dock that stays put when you read somewhere else
+  the call, and a dock that stays put when you read somewhere else. A call in a
+  DM or a group rings, with Join and Dismiss on the notification; a host can
+  mute or remove someone
 - **Plugins**: the Agents LLM module (streamed answers, thread summaries,
   "catch me up") and reaction notifications
 - Live updates over the websocket, including a correct reliable-reconnect resync
@@ -71,9 +100,10 @@ for a bot, a CLI, or a different front end.
 
 The honest list lives in [docs/PARITY.md](docs/PARITY.md) — what is missing,
 ordered by how often it bites, with the routes that would close each gap. The
-short version: no channel management, no notification settings, no @-mention
-autocomplete, one server at a time, and a snapshot cache rather than a real
-local store.
+short version: no scrollback past the newest sixty messages in a channel, no
+link previews, no slash commands, non-image attachments cannot be saved,
+`:shortcodes:` typed into a message stay as text, and there is a snapshot cache
+rather than a real local store.
 
 ## Single sign-on
 

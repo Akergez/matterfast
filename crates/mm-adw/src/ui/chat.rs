@@ -21,6 +21,7 @@ pub struct ChatCallbacks {
     pub on_files: Box<dyn Fn(Vec<std::path::PathBuf>)>,
     pub on_complete: Box<dyn Fn(Option<super::autocomplete::Query>)>,
     pub on_schedule: Box<dyn Fn()>,
+    pub on_scrollback: Box<dyn Fn()>,
     pub on_agent: Box<dyn Fn()>,
     pub on_call: Box<dyn Fn()>,
     pub on_inbox: Box<dyn Fn()>,
@@ -72,6 +73,7 @@ impl ChatView {
             on_files,
             on_complete,
             on_schedule,
+            on_scrollback,
             on_agent,
             on_call,
             on_inbox,
@@ -206,6 +208,13 @@ impl ChatView {
             scroller.vadjustment().connect_value_changed(move |adj| {
                 let at_bottom = adj.value() + adj.page_size() >= adj.upper() - 32.0;
                 *pinned.borrow_mut() = at_bottom;
+
+                // Reaching the top asks for the page before this one. The
+                // threshold is a screenful rather than zero, so the next page
+                // is usually already there by the time it is needed.
+                if adj.value() <= adj.page_size() && adj.upper() > adj.page_size() {
+                    on_scrollback();
+                }
             });
         }
 
@@ -811,6 +820,24 @@ impl ChatView {
         } else {
             "Mentions and threads".to_string()
         }));
+    }
+
+    /// How far the feed is scrolled, and how tall it is. Used to keep the
+    /// reader looking at the same message when older ones are added above.
+    pub fn scroll_anchor(&self) -> (f64, f64) {
+        let adjustment = self.scroller.vadjustment();
+        (adjustment.value(), adjustment.upper())
+    }
+
+    /// Restores the view after older messages were prepended: whatever the
+    /// feed grew by, the scroll position moves down by the same amount.
+    pub fn restore_scroll(&self, anchor: (f64, f64)) {
+        let adjustment = self.scroller.vadjustment();
+        let (value, previous_upper) = anchor;
+        let grew = adjustment.upper() - previous_upper;
+        if grew > 0.0 {
+            adjustment.set_value(value + grew);
+        }
     }
 
     /// Redraws the whole feed for the current channel.

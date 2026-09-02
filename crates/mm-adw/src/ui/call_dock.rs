@@ -29,6 +29,7 @@ pub struct CallDock {
     pub widget: gtk::Box,
     roster: gtk::Box,
     on_host: Rc<dyn Fn(String, HostAction)>,
+    caption: gtk::Label,
     avatar: adw::Avatar,
     title: gtk::Label,
     subtitle: gtk::Label,
@@ -146,6 +147,18 @@ impl CallDock {
         leave.set_hexpand(true);
         controls.append(&leave);
 
+        // One line, replaced as it goes: a subtitle, not a transcript. It
+        // takes no space when the server is not captioning.
+        let caption = gtk::Label::builder()
+            .xalign(0.0)
+            .wrap(true)
+            .lines(2)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .visible(false)
+            .build();
+        caption.add_css_class("caption");
+        caption.add_css_class("dim-label");
+
         let widget = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .spacing(4)
@@ -156,12 +169,14 @@ impl CallDock {
             .build();
         widget.add_css_class("call-dock");
         widget.append(&summary_row);
+        widget.append(&caption);
         widget.append(&controls);
 
         CallDock {
             widget,
             roster,
             on_host: Rc::new(on_host),
+            caption,
             avatar,
             title,
             subtitle,
@@ -170,6 +185,15 @@ impl CallDock {
             camera,
             record,
             hand,
+        }
+    }
+
+    /// Shows one line of live transcription, or clears it.
+    pub fn set_caption(&self, who: &str, text: &str) {
+        let show = !text.trim().is_empty();
+        self.caption.set_visible(show);
+        if show {
+            self.caption.set_text(&format!("{who}: {text}"));
         }
     }
 

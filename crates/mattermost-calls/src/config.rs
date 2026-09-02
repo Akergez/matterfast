@@ -262,6 +262,19 @@ pub async fn set_recording(client: &Client, channel_id: &str, on: bool) -> Resul
     Ok(())
 }
 
+/// Declines a ringing call in a direct message.
+///
+/// Different from dismissing: dismissing silences it for you, declining ends
+/// the call and tells the caller. Only meaningful in a DM, where there is one
+/// person to tell.
+pub async fn decline(client: &Client, channel_id: &str) -> Result<()> {
+    let url = client.plugin_url(PLUGIN_ID, &format!("/calls/{channel_id}/decline"));
+    let _: serde_json::Value = client
+        .post_url(&url, Option::<&()>::None, "decline call")
+        .await?;
+    Ok(())
+}
+
 /// Runs one host-control route: `POST /calls/{call_id}/host/{action}`.
 ///
 /// Host controls have **no websocket action** — unlike everything else a

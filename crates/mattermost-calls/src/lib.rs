@@ -71,8 +71,8 @@ pub mod signaling;
 
 pub use client::{write_audio_sample, CallSession, CallUpdate, JoinOptions};
 pub use config::{
-    discover, dismiss_notification, host_control, set_recording, CallsConfig, ChannelCallState,
-    Discovery, VersionInfo,
+    decline, discover, dismiss_notification, host_control, set_recording, CallsConfig,
+    ChannelCallState, Discovery, VersionInfo,
 };
 pub use error::{CallsError, Result};
 pub use protocol::{CallReaction, CallState, SessionState, PLUGIN_ID};

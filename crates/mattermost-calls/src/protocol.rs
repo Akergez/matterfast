@@ -94,6 +94,8 @@ pub mod server_event {
     pub const CALL_HOST_CHANGED: &str = "call_host_changed";
     pub const CALL_JOB_STATE: &str = "call_job_state";
     pub const USER_DISMISSED_NOTIFICATION: &str = "user_dismissed_notification";
+    /// One line of live transcription, when the server is captioning.
+    pub const CAPTION: &str = "caption";
     pub const HOST_MUTE: &str = "host_mute";
     pub const HOST_SCREEN_OFF: &str = "host_screen_off";
     pub const HOST_LOWER_HAND: &str = "host_lower_hand";

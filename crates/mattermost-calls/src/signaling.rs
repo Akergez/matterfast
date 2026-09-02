@@ -138,6 +138,14 @@ pub enum CallsEvent {
     /// Someone dismissed the incoming-call notification. The plugin sends this
     /// to the dismissing user alone, so in practice it is how our *other*
     /// sessions tell us to stop ringing.
+    /// A live caption line, when the server is transcribing. Sent per
+    /// utterance and superseded by the next one — this is a subtitle, not a
+    /// transcript to accumulate.
+    Caption {
+        user_id: String,
+        session_id: String,
+        text: String,
+    },
     UserDismissedNotification {
         user_id: String,
         call_id: String,
@@ -304,6 +312,11 @@ fn parse_named(name: &str, d: &Data, b: &Broadcast) -> CallsEvent {
                 .get("jobState")
                 .and_then(|v| serde_json::from_value(v.clone()).ok())
                 .unwrap_or_default(),
+        },
+        ev::CAPTION => CallsEvent::Caption {
+            user_id: s(d, "user_id"),
+            session_id: s(d, "session_id"),
+            text: s(d, "text"),
         },
         ev::USER_DISMISSED_NOTIFICATION => CallsEvent::UserDismissedNotification {
             user_id,
