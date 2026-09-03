@@ -15,6 +15,7 @@
 #   FLATPAK_GPG_ID       fingerprint or uid of the signing key           (required)
 #   FLATPAK_GPG_KEY_B64  base64 of that key exported with --export-secret-keys,
 #                        for CI; omit it to sign with the local keyring
+#   FLATPAK_GPG_PASSPHRASE  that key's passphrase, required alongside it
 #   FLATPAK_REPO_SSH_KEY_B64  base64 of a private key registered as a write
 #                        deploy key on the published repository; without it the
 #                        push uses whatever SSH identity the caller already has
@@ -66,27 +67,33 @@ if [[ -n ${FLATPAK_GPG_ID:-} ]]; then
     # which cannot contain a socket.
     GNUPGHOME=$(mktemp -d)
     export GNUPGHOME
-    # gpg-agent runs pinentry for anything touching a secret key, including
-    # importing an unprotected one, and the build image ships no pinentry at
-    # all. This key deliberately has no passphrase, so an empty answer is
-    # always the right one.
+    trap 'rm -rf -- "$GNUPGHOME"; eval "${ssh_cleanup:-:}"' EXIT
+    [[ -n ${FLATPAK_GPG_PASSPHRASE:-} ]] \
+      || { echo 'FLATPAK_GPG_KEY_B64 needs FLATPAK_GPG_PASSPHRASE' >&2; exit 1; }
+    printf '%s' "$FLATPAK_GPG_PASSPHRASE" > "$GNUPGHOME/passphrase"
+    unset FLATPAK_GPG_PASSPHRASE
+    chmod 600 -- "$GNUPGHOME/passphrase"
+    # gpg-agent runs pinentry for every use of a secret key, and the build
+    # image ships none at all. ostree signs through gpgme, which cannot pass a
+    # passphrase itself, so the answer has to come from a pinentry.
     cat > "$GNUPGHOME/pinentry" <<'PINENTRY'
 #!/bin/sh
 echo "OK Pleased to meet you"
 while IFS= read -r line; do
   case "$line" in
-    GETPIN*) printf 'D \nOK\n' ;;
+    GETPIN*) printf 'D %s\nOK\n' "$(cat "${0%/*}/passphrase")" ;;
     BYE*)    echo "OK closing connection"; exit 0 ;;
     *)       echo "OK" ;;
   esac
 done
 PINENTRY
     chmod 700 -- "$GNUPGHOME/pinentry"
-    printf 'pinentry-program %s/pinentry\n' "$GNUPGHOME" > "$GNUPGHOME/gpg-agent.conf"
-    trap 'rm -rf -- "$GNUPGHOME"; eval "${ssh_cleanup:-:}"' EXIT
+    printf 'pinentry-program %s/pinentry\nallow-loopback-pinentry\n' \
+      "$GNUPGHOME" > "$GNUPGHOME/gpg-agent.conf"
     key=$FLATPAK_GPG_KEY_B64
     unset FLATPAK_GPG_KEY_B64
-    printf '%s' "$key" | base64 -d | "$gpg_bin" --batch --quiet --import
+    printf '%s' "$key" | base64 -d | "$gpg_bin" --batch --quiet \
+      --pinentry-mode loopback --passphrase-file "$GNUPGHOME/passphrase" --import
     unset key
     sign=(--gpg-sign="$FLATPAK_GPG_ID" --gpg-homedir="$GNUPGHOME")
   else

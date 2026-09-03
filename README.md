@@ -249,21 +249,28 @@ The repository it pushes to is `toxblh/flatpak`, public, so that Forgejo will
 serve it to anonymous clients. CI authenticates with a write **deploy key** on
 that one repository rather than an account token, and pins the host key.
 
-Four Actions secrets on this repository drive it:
+Five Actions secrets on this repository drive it:
 
 | Secret | Value |
 |---|---|
 | `FLATPAK_GPG_ID` | fingerprint of the signing key |
 | `FLATPAK_GPG_KEY_B64` | `gpg2 --export-secret-keys <fpr> \| base64 -w0` |
+| `FLATPAK_GPG_PASSPHRASE` | that key's passphrase |
 | `FLATPAK_REPO_SSH_KEY_B64` | the deploy key's private half, base64 |
 | `FLATPAK_REPO_KNOWN_HOSTS` | `ssh-keyscan altlinux.space`, fingerprint-verified |
 
-The signing key lives in its own keyring, `~/.gnupg-matras-flatpak`, so that a
-key CI holds a copy of never sits in a personal one:
+The signing key never enters a personal keyring: it lives as an exported
+blob beside its passphrase, and every publish — local or CI — imports it into
+a throwaway `GNUPGHOME` the same way.
 
 ```sh
-GNUPGHOME=~/.gnupg-matras-flatpak gpg2 --list-secret-keys
+~/.config/als-forgejo/matras-flatpak-key.b64   # FLATPAK_GPG_KEY_B64
+~/.config/als-forgejo/matras-flatpak-pass      # FLATPAK_GPG_PASSPHRASE
 ```
+
+That homedir also gets a stub pinentry, because ostree signs through gpgme,
+which cannot hand a passphrase to gpg-agent itself, and the build image has
+no pinentry to prompt with.
 
 The workflow writes `ru.toxblh.Matras.flatpakref` into the published repository
 itself, with the public key embedded, so the install link above always carries
