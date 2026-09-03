@@ -387,11 +387,49 @@ async fn channel_posts(
 ) -> Json<Value> {
     let since: i64 = q.get("since").and_then(|s| s.parse().ok()).unwrap_or(0);
     let crt = q.get("collapsedThreads").map(String::as_str) == Some("true");
-    Json(post_list(&app, |p| {
-        p["channel_id"] == channel_id.as_str()
-            && p["update_at"].as_i64().unwrap_or(0) > since
-            // Under CRT, replies live in threads and never in the channel feed.
-            && (!crt || p["root_id"].as_str().unwrap_or_default().is_empty())
+    let before = q.get("before").map(String::as_str);
+    let page = q.get("page").and_then(|s| s.parse().ok()).unwrap_or(0usize);
+    let per_page = q
+        .get("per_page")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(60usize)
+        .clamp(1, 200);
+
+    let db = app.db.lock().unwrap();
+    let mut matched: Vec<Value> = db
+        .posts
+        .iter()
+        .map(|p| &p.v)
+        .filter(|p| {
+            p["channel_id"] == channel_id.as_str()
+                && p["update_at"].as_i64().unwrap_or(0) > since
+                // Under CRT, replies live in threads and never in the channel feed.
+                && (!crt || p["root_id"].as_str().unwrap_or_default().is_empty())
+        })
+        .cloned()
+        .collect();
+    matched.sort_by_key(|p| -p["create_at"].as_i64().unwrap_or(0));
+
+    let start = before
+        .and_then(|id| matched.iter().position(|post| post["id"] == id))
+        .map_or_else(|| page.saturating_mul(per_page), |position| position + 1)
+        .min(matched.len());
+    let end = start.saturating_add(per_page).min(matched.len());
+    let page = &matched[start..end];
+    let order: Vec<String> = page
+        .iter()
+        .filter_map(|post| post["id"].as_str().map(str::to_string))
+        .collect();
+    let posts: serde_json::Map<String, Value> = page
+        .iter()
+        .filter_map(|post| Some((post["id"].as_str()?.to_string(), post.clone())))
+        .collect();
+    Json(json!({
+        "order": order,
+        "posts": posts,
+        "next_post_id": if start > 0 { "newer" } else { "" },
+        "prev_post_id": if end < matched.len() { "older" } else { "" },
+        "first_inaccessible_post_time": 0,
     }))
 }
 
@@ -650,6 +688,18 @@ async fn handle_socket(socket: WebSocket, app: Arc<App>) {
 // ────────────────────────────────────────────────────────────── seed & bot
 
 fn seed(app: &App) {
+    // A scrollback long enough to page through. Seven seeded posts fit on one
+    // screen, so pagination and scroll-anchor work cannot be exercised without
+    // it. `MM_HISTORY=400` is what the profiling runs use.
+    let history: usize = std::env::var("MM_HISTORY")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    for i in 0..history {
+        let author = [SARA, MIKK, LENA, ME][i % 4];
+        app.add_post(DEV, author, &format!("Backlog message {}", i + 1), "");
+    }
+
     let root = app.add_post(
         DEV,
         SARA,
@@ -802,9 +852,9 @@ async fn main() {
             response
         }));
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:8065")
-        .await
-        .unwrap();
-    println!("fake Mattermost on http://127.0.0.1:8065 — any username and password will do");
+    let address =
+        std::env::var("MM_TESTSERVER_ADDR").unwrap_or_else(|_| "127.0.0.1:8065".to_string());
+    let listener = tokio::net::TcpListener::bind(&address).await.unwrap();
+    println!("fake Mattermost on http://{address} — any username and password will do");
     axum::serve(listener, router).await.unwrap();
 }
