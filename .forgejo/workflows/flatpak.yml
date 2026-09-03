@@ -1,0 +1,46 @@
+name: flatpak
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+# A stale build must never finish last and overwrite a newer ostree commit.
+concurrency:
+  group: flatpak-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/master'
+    runs-on: als-huge
+    timeout-minutes: 170
+    container:
+      # Flathub's build image, pinned by digest: it already carries
+      # flatpak-builder and the GNOME 50 runtime and SDK, so the job does not
+      # spend a gigabyte of download on them. Audit before moving the pin.
+      #   skopeo inspect docker://ghcr.io/flathub-infra/flatpak-github-actions:gnome-50
+      image: ghcr.io/flathub-infra/flatpak-github-actions@sha256:bdbeb241813021cf96f3001ccceea46b8e0c3c46a316172992fd60ad9dfc50e2
+      # bwrap needs to create its own namespaces, which an ordinary container
+      # is not allowed to do.
+      options: --privileged
+
+    steps:
+      - name: Checkout
+        # actions/checkout v4.4.0, pinned to the validated ALS mirror commit.
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Give the container a machine id
+        # Without one, dbus-run-session refuses to start and flatpak-builder
+        # cannot spawn a build sandbox.
+        run: dbus-uuidgen > /etc/machine-id
+
+      - name: Build, sign and publish
+        env:
+          FLATPAK_GPG_ID: ${{ secrets.FLATPAK_GPG_ID }}
+          FLATPAK_GPG_KEY_B64: ${{ secrets.FLATPAK_GPG_KEY_B64 }}
+          FLATPAK_REPO_SSH_KEY_B64: ${{ secrets.FLATPAK_REPO_SSH_KEY_B64 }}
+          FLATPAK_REPO_KNOWN_HOSTS: ${{ secrets.FLATPAK_REPO_KNOWN_HOSTS }}
+        run: build-aux/publish-flatpak.sh --publish

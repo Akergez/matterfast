@@ -1,2 +1,7 @@
 /target
 .skills
+/.flatpak-build
+/.flatpak-repo
+/.flatpak-state
+/.flatpak-gnupg.*
+/.claude

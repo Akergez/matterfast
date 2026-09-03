@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>ru.toxblh.Matras</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-only</project_license>
+  <name>Matras</name>
+  <summary>Chat, threads and calls on a Mattermost server</summary>
+  <developer id="ru.toxblh">
+    <name>Anton Palgunov</name>
+  </developer>
+
+  <description>
+    <p>
+      A native Mattermost client for GNOME. Channels, threads, reactions and
+      the inbox in an adaptive libadwaita window, with Mattermost Calls
+      handled by a built-in WebRTC peer.
+    </p>
+    <p>
+      Sign in with a password, MFA or single sign-on; the session token is
+      kept in the Secret Service rather than on disk.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">ru.toxblh.Matras.desktop</launchable>
+  <url type="homepage">https://github.com/Toxblh/matras</url>
+  <url type="bugtracker">https://github.com/Toxblh/matras/issues</url>
+
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/Toxblh/matras/master/docs/screenshots/main.png</image>
+      <caption>A channel, its thread panel and the call dock</caption>
+    </screenshot>
+  </screenshots>
+
+  <content_rating type="oars-1.1">
+    <content_attribute id="social-chat">intense</content_attribute>
+    <content_attribute id="social-audio">intense</content_attribute>
+  </content_rating>
+
+  <releases>
+    <release version="0.1.0" date="2026-09-03"/>
+  </releases>
+</component>

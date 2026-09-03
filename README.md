@@ -133,7 +133,21 @@ official desktop app; the server picks it because the token starts with `dev-`.
 The app must already be running when the callback arrives — the browser hands
 the URI to the live instance over D-Bus.
 
+## Install
+
+A signed flatpak repository is published from this project's own CI. One click
+on the ref file adds the remote and installs the app; everything after that is
+an ordinary `flatpak update`:
+
+```sh
+flatpak install https://altlinux.space/toxblh/flatpak/raw/branch/master/ru.toxblh.Matras.flatpakref
+```
+
+The runtime comes from Flathub, so that remote has to exist — the ref file
+points at it and flatpak will offer to add it.
+
 ## Building
+
 
 Needs Rust 1.85+, GTK 4.12+ and libadwaita 1.5+.
 
@@ -223,6 +237,44 @@ Mattermost's REST API is documented; its WebSocket payloads and the Calls
 protocol largely are not. `docs/PROTOCOL.md` records what was found by reading
 `mattermost/mattermost`, `mattermost-plugin-calls`, `rtcd` and `calls-common`,
 including several behaviours that fail *silently* if you get them wrong.
+
+## Publishing the flatpak
+
+`.forgejo/workflows/flatpak.yml` builds the manifest in `build-aux/` on every
+push to `master` and force-pushes the resulting ostree repository to
+`toxblh/flatpak` on ALS, where Forgejo's `raw/branch/master` endpoint serves it
+as an ordinary HTTP flatpak remote. There is no static host to keep alive.
+
+The repository it pushes to is `toxblh/flatpak`, public, so that Forgejo will
+serve it to anonymous clients. CI authenticates with a write **deploy key** on
+that one repository rather than an account token, and pins the host key.
+
+Four Actions secrets on this repository drive it:
+
+| Secret | Value |
+|---|---|
+| `FLATPAK_GPG_ID` | fingerprint of the signing key |
+| `FLATPAK_GPG_KEY_B64` | `gpg2 --export-secret-keys <fpr> \| base64 -w0` |
+| `FLATPAK_REPO_SSH_KEY_B64` | the deploy key's private half, base64 |
+| `FLATPAK_REPO_KNOWN_HOSTS` | `ssh-keyscan altlinux.space`, fingerprint-verified |
+
+The signing key lives in its own keyring, `~/.gnupg-matras-flatpak`, so that a
+key CI holds a copy of never sits in a personal one:
+
+```sh
+GNUPGHOME=~/.gnupg-matras-flatpak gpg2 --list-secret-keys
+```
+
+The workflow writes `ru.toxblh.Matras.flatpakref` into the published repository
+itself, with the public key embedded, so the install link above always carries
+the key that signed what it points at.
+
+The same script builds locally, into `.flatpak-repo`:
+
+```sh
+build-aux/publish-flatpak.sh
+flatpak install --user .flatpak-repo ru.toxblh.Matras
+```
 
 ## Licence
 
