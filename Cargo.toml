@@ -17,3 +17,10 @@ thiserror = "2"
 tracing = "0.1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net"] }
 futures-util = "0.3"
+
+[profile.release]
+# Cross-crate inlining matters in a GTK application built from many thin Rust
+# wrappers, while thin LTO keeps release builds practical. One codegen unit
+# gives LLVM a coherent view of the hot UI path and also reduces binary size.
+lto = "thin"
+codegen-units = 1
