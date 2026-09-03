@@ -52,7 +52,12 @@ modules:
     sources:
       - type: dir
         path: ..
+        # Everything the publish script itself writes into the checkout. The
+        # ostree repository and the builder's state directory are large; the
+        # state directory also holds live mounts, which cannot be copied.
         skip:
           - .git
           - .flatpak-build
+          - .flatpak-repo
+          - .flatpak-state
           - target

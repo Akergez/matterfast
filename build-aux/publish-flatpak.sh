@@ -61,9 +61,10 @@ sign=()
 if [[ -n ${FLATPAK_GPG_ID:-} ]]; then
   if [[ -n ${FLATPAK_GPG_KEY_B64:-} ]]; then
     umask 077
-    # Under the local `flatpak run org.flatpak.Builder` the homedir has to be
-    # somewhere the sandbox can see, so it lives beside the build tree.
-    GNUPGHOME=$(mktemp -d -- "$root/.flatpak-gnupg.XXXXXXXX")
+    # Outside the checkout: gpg-agent puts its sockets in the homedir when
+    # there is no /run/user, and the module source is a copy of the checkout,
+    # which cannot contain a socket.
+    GNUPGHOME=$(mktemp -d)
     export GNUPGHOME
     trap 'rm -rf -- "$GNUPGHOME"; eval "${ssh_cleanup:-:}"' EXIT
     key=$FLATPAK_GPG_KEY_B64
@@ -106,6 +107,10 @@ if $publish; then
   rm -rf -- "$repo_dir"
   if git ls-remote --exit-code --heads "$remote" "$repo_branch" >/dev/null; then
     git clone --quiet --depth 1 --branch "$repo_branch" "$remote" "$repo_dir"
+    # git cannot carry an empty directory, and ostree wants all of these to
+    # exist even while they hold nothing.
+    mkdir -p -- "$repo_dir"/{extensions,state,tmp} \
+      "$repo_dir"/refs/{heads,mirrors,remotes}
   else
     # No such branch — but distinguish "first publish" from "host down", or a
     # network blip would look like an empty repository and we would force-push
