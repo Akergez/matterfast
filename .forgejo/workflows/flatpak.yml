@@ -52,3 +52,51 @@ jobs:
           FLATPAK_REPO_SSH_KEY_B64: ${{ secrets.FLATPAK_REPO_SSH_KEY_B64 }}
           FLATPAK_REPO_KNOWN_HOSTS: ${{ secrets.FLATPAK_REPO_KNOWN_HOSTS }}
         run: build-aux/publish-flatpak.sh --publish
+
+  publish-aarch64:
+    # Not a matrix: both jobs force-push the same ostree repository, so the
+    # second has to start from what the first published, and a matrix would
+    # run them at once.
+    needs: publish
+    if: github.ref == 'refs/heads/master'
+    # A self-hosted arm64 runner; the pinned digest is a multi-arch index, so
+    # it resolves to the arm64 image here without another pin.
+    runs-on: aarch64
+    timeout-minutes: 90
+    container:
+      # Flathub's build image, pinned by digest: it already carries
+      # flatpak-builder and the GNOME 50 runtime and SDK, so the job does not
+      # spend a gigabyte of download on them. Audit before moving the pin.
+      #   skopeo inspect docker://ghcr.io/flathub-infra/flatpak-github-actions:gnome-50
+      image: ghcr.io/flathub-infra/flatpak-github-actions@sha256:bdbeb241813021cf96f3001ccceea46b8e0c3c46a316172992fd60ad9dfc50e2
+      # bwrap needs to create its own namespaces, which an ordinary container
+      # is not allowed to do.
+      options: --privileged
+
+    steps:
+      - name: Checkout
+        # actions/checkout v4.4.0, pinned to the validated ALS mirror commit.
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Give the container a machine id
+        # Without one, dbus-run-session refuses to start and flatpak-builder
+        # cannot spawn a build sandbox.
+        run: dbus-uuidgen > /etc/machine-id
+
+      - name: Install the Rust SDK extension
+        # The image carries the GNOME runtime and SDK but not this. Its branch
+        # is that of the freedesktop SDK the GNOME 50 SDK is built on, not 50 —
+        # there is no rust-stable//50 to install.
+        run: |
+          flatpak install -y --noninteractive flathub \
+            org.freedesktop.Sdk.Extension.rust-stable//25.08
+
+      - name: Build, sign and publish
+        env:
+          FLATPAK_GPG_ID: ${{ secrets.FLATPAK_GPG_ID }}
+          FLATPAK_GPG_KEY_B64: ${{ secrets.FLATPAK_GPG_KEY_B64 }}
+          FLATPAK_REPO_SSH_KEY_B64: ${{ secrets.FLATPAK_REPO_SSH_KEY_B64 }}
+          FLATPAK_REPO_KNOWN_HOSTS: ${{ secrets.FLATPAK_REPO_KNOWN_HOSTS }}
+        run: build-aux/publish-flatpak.sh --publish
