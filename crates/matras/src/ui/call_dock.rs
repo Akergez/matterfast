@@ -11,6 +11,8 @@
 //! separator and background come free, and it survives navigation because it
 //! sits outside the content stack.
 
+use std::cell::Cell;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::rc::Rc;
 
 use adw::prelude::*;
@@ -33,6 +35,8 @@ pub enum HostAction {
 pub struct CallDock {
     pub widget: gtk::Box,
     roster: gtk::Box,
+    /// The participant list as one value, so voice activity does not rebuild it.
+    roster_drawn: Cell<Option<u64>>,
     on_host: Rc<dyn Fn(String, HostAction)>,
     caption: gtk::Label,
     mute_others: gtk::Button,
@@ -234,6 +238,7 @@ impl CallDock {
         CallDock {
             widget,
             roster,
+            roster_drawn: Cell::new(None),
             on_host: Rc::new(on_host),
             mute_others,
             end_call,
@@ -383,6 +388,36 @@ impl CallDock {
         avatars: &Avatars,
         call: &crate::state::ActiveCall,
     ) {
+        // Voice activity arrives continuously while somebody talks, and every
+        // frame of it reached this list. Rebuilding takes the row out from
+        // under the pointer and costs a widget tree per participant, for a
+        // list that usually did not change at all.
+        let signature = {
+            let mut hash = DefaultHasher::new();
+            call.channel_id.hash(&mut hash);
+            call.host_id.hash(&mut hash);
+            st.me.id.hash(&mut hash);
+            if let Some(people) = st.active_calls.get(&call.channel_id) {
+                for user_id in people {
+                    user_id.hash(&mut hash);
+                    st.users
+                        .get(user_id)
+                        .map(|user| user.display_name(st.teammate_name_display()))
+                        .hash(&mut hash);
+                }
+            }
+            call.hands.hash(&mut hash);
+            call.speaking.first().hash(&mut hash);
+            for user_id in &call.muted_users {
+                user_id.hash(&mut hash);
+            }
+            hash.finish()
+        };
+        if self.roster_drawn.get() == Some(signature) {
+            return;
+        }
+        self.roster_drawn.set(Some(signature));
+
         while let Some(child) = self.roster.first_child() {
             self.roster.remove(&child);
         }
