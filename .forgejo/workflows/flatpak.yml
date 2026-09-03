@@ -37,6 +37,14 @@ jobs:
         # cannot spawn a build sandbox.
         run: dbus-uuidgen > /etc/machine-id
 
+      - name: Install the Rust SDK extension
+        # The image carries the GNOME runtime and SDK but not this. Its branch
+        # is that of the freedesktop SDK the GNOME 50 SDK is built on, not 50 —
+        # there is no rust-stable//50 to install.
+        run: |
+          flatpak install -y --noninteractive flathub \
+            org.freedesktop.Sdk.Extension.rust-stable//25.08
+
       - name: Build, sign and publish
         env:
           FLATPAK_GPG_ID: ${{ secrets.FLATPAK_GPG_ID }}
