@@ -1356,6 +1356,85 @@ impl ChatView {
         true
     }
 
+    /// Puts the feed on its newest row and holds it there while GtkListView
+    /// finishes measuring.
+    ///
+    /// `scroll_to` on its own is not enough for a row spliced in this frame:
+    /// the list has not measured it yet, so it places the target exactly on
+    /// the bottom edge of the viewport, concludes nothing has to move, and by
+    /// the time the row has a height the request is spent. `upper` grew, the
+    /// value did not, and the message sat just below the fold — which is what
+    /// made a message you had only just sent fail to show up. Nudging the
+    /// adjustment over the following frames is the same explicit-navigation
+    /// escape hatch `restore_anchor` already uses; it never moves the feed
+    /// upwards, so a re-measure that shrinks the estimate cannot jump anyone
+    /// into history.
+    fn scroll_to_newest(&self, reason: &str) {
+        let position = self.messages.n_items().saturating_sub(1);
+        if scroll_trace_enabled() {
+            tracing::warn!(
+                target: "matras::scroll",
+                event = "programmatic-scroll-to",
+                reason,
+                position,
+                "scroll trace"
+            );
+        }
+        self.message_list
+            .scroll_to(position, gtk::ListScrollFlags::NONE, None);
+
+        let Some(adjustment) = self.message_list.vadjustment() else {
+            return;
+        };
+        let attempts = Rc::new(Cell::new(0u8));
+        self.message_list.add_tick_callback(move |_, _| {
+            attempts.set(attempts.get() + 1);
+            let bottom = (adjustment.upper() - adjustment.page_size()).max(0.0);
+            if adjustment.value() < bottom {
+                adjustment.set_value(bottom);
+            }
+            // Four frames is about one re-measure pass and short enough that
+            // it cannot fight a reader who starts scrolling away.
+            if attempts.get() >= 4 {
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
+            }
+        });
+    }
+
+    /// Whether a post belongs in the feed on screen at all — the question
+    /// both "should this row be appended" and "should sending it move the
+    /// reader" turn on.
+    fn feed_shows(showing: Option<&str>, post: &Post, crt: bool) -> bool {
+        showing == Some(post.channel_id.as_str())
+            && !post.is_deleted()
+            && !post.is_system()
+            && !(crt && post.is_reply())
+    }
+
+    /// Puts the feed at the bottom because *you* posted. Following only when
+    /// the reader was already at the live edge is the right rule for someone
+    /// else's message and the wrong one for your own: every other client
+    /// shows you what you just sent, wherever you had been reading. It
+    /// deliberately ignores `at_latest` too — the post is appended to the
+    /// block on screen, so the end of that block is where it is.
+    ///
+    /// Does nothing when the post is not in this feed (a reply CRT keeps in
+    /// its thread, or a thread whose root lives in another channel), so
+    /// answering in the thread panel does not drag the channel behind it.
+    pub fn follow_own_post(&self, post: &Post, state: &SharedState) {
+        if !Self::feed_shows(
+            self.showing.borrow().as_deref(),
+            post,
+            state.borrow().crt_enabled,
+        ) {
+            return;
+        }
+        *self.pinned_to_bottom.borrow_mut() = true;
+        self.scroll_to_newest("own-message-sent");
+    }
+
     /// Says, at the top of the feed, that the page before this one is on its
     /// way. Without it a scrollback that takes a moment looks like the start
     /// of the channel.
@@ -1542,11 +1621,11 @@ impl ChatView {
         avatars: &Avatars,
         actions: &MessageActions,
     ) -> bool {
-        if self.showing.borrow().as_deref() != Some(post.channel_id.as_str())
-            || post.is_deleted()
-            || post.is_system()
-            || (state.borrow().crt_enabled && post.is_reply())
-        {
+        if !Self::feed_shows(
+            self.showing.borrow().as_deref(),
+            post,
+            state.borrow().crt_enabled,
+        ) {
             return false;
         }
 
@@ -1584,21 +1663,7 @@ impl ChatView {
             }));
 
         if *self.pinned_to_bottom.borrow() {
-            if scroll_trace_enabled() {
-                tracing::warn!(
-                    target: "matras::scroll",
-                    event = "programmatic-scroll-to",
-                    reason = "live-append-while-pinned",
-                    post_id = post.id,
-                    position = self.messages.n_items().saturating_sub(1),
-                    "scroll trace"
-                );
-            }
-            self.message_list.scroll_to(
-                self.messages.n_items().saturating_sub(1),
-                gtk::ListScrollFlags::NONE,
-                None,
-            );
+            self.scroll_to_newest("live-append-while-pinned");
         }
         true
     }
@@ -1761,25 +1826,11 @@ impl ChatView {
             // GtkListView owns deferred measurement of its virtual rows. Its
             // position API can target an item before layout; adjustment.upper
             // cannot and left a freshly-opened channel at its oldest message.
-            if scroll_trace_enabled() {
-                tracing::warn!(
-                    target: "matras::scroll",
-                    event = "programmatic-scroll-to",
-                    reason = if same_channel {
-                        "same-channel-refresh-while-pinned"
-                    } else {
-                        "channel-open-at-latest"
-                    },
-                    channel_id,
-                    position = self.messages.n_items().saturating_sub(1),
-                    "scroll trace"
-                );
-            }
-            self.message_list.scroll_to(
-                self.messages.n_items().saturating_sub(1),
-                gtk::ListScrollFlags::NONE,
-                None,
-            );
+            self.scroll_to_newest(if same_channel {
+                "same-channel-refresh-while-pinned"
+            } else {
+                "channel-open-at-latest"
+            });
         }
     }
 }
@@ -2009,5 +2060,26 @@ mod tests {
         let state = state_with(&[]);
         let next = post("u1", 1_000);
         assert!(!groups_with(None, &next, &state));
+    }
+
+    #[test]
+    fn the_feed_only_shows_posts_that_belong_in_it() {
+        let mine = Post {
+            channel_id: "c1".into(),
+            ..post("u1", 1_000)
+        };
+        assert!(ChatView::feed_shows(Some("c1"), &mine, true));
+        assert!(!ChatView::feed_shows(Some("c2"), &mine, true));
+        assert!(!ChatView::feed_shows(None, &mine, true));
+
+        // A reply is a thread's business while CRT is on, and the channel's
+        // once it is off — sending one must move the reader in exactly the
+        // second case.
+        let reply = Post {
+            root_id: "root".into(),
+            ..mine.clone()
+        };
+        assert!(!ChatView::feed_shows(Some("c1"), &reply, true));
+        assert!(ChatView::feed_shows(Some("c1"), &reply, false));
     }
 }

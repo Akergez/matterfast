@@ -5718,8 +5718,12 @@ impl Ui {
             file_ids: file_ids.clone(),
             ..Default::default()
         };
-        self.state.borrow_mut().apply_post(optimistic);
+        self.state.borrow_mut().apply_post(optimistic.clone());
         self.refresh_messages();
+        // Both send paths — the channel composer and the thread panel's —
+        // come through here, so the rule that your own message brings you to
+        // the bottom lives here rather than at either call site.
+        self.chat.follow_own_post(&optimistic, &self.state);
 
         let ui = self.clone();
         let reply_to = root_id.clone();
