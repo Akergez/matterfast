@@ -71,7 +71,7 @@ impl Client {
         headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
 
         let mut builder = reqwest::Client::builder()
-            .user_agent(concat!("mattermost-adw/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!("matras/", env!("CARGO_PKG_VERSION")))
             .default_headers(headers);
         if crate::tls::insecure() {
             tracing::warn!("MM_INSECURE_TLS: certificate verification disabled");

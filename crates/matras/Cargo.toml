@@ -1,5 +1,5 @@
 [package]
-name = "mm-adw"
+name = "matras"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

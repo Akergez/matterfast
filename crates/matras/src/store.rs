@@ -427,7 +427,7 @@ mod tests {
     /// A directory of our own per test. `Store::open_at` exists for this: the
     /// tests must not read, write or delete anything in the real user data dir.
     fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("mm-adw-store-{}-{name}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("matras-store-{}-{name}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         dir
     }

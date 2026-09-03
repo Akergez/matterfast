@@ -169,12 +169,12 @@ fn mp4_head_has_full_moov(head: &[u8]) -> bool {
 /// longer shown, the same as the full download in [`Player::set_data`] does
 /// for itself.
 pub fn video_still(file: &FileInfo, head: &[u8]) -> Option<(gtk::gdk::Paintable, PathBuf)> {
-    if std::env::var("MM_ADW_NO_STILL").is_ok() || !head_playable(head) {
+    if std::env::var("MATRAS_NO_STILL").is_ok() || !head_playable(head) {
         return None;
     }
 
     let path = std::env::temp_dir().join(format!(
-        "mm-adw-poster-{}.{}",
+        "matras-poster-{}.{}",
         sanitised(&file.id),
         sanitised(&extension(file))
     ));
@@ -446,7 +446,7 @@ impl Player {
         // MediaFile." It works here on GTK 4.22 and does nothing at all on the
         // 4.18 in the GNOME 48 flatpak runtime; `for_filename` works on both.
         let path = std::env::temp_dir().join(format!(
-            "mm-adw-{}.{}",
+            "matras-{}.{}",
             sanitised(&self.id),
             sanitised(&self.extension)
         ));

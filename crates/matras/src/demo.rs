@@ -1,6 +1,6 @@
 //! Sample data for looking at the layout without a server.
 //!
-//! Enabled with `MM_ADW_DEMO=1`. Nothing here touches the network; the
+//! Enabled with `MATRAS_DEMO=1`. Nothing here touches the network; the
 //! [`Client`] it builds points at a URL that does not resolve, and every
 //! request the UI makes against it fails harmlessly.
 

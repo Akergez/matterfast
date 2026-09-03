@@ -211,7 +211,7 @@ impl ChannelSidebar {
             .as_ref()
             .and_then(|id| st.teams.iter().find(|t| &t.id == id))
             .map(|t| t.display_name.clone())
-            .unwrap_or_else(|| "Mattermost".to_string());
+            .unwrap_or_else(|| "Matras".to_string());
         self.title.set_text(&team_name);
 
         for (category, channels) in groups {

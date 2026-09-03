@@ -33,7 +33,7 @@ fn path() -> PathBuf {
 
 /// What the keyring item is labelled and keyed by. The attributes are the
 /// lookup key, so they have to be stable across versions.
-const LABEL: &str = "Mattermost session token";
+const LABEL: &str = "Matras session token";
 
 fn attributes() -> std::collections::HashMap<&'static str, &'static str> {
     std::collections::HashMap::from([("application", crate::APP_ID), ("type", "session")])
@@ -200,7 +200,7 @@ mod tests {
     #[test]
     fn round_trips_and_is_not_readable_by_anyone_else() {
         // `path()` follows XDG, so point it somewhere disposable.
-        let dir = std::env::temp_dir().join(format!("mm-adw-session-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("matras-session-test-{}", std::process::id()));
         // SAFETY: single-threaded test, before any other thread reads the env.
         unsafe { std::env::set_var("XDG_CONFIG_HOME", &dir) };
 

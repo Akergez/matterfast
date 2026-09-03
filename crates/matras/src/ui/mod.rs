@@ -396,9 +396,9 @@ enum Action {
 }
 
 pub fn build_window(app: &adw::Application) {
-    // `MM_ADW_SIZE=400x800` opens at a phone-sized window, which is the only
+    // `MATRAS_SIZE=400x800` opens at a phone-sized window, which is the only
     // practical way to look at the collapsed layout without a phone.
-    let (width, height) = std::env::var("MM_ADW_SIZE")
+    let (width, height) = std::env::var("MATRAS_SIZE")
         .ok()
         .and_then(|s| {
             let (w, h) = s.split_once('x')?;
@@ -408,7 +408,7 @@ pub fn build_window(app: &adw::Application) {
 
     let window = adw::ApplicationWindow::builder()
         .application(app)
-        .title("Mattermost")
+        .title("Matras")
         .default_width(width)
         .default_height(height)
         .width_request(360)
@@ -419,7 +419,7 @@ pub fn build_window(app: &adw::Application) {
     window.set_content(Some(&toast_overlay));
 
     // A layout-only mode, so the panes can be reviewed without a server.
-    if std::env::var_os("MM_ADW_DEMO").is_some() {
+    if std::env::var_os("MATRAS_DEMO").is_some() {
         start_demo(&window, &toast_overlay);
         window.present();
         screenshot_and_quit(&window);
@@ -430,9 +430,9 @@ pub fn build_window(app: &adw::Application) {
     // environment. Handy against a local server, and how the UI gets exercised
     // end to end without a human typing.
     if let (Ok(url), Ok(login_id), Ok(password)) = (
-        std::env::var("MM_ADW_SERVER"),
-        std::env::var("MM_ADW_USER"),
-        std::env::var("MM_ADW_PASSWORD"),
+        std::env::var("MATRAS_SERVER"),
+        std::env::var("MATRAS_USER"),
+        std::env::var("MATRAS_PASSWORD"),
     ) {
         if let Ok(client) = mattermost_api::Client::new(&url) {
             let window_ = window.clone();
@@ -592,7 +592,7 @@ fn start_session(
 }
 
 /// Shows the UI filled with sample data, for looking at the layout without a
-/// server. Enabled with `MM_ADW_DEMO=1`.
+/// server. Enabled with `MATRAS_DEMO=1`.
 pub fn start_demo(window: &adw::ApplicationWindow, toasts: &adw::ToastOverlay) {
     let state = crate::demo::state();
     let ui = build_session_ui(window, toasts, state);
@@ -4453,7 +4453,7 @@ impl Ui {
         if self.loading_older.get() {
             if chat::scroll_trace_enabled() {
                 tracing::info!(
-                    target: "mm_adw::scroll",
+                    target: "matras::scroll",
                     event = "pagination-suppressed",
                     reason = "already-loading",
                     "scroll trace"
@@ -4472,7 +4472,7 @@ impl Ui {
             if feed.at_oldest {
                 if chat::scroll_trace_enabled() {
                     tracing::info!(
-                        target: "mm_adw::scroll",
+                        target: "matras::scroll",
                         event = "pagination-suppressed",
                         reason = "at-oldest",
                         channel_id,
@@ -4490,7 +4490,7 @@ impl Ui {
         self.loading_older.set(true);
         if chat::scroll_trace_enabled() {
             tracing::info!(
-                target: "mm_adw::scroll",
+                target: "matras::scroll",
                 event = "pagination-request",
                 channel_id,
                 oldest,
@@ -4512,7 +4512,7 @@ impl Ui {
                 let Ok((channel_id, posts, authors, statuses)) = result else {
                     if chat::scroll_trace_enabled() {
                         tracing::warn!(
-                            target: "mm_adw::scroll",
+                            target: "matras::scroll",
                             event = "pagination-error",
                             "scroll trace"
                         );
@@ -4523,7 +4523,7 @@ impl Ui {
                 };
                 if chat::scroll_trace_enabled() {
                     tracing::info!(
-                        target: "mm_adw::scroll",
+                        target: "matras::scroll",
                         event = "pagination-response",
                         channel_id,
                         posts = posts.posts.len(),
@@ -4972,9 +4972,9 @@ impl Ui {
     fn refresh_title(&self) {
         let mentions = self.state.borrow().total_mentions();
         self.window.set_title(Some(&if mentions > 0 {
-            format!("({mentions}) Mattermost")
+            format!("({mentions}) Matras")
         } else {
-            "Mattermost".to_string()
+            "Matras".to_string()
         }));
     }
 
@@ -7213,13 +7213,13 @@ fn resync(ui: &Rc<Ui>) {
     );
 }
 
-/// `MM_ADW_SCREENSHOT=out.png` renders the window to a file and exits.
+/// `MATRAS_SCREENSHOT=out.png` renders the window to a file and exits.
 ///
 /// Wayland will not let anything screenshot another process's window, but a
 /// window can always paint itself. Used for the README shots and to eyeball a
 /// layout change without a human clicking through demo mode.
 fn screenshot_and_quit(window: &adw::ApplicationWindow) {
-    let Some(path) = std::env::var_os("MM_ADW_SCREENSHOT") else {
+    let Some(path) = std::env::var_os("MATRAS_SCREENSHOT") else {
         return;
     };
     let window = window.clone();

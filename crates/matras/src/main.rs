@@ -30,7 +30,7 @@ use gtk::gio;
 
 use background::Background;
 
-pub const APP_ID: &str = "ru.toxblh.MattermostAdw";
+pub const APP_ID: &str = "ru.toxblh.Matras";
 
 thread_local! {
     /// The live hold, if the app is currently running windowless. It has to
@@ -43,7 +43,7 @@ fn main() -> gtk::glib::ExitCode {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                "mm_adw=debug,mattermost_api=debug,mattermost_calls=debug".into()
+                "matras=debug,mattermost_api=debug,mattermost_calls=debug".into()
             }),
         )
         .init();
@@ -61,7 +61,7 @@ fn main() -> gtk::glib::ExitCode {
     // Profiling and screenshot runs need an isolated second process without
     // stealing activation from the person's live client. This is deliberately
     // opt-in: normal launches retain the single-instance contract.
-    if std::env::var_os("MM_ADW_NON_UNIQUE").is_some() {
+    if std::env::var_os("MATRAS_NON_UNIQUE").is_some() {
         flags |= gio::ApplicationFlags::NON_UNIQUE;
     }
     let app = adw::Application::builder()

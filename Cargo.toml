@@ -1,14 +1,14 @@
 [workspace]
 resolver = "2"
-members = ["crates/mattermost-api", "crates/mattermost-calls", "crates/mm-adw", "crates/mm-testserver"]
+members = ["crates/mattermost-api", "crates/mattermost-calls", "crates/matras", "crates/matras-testserver"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.85"
-license = "MIT"
+license = "GPL-3.0-only"
 authors = ["Anton Palgunov <toxblh@gmail.com>"]
-repository = "https://github.com/toxblh/mattermost-adw"
+repository = "https://github.com/toxblh/matras"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

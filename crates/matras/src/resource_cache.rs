@@ -290,7 +290,7 @@ mod tests {
 
     fn cache(name: &str, limit: u64) -> ResourceCache {
         let dir = std::env::temp_dir().join(format!(
-            "mm-adw-resource-cache-{}-{name}",
+            "matras-resource-cache-{}-{name}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&dir);

@@ -1,5 +1,5 @@
 [package]
-name = "mm-testserver"
+name = "matras-testserver"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -2517,6 +2517,45 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
+name = "matras"
+version = "0.1.0"
+dependencies = [
+ "ashpd",
+ "async-channel",
+ "cpal",
+ "emojis",
+ "gstreamer",
+ "gstreamer-app",
+ "gstreamer-video",
+ "gtk4",
+ "libadwaita",
+ "mattermost-api",
+ "mattermost-calls",
+ "oo7",
+ "opus",
+ "pulldown-cmark",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "matras-testserver"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "futures-util",
+ "image",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "mattermost-api"
 version = "0.1.0"
 dependencies = [
@@ -2635,45 +2674,6 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "mm-adw"
-version = "0.1.0"
-dependencies = [
- "ashpd",
- "async-channel",
- "cpal",
- "emojis",
- "gstreamer",
- "gstreamer-app",
- "gstreamer-video",
- "gtk4",
- "libadwaita",
- "mattermost-api",
- "mattermost-calls",
- "oo7",
- "opus",
- "pulldown-cmark",
- "rusqlite",
- "serde",
- "serde_json",
- "thiserror 2.0.20",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "mm-testserver"
-version = "0.1.0"
-dependencies = [
- "axum",
- "futures-util",
- "image",
- "serde",
- "serde_json",
- "tokio",
 ]
 
 [[package]]

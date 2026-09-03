@@ -8,7 +8,7 @@
 //! actually sends.
 //!
 //! ```sh
-//! cargo run -p mm-testserver           # listens on 127.0.0.1:8065
+//! cargo run -p matras-testserver           # listens on 127.0.0.1:8065
 //! ```
 //!
 //! Log in with any username and password. A background "colleague" posts every

@@ -118,7 +118,7 @@ mod tests {
     #[test]
     fn round_trips_and_defaults_to_on() {
         let dir =
-            std::env::temp_dir().join(format!("mm-adw-background-test-{}", std::process::id()));
+            std::env::temp_dir().join(format!("matras-background-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         // `path()` follows XDG, so point it somewhere disposable.
         // SAFETY: single-threaded test, before any other thread reads the env.

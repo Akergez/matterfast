@@ -2,7 +2,7 @@
 //!
 //! ```sh
 //! MM_INSECURE_TLS=1 RUST_LOG=debug \
-//!   cargo run -p mm-adw --example callprobe -- [channel_id] [seconds] [camera]
+//!   cargo run -p matras --example callprobe -- [channel_id] [seconds] [camera]
 //! ```
 //!
 //! A third argument of `camera` also turns the webcam on for the run.
@@ -158,7 +158,7 @@ fn credentials() -> Result<(String, String), Box<dyn std::error::Error>> {
     let path = format!(
         "{}/.config/{}/session.json",
         std::env::var("HOME")?,
-        mm_adw_app_id()
+        matras_app_id()
     );
     let saved: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path)?)?;
     Ok((
@@ -173,6 +173,6 @@ fn credentials() -> Result<(String, String), Box<dyn std::error::Error>> {
     ))
 }
 
-fn mm_adw_app_id() -> &'static str {
-    "ru.toxblh.MattermostAdw"
+fn matras_app_id() -> &'static str {
+    "ru.toxblh.Matras"
 }

@@ -17,7 +17,7 @@ use crate::ui::message::{self, MessageActions, RowOptions};
 pub(super) fn scroll_trace_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
-        std::env::var("MM_ADW_SCROLL_TRACE")
+        std::env::var("MATRAS_SCROLL_TRACE")
             .is_ok_and(|value| matches!(value.as_str(), "1" | "true" | "yes" | "on"))
     })
 }
@@ -444,7 +444,7 @@ impl ChatView {
             messages.connect_items_changed(move |model, position, removed, added| {
                 if scroll_trace_enabled() {
                     tracing::info!(
-                        target: "mm_adw::scroll",
+                        target: "matras::scroll",
                         event = "model-items-changed",
                         position,
                         removed,
@@ -479,7 +479,7 @@ impl ChatView {
                     };
                     let timings = clock.current_timings();
                     tracing::trace!(
-                        target: "mm_adw::scroll",
+                        target: "matras::scroll",
                         event = "frame-after-paint",
                         frame = clock.frame_counter(),
                         frame_time_us = frame_time,
@@ -535,7 +535,7 @@ impl ChatView {
 
                 if scroll_trace_enabled() {
                     tracing::info!(
-                        target: "mm_adw::scroll",
+                        target: "matras::scroll",
                         event = "adjustment-value-changed",
                         value = adj.value(),
                         upper = adj.upper(),
@@ -567,7 +567,7 @@ impl ChatView {
         scroller.vadjustment().connect_changed(|adj| {
             if scroll_trace_enabled() {
                 tracing::info!(
-                    target: "mm_adw::scroll",
+                    target: "matras::scroll",
                     event = "adjustment-bounds-changed",
                     value = adj.value(),
                     upper = adj.upper(),
@@ -740,7 +740,7 @@ impl ChatView {
                     // The upload path takes paths, so the pasted image lands
                     // in a temp file that the OS cleans up.
                     let path = std::env::temp_dir()
-                        .join(format!("mm-adw-paste-{}.png", glib::monotonic_time()));
+                        .join(format!("matras-paste-{}.png", glib::monotonic_time()));
                     if let Err(e) = texture.save_to_png(&path) {
                         tracing::warn!(error = %e, "could not save the pasted image");
                         return;
@@ -1229,7 +1229,7 @@ impl ChatView {
         }
         if scroll_trace_enabled() {
             tracing::warn!(
-                target: "mm_adw::scroll",
+                target: "matras::scroll",
                 event = "programmatic-scroll-to",
                 reason = "explicit-post-navigation",
                 post_id,
@@ -1315,7 +1315,7 @@ impl ChatView {
         };
         if scroll_trace_enabled() {
             tracing::warn!(
-                target: "mm_adw::scroll",
+                target: "matras::scroll",
                 event = "programmatic-scroll-to",
                 reason = "restore-saved-anchor",
                 post_id,
@@ -1362,7 +1362,7 @@ impl ChatView {
     pub fn set_loading_older(&self, loading: bool) {
         if scroll_trace_enabled() {
             tracing::info!(
-                target: "mm_adw::scroll",
+                target: "matras::scroll",
                 event = "older-loading-indicator",
                 loading,
                 "scroll trace"
@@ -1430,7 +1430,7 @@ impl ChatView {
         if scroll_trace_enabled() {
             let adjustment = self.message_list.vadjustment();
             tracing::info!(
-                target: "mm_adw::scroll",
+                target: "matras::scroll",
                 event = "feed-splice",
                 old_items = old.len(),
                 new_items = items.len(),
@@ -1475,7 +1475,7 @@ impl ChatView {
             .collect();
         if scroll_trace_enabled() && !affected.is_empty() {
             tracing::info!(
-                target: "mm_adw::scroll",
+                target: "matras::scroll",
                 event = "resource-rows-refresh",
                 key,
                 rows = affected.len(),
@@ -1586,7 +1586,7 @@ impl ChatView {
         if *self.pinned_to_bottom.borrow() {
             if scroll_trace_enabled() {
                 tracing::warn!(
-                    target: "mm_adw::scroll",
+                    target: "matras::scroll",
                     event = "programmatic-scroll-to",
                     reason = "live-append-while-pinned",
                     post_id = post.id,
@@ -1742,7 +1742,7 @@ impl ChatView {
         );
         if scroll_trace_enabled() {
             tracing::info!(
-                target: "mm_adw::scroll",
+                target: "matras::scroll",
                 event = "feed-refresh",
                 channel_id,
                 same_channel,
@@ -1763,7 +1763,7 @@ impl ChatView {
             // cannot and left a freshly-opened channel at its oldest message.
             if scroll_trace_enabled() {
                 tracing::warn!(
-                    target: "mm_adw::scroll",
+                    target: "matras::scroll",
                     event = "programmatic-scroll-to",
                     reason = if same_channel {
                         "same-channel-refresh-while-pinned"

@@ -3,7 +3,7 @@ use mattermost_api::Client;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cfg: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(
-        std::env::var("HOME").unwrap() + "/.config/ru.toxblh.MattermostAdw/session.json",
+        std::env::var("HOME").unwrap() + "/.config/ru.toxblh.Matras/session.json",
     )?)?;
     let c = Client::new(cfg["server"].as_str().unwrap())?;
     c.set_token(cfg["token"].as_str().unwrap().to_string());

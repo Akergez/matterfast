@@ -1,4 +1,4 @@
-# mattermost-adw
+# Matras
 
 A native Mattermost client for GNOME — GTK4 + libadwaita, in Rust.
 
@@ -10,8 +10,8 @@ Four crates:
 |---|---|
 | `mattermost-api` | Async Mattermost client: REST v4, models, and a reliable WebSocket with replay-aware reconnect. No GTK dependency. |
 | `mattermost-calls` | The Mattermost Calls wire protocol and a WebRTC peer (webrtc-rs). No GTK dependency. |
-| `mm-adw` | The application: an adaptive libadwaita window. |
-| `mm-testserver` | A fake Mattermost, real enough to exercise the client end to end. Dev-only. |
+| `matras` | The application: an adaptive libadwaita window. |
+| `matras-testserver` | A fake Mattermost, real enough to exercise the client end to end. Dev-only. |
 
 The two library crates are deliberately independent of the UI — they are usable
 for a bot, a CLI, or a different front end.
@@ -121,11 +121,11 @@ handles the scheme. A packaged build gets this for free. From a source tree:
 
 ```sh
 cargo build
-sed "s|^Exec=mm-adw|Exec=$PWD/target/debug/mm-adw|" \
-  data/ru.toxblh.MattermostAdw.desktop \
-  > ~/.local/share/applications/ru.toxblh.MattermostAdw.desktop
+sed "s|^Exec=matras|Exec=$PWD/target/debug/matras|" \
+  data/ru.toxblh.Matras.desktop \
+  > ~/.local/share/applications/ru.toxblh.Matras.desktop
 update-desktop-database ~/.local/share/applications
-xdg-mime default ru.toxblh.MattermostAdw.desktop x-scheme-handler/mattermost-dev
+xdg-mime default ru.toxblh.Matras.desktop x-scheme-handler/mattermost-dev
 ```
 
 The scheme is `mattermost-dev`, not `mattermost`, so nothing collides with the
@@ -148,28 +148,28 @@ cargo test --workspace
 Run it:
 
 ```sh
-./target/release/mm-adw
+./target/release/matras
 ```
 
 To look at the layout without a server:
 
 ```sh
-MM_ADW_DEMO=1 ./target/release/mm-adw
+MATRAS_DEMO=1 ./target/release/matras
 ```
 
 ## Testing against a server
 
-`mm-testserver` is a fake Mattermost with real state: it hands out real ids,
+`matras-testserver` is a fake Mattermost with real state: it hands out real ids,
 serves avatars, keeps threads and reactions, and pushes the same websocket
 events the real server does — including the double-encoded payloads and the
 inconsistent key casing, because reproducing those is the point.
 
 ```sh
-cargo run -p mm-testserver          # 127.0.0.1:8065, logs every request
+cargo run -p matras-testserver          # 127.0.0.1:8065, logs every request
 
-MM_ADW_SERVER=http://127.0.0.1:8065 \
-MM_ADW_USER=anton MM_ADW_PASSWORD=test \
-  cargo run -p mm-adw               # skips the sign-in form
+MATRAS_SERVER=http://127.0.0.1:8065 \
+MATRAS_USER=anton MATRAS_PASSWORD=test \
+  cargo run -p matras               # skips the sign-in form
 ```
 
 A background "colleague" posts every 12 seconds (`MM_BOT_SECONDS` to change it)
@@ -226,4 +226,8 @@ including several behaviours that fail *silently* if you get them wrong.
 
 ## Licence
 
-MIT.
+GPL-3.0-only. See `LICENSE`.
+
+Matras is an independent client. It is not affiliated with, endorsed by, or
+sponsored by Mattermost, Inc.; "Mattermost" is used only to name the server
+protocol it speaks.
