@@ -1800,7 +1800,7 @@ impl Write for HashWriter<'_> {
 /// Everything that changes one rendered post, reduced to one value while the
 /// item is built. JSON is streamed straight into the hasher, so even complex
 /// Mattermost props and metadata allocate no intermediate Vec/String.
-fn post_revision(post: &Post, state: &SharedState) -> u64 {
+pub(super) fn post_revision(post: &Post, state: &SharedState) -> u64 {
     let mut hash = DefaultHasher::new();
     let _ = serde_json::to_writer(HashWriter(&mut hash), post);
     let st = state.borrow();

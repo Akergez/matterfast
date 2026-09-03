@@ -4,7 +4,8 @@
 //! worth copying — the two are alternatives, never side by side, and sharing
 //! one surface keeps the window from growing a fifth column.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::rc::Rc;
 
 use adw::prelude::*;
@@ -13,6 +14,7 @@ use mattermost_api::models::{Millis, Post};
 
 use crate::avatars::Avatars;
 use crate::state::{ChannelFeed, SharedState};
+use crate::ui::chat::post_revision;
 use crate::ui::message::{self, MessageActions, RowOptions};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,6 +31,13 @@ pub enum PanelMode {
 pub struct RightPanel {
     pub widget: gtk::Box,
     mode: Rc<RefCell<PanelMode>>,
+    /// What is currently drawn, as one value. Every refresh of the message
+    /// surfaces reaches this panel, including the ones caused by a post in a
+    /// channel it is not showing — and a rebuild here destroys the row under
+    /// the pointer, so its hover highlight and action bar blink out until the
+    /// pointer moves again. Redrawing only when this changes is what stops
+    /// that.
+    drawn: Cell<Option<u64>>,
     title: gtk::Label,
     subtitle: gtk::Label,
     stack: gtk::Stack,
@@ -272,6 +281,7 @@ impl RightPanel {
         Rc::new(RightPanel {
             widget,
             mode: Rc::new(RefCell::new(PanelMode::Hidden)),
+            drawn: Cell::new(None),
             title,
             subtitle,
             stack,
@@ -297,7 +307,20 @@ impl RightPanel {
     }
 
     pub fn set_mode(&self, mode: PanelMode) {
+        if *self.mode.borrow() != mode {
+            self.drawn.set(None);
+        }
         *self.mode.borrow_mut() = mode;
+    }
+
+    /// Whether the panel already shows exactly this. Records the signature on
+    /// the way through, so the caller can simply return when it is true.
+    fn already_drawn(&self, signature: u64) -> bool {
+        if self.drawn.get() == Some(signature) {
+            return true;
+        }
+        self.drawn.set(Some(signature));
+        false
     }
 
     pub fn focus_composer(&self) {
@@ -354,6 +377,20 @@ impl RightPanel {
         avatars: &Avatars,
         actions: &MessageActions,
     ) {
+        let signature = {
+            let st = state.borrow();
+            let mut hash = DefaultHasher::new();
+            terms.hash(&mut hash);
+            st.searching.hash(&mut hash);
+            for post in &st.search_results {
+                post_revision(post, state).hash(&mut hash);
+            }
+            hash.finish()
+        };
+        if self.already_drawn(signature) {
+            return;
+        }
+
         self.stack.set_visible_child_name("search");
         clear(&self.search_list);
         self.title.set_text("Search");
@@ -433,9 +470,6 @@ impl RightPanel {
         avatars: &Avatars,
         actions: &MessageActions,
     ) {
-        self.stack.set_visible_child_name("thread");
-        clear(&self.thread_list);
-
         let st = state.borrow();
         let channel_title = st
             .threads
@@ -446,6 +480,30 @@ impl RightPanel {
             .unwrap_or_default();
         drop(st);
 
+        let signature = {
+            let st = state.borrow();
+            let mut hash = DefaultHasher::new();
+            root_id.hash(&mut hash);
+            channel_title.hash(&mut hash);
+            match st.threads.get(root_id) {
+                Some(feed) => {
+                    for post in &feed.posts {
+                        post_revision(post, state).hash(&mut hash);
+                    }
+                }
+                None => match st.find_post(root_id) {
+                    Some(root) => post_revision(root, state).hash(&mut hash),
+                    None => "loading".hash(&mut hash),
+                },
+            }
+            hash.finish()
+        };
+        if self.already_drawn(signature) {
+            return;
+        }
+
+        self.stack.set_visible_child_name("thread");
+        clear(&self.thread_list);
         self.title.set_text("Thread");
         self.follow.set_visible(true);
         self.subtitle.set_text(&channel_title);
@@ -537,6 +595,37 @@ impl RightPanel {
     }
 
     fn render_inbox(&self, state: &SharedState, avatars: &Avatars) {
+        let signature = {
+            let st = state.borrow();
+            let mut hash = DefaultHasher::new();
+            for post in &st.mentions {
+                post_revision(post, state).hash(&mut hash);
+            }
+            // Saved posts are gathered from every feed on the fly, so the
+            // signature has to walk the same ground the render does.
+            for post in st
+                .feeds
+                .values()
+                .chain(st.threads.values())
+                .flat_map(|feed| feed.posts.iter())
+                .filter(|post| st.saved_posts.contains(&post.id))
+            {
+                post_revision(post, state).hash(&mut hash);
+            }
+            for thread in &st.thread_inbox {
+                thread.id.hash(&mut hash);
+                thread.reply_count.hash(&mut hash);
+                thread.last_reply_at.hash(&mut hash);
+                thread.unread_replies.hash(&mut hash);
+                thread.unread_mentions.hash(&mut hash);
+                thread.is_following.hash(&mut hash);
+            }
+            hash.finish()
+        };
+        if self.already_drawn(signature) {
+            return;
+        }
+
         self.stack.set_visible_child_name("inbox");
         self.follow.set_visible(false);
         self.title.set_text("Inbox");
