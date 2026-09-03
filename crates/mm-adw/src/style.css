@@ -109,6 +109,15 @@
   color: @destructive_fg_color;
 }
 
+/* GTK gives every list view the `.view` style class, which Adwaita paints in
+   @view_bg_color — a shade lighter than the window. With margins around the
+   list that reads as an inset panel floating under the header instead of as
+   the conversation itself. The list is not a document view: let the window
+   background through. */
+.message-list {
+  background: none;
+}
+
 /* One message. Consecutive messages from the same author are drawn "grouped":
    no avatar, no repeated name. */
 .message-list > row {
