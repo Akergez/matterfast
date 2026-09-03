@@ -1,7 +1,10 @@
 //! Pane 3: the conversation — header, call banner, message list, composer.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::io::Write;
 use std::rc::Rc;
+use std::sync::OnceLock;
 
 use adw::prelude::*;
 use gtk::glib;
@@ -10,6 +13,14 @@ use mattermost_api::models::{Millis, Post};
 use crate::avatars::Avatars;
 use crate::state::SharedState;
 use crate::ui::message::{self, MessageActions, RowOptions};
+
+pub(super) fn scroll_trace_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("MM_ADW_SCROLL_TRACE")
+            .is_ok_and(|value| matches!(value.as_str(), "1" | "true" | "yes" | "on"))
+    })
+}
 
 /// Everything the conversation pane reports back to the action loop. A struct
 /// rather than nine positional closures: at that count the compiler stops
@@ -27,12 +38,19 @@ pub struct ChatCallbacks {
     pub on_inbox: Box<dyn Fn()>,
 }
 
+/// Post id paired with the widget drawing it, weakly held.
+type VisiblePosts = Rc<RefCell<Vec<(String, glib::WeakRef<gtk::Widget>)>>>;
+
 pub struct ChatView {
     pub widget: adw::ToolbarView,
     title: gtk::Label,
     subtitle: gtk::Label,
-    messages: gtk::Box,
-    scroller: gtk::ScrolledWindow,
+    messages: gtk::gio::ListStore,
+    message_list: gtk::ListView,
+    /// Realised message widgets, weakly held so GtkListView remains free to
+    /// recycle them. Used to save a stable post id at 30% of the viewport.
+    visible_posts: VisiblePosts,
+    render_context: Rc<RefCell<Option<RenderContext>>>,
     entry: gtk::TextView,
     call_button: gtk::Button,
     inbox_button: gtk::Button,
@@ -47,15 +65,19 @@ pub struct ChatView {
     call_banner_label: gtk::Label,
     join_button: gtk::Button,
     stack: gtk::Stack,
+    /// Runs only while the first page is visibly loading. A permanently
+    /// spinning child keeps GTK's frame clock alive even after Stack hides it.
+    loading_spinner: gtk::Spinner,
     /// Which channel the feed currently holds, so a redraw can tell itself
     /// apart from a channel switch.
     showing: RefCell<Option<String>>,
     /// Shown instead of an empty feed while the first page is in flight, so a
     /// slow channel reads as loading rather than as empty.
     loading: Rc<RefCell<bool>>,
-    /// The spinner at the top of the feed while the page before this one is
-    /// being fetched. Kept so it can be taken back out again.
-    older_spinner: RefCell<Option<gtk::Box>>,
+    /// Overlay shown while the page before this one is fetched. It must not be
+    /// a model row: inserting/removing a loading row would itself move the
+    /// scroll coordinate the reader is asking us to preserve.
+    older_spinner: gtk::Spinner,
     connection: adw::Banner,
     typing: gtk::Label,
     attachments: gtk::Box,
@@ -68,6 +90,159 @@ pub struct ChatView {
     /// False while the reader is scrolled up in history, so live messages do
     /// not yank them back to the bottom.
     pinned_to_bottom: Rc<RefCell<bool>>,
+    /// Edge-trigger for history pagination. A physical approach to the top
+    /// produces one request, not one request per high-resolution scroll tick.
+    pagination_armed: Rc<Cell<bool>>,
+}
+
+#[derive(Clone)]
+struct RenderContext {
+    state: SharedState,
+    avatars: Avatars,
+    actions: MessageActions,
+}
+
+/// A cheap data item in the feed. `GtkListView` turns only the visible
+/// screenful into widgets and recycles those widgets while scrolling.
+#[derive(Clone)]
+enum FeedItem {
+    Start(String),
+    Empty,
+    Day(String),
+    Unread,
+    System(Rc<Vec<Post>>),
+    Post {
+        post: Rc<Post>,
+        grouped: bool,
+        highlight: bool,
+        /// Computed once while the data item is built. Diffing the common
+        /// suffix then compares integers instead of serialising every old and
+        /// new Post again for every comparison.
+        revision: u64,
+    },
+}
+
+impl FeedItem {
+    fn post_id(&self) -> Option<&str> {
+        match self {
+            FeedItem::Post { post, .. } => Some(&post.id),
+            _ => None,
+        }
+    }
+
+    fn uses_resource(&self, key: &str) -> bool {
+        let matches = |post: &Post| {
+            if let Some(file_id) = key
+                .strip_prefix("file:")
+                .or_else(|| key.strip_prefix("preview:"))
+                .or_else(|| key.strip_prefix("video-head:"))
+            {
+                return post.file_ids.iter().any(|id| id == file_id)
+                    || post.files().iter().any(|file| file.id == file_id);
+            }
+            if let Some(name) = key.strip_prefix("emoji:") {
+                return post.message.contains(&format!(":{name}:"));
+            }
+            false
+        };
+        match self {
+            FeedItem::Post { post, .. } => matches(post),
+            FeedItem::System(posts) => posts.iter().any(matches),
+            _ => false,
+        }
+    }
+
+    /// Reactions are part of the serialised post, so they invalidate a row
+    /// even when Mattermost leaves `update_at` untouched.
+    fn fingerprint(&self) -> u64 {
+        let mut hash = DefaultHasher::new();
+        match self {
+            FeedItem::Start(title) => {
+                0u8.hash(&mut hash);
+                title.hash(&mut hash);
+            }
+            FeedItem::Empty => 1u8.hash(&mut hash),
+            FeedItem::Day(day) => {
+                3u8.hash(&mut hash);
+                day.hash(&mut hash);
+            }
+            FeedItem::Unread => 4u8.hash(&mut hash),
+            FeedItem::System(posts) => {
+                5u8.hash(&mut hash);
+                serde_json::to_vec(posts.as_ref())
+                    .unwrap_or_default()
+                    .hash(&mut hash);
+            }
+            FeedItem::Post {
+                post,
+                grouped,
+                highlight,
+                revision,
+            } => {
+                6u8.hash(&mut hash);
+                grouped.hash(&mut hash);
+                highlight.hash(&mut hash);
+                post.id.hash(&mut hash);
+                revision.hash(&mut hash);
+            }
+        }
+        hash.finish()
+    }
+}
+
+fn model_item(store: &gtk::gio::ListStore, position: u32) -> Option<FeedItem> {
+    store
+        .item(position)?
+        .downcast::<glib::BoxedAnyObject>()
+        .ok()
+        .map(|boxed| boxed.borrow::<FeedItem>().clone())
+}
+
+fn render_item(item: &FeedItem, context: &RenderContext) -> gtk::Widget {
+    match item {
+        FeedItem::Start(title) => start_label(title),
+        FeedItem::Empty => adw::StatusPage::builder()
+            .icon_name("chat-message-new-symbolic")
+            .title("No messages yet")
+            .description("Say something to get started.")
+            .vexpand(true)
+            .build()
+            .upcast(),
+        FeedItem::Day(day) => message::day_separator(day),
+        FeedItem::Unread => message::unread_line(),
+        FeedItem::System(posts) => {
+            let refs: Vec<&Post> = posts.iter().collect();
+            let block = gtk::Box::builder()
+                .orientation(gtk::Orientation::Vertical)
+                .spacing(2)
+                .build();
+            for row in message::system_block(&refs, &context.state, &context.actions) {
+                block.append(&row);
+            }
+            block.upcast()
+        }
+        FeedItem::Post {
+            post,
+            grouped,
+            highlight,
+            ..
+        } => {
+            let row = message::build(
+                post,
+                &context.state,
+                &context.avatars,
+                &context.actions,
+                RowOptions {
+                    grouped: *grouped,
+                    show_thread_footer: true,
+                },
+            );
+            if *highlight {
+                row.add_css_class("message-highlight");
+            }
+            row
+        }
+    }
 }
 
 impl ChatView {
@@ -191,38 +366,216 @@ impl ChatView {
         call_banner.append(&join_button);
 
         // --- messages
-        let messages = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(2)
-            .margin_top(12)
-            .margin_bottom(12)
-            .margin_start(12)
-            .margin_end(12)
-            .valign(gtk::Align::End)
-            .vexpand(true)
-            .build();
+        let messages = gtk::gio::ListStore::new::<glib::BoxedAnyObject>();
+        let render_context: Rc<RefCell<Option<RenderContext>>> = Rc::new(RefCell::new(None));
+        let visible_posts = Rc::new(RefCell::new(Vec::new()));
+        let factory = gtk::SignalListItemFactory::new();
+        factory.connect_bind({
+            let render_context = render_context.clone();
+            let visible_posts = visible_posts.clone();
+            move |_, object| {
+                let list_item = object
+                    .downcast_ref::<gtk::ListItem>()
+                    .expect("factory must receive GtkListItem");
+                let Some(item) = list_item.item().and_downcast::<glib::BoxedAnyObject>() else {
+                    return;
+                };
+                let Some(context) = render_context.borrow().clone() else {
+                    return;
+                };
+                list_item.set_selectable(false);
+                list_item.set_activatable(false);
+                let item = item.borrow::<FeedItem>();
+                let post_id = item.post_id().map(str::to_owned);
+                let child = render_item(&item, &context);
+                child.set_hexpand(true);
+                if let Some(post_id) = post_id {
+                    visible_posts
+                        .borrow_mut()
+                        .push((post_id, child.downgrade()));
+                }
+                list_item.set_child(Some(&child));
+            }
+        });
+        factory.connect_unbind(|_, object| {
+            object
+                .downcast_ref::<gtk::ListItem>()
+                .expect("factory must receive GtkListItem")
+                .set_child(gtk::Widget::NONE)
+        });
+
+        let selection = gtk::NoSelection::new(Some(messages.clone()));
+        let message_list = gtk::ListView::new(Some(selection), Some(factory));
+        message_list.add_css_class("message-list");
+        message_list.set_single_click_activate(false);
+        message_list.set_tab_behavior(gtk::ListTabBehavior::Item);
+        // A virtual list needs the full viewport to decide what is visible.
+        // Align::End constrains it to a small natural allocation, clipping
+        // both rows and long lines instead of merely bottom-aligning content.
+        message_list.set_valign(gtk::Align::Fill);
+        message_list.set_vexpand(true);
+        message_list.set_hexpand(true);
+        message_list.set_show_separators(false);
+        message_list.set_margin_top(12);
+        message_list.set_margin_bottom(12);
+        message_list.set_margin_start(12);
+        message_list.set_margin_end(12);
 
         let scroller = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
             .vexpand(true)
-            .child(&messages)
+            // It must be the direct child or it cannot tell which rows are
+            // off-screen and therefore recyclable.
+            .child(&message_list)
             .build();
+        let older_spinner = gtk::Spinner::builder()
+            .halign(gtk::Align::Center)
+            .valign(gtk::Align::Start)
+            .margin_top(8)
+            .visible(false)
+            .build();
+        let scroll_overlay = gtk::Overlay::new();
+        scroll_overlay.set_vexpand(true);
+        scroll_overlay.set_child(Some(&scroller));
+        scroll_overlay.add_overlay(&older_spinner);
+
+        {
+            let adjustment = scroller.vadjustment();
+            messages.connect_items_changed(move |model, position, removed, added| {
+                if scroll_trace_enabled() {
+                    tracing::info!(
+                        target: "mm_adw::scroll",
+                        event = "model-items-changed",
+                        position,
+                        removed,
+                        added,
+                        items = model.n_items(),
+                        value = adjustment.value(),
+                        upper = adjustment.upper(),
+                        page_size = adjustment.page_size(),
+                        "scroll trace"
+                    );
+                }
+            });
+        }
+
+        {
+            let traced = Rc::new(Cell::new(false));
+            message_list.connect_map(move |widget| {
+                if !scroll_trace_enabled() || traced.replace(true) {
+                    return;
+                }
+                let Some(clock) = widget.frame_clock() else {
+                    return;
+                };
+                let previous_time = Rc::new(Cell::new(0i64));
+                clock.connect_after_paint(move |clock| {
+                    let frame_time = clock.frame_time();
+                    let previous = previous_time.replace(frame_time);
+                    let delta_us = if previous == 0 {
+                        0
+                    } else {
+                        frame_time.saturating_sub(previous)
+                    };
+                    let timings = clock.current_timings();
+                    tracing::trace!(
+                        target: "mm_adw::scroll",
+                        event = "frame-after-paint",
+                        frame = clock.frame_counter(),
+                        frame_time_us = frame_time,
+                        delta_us,
+                        refresh_interval_us = timings
+                            .as_ref()
+                            .map(|timings| timings.refresh_interval())
+                            .unwrap_or_default(),
+                        presentation_time_us = timings
+                            .as_ref()
+                            .map(|timings| timings.presentation_time())
+                            .unwrap_or_default(),
+                        predicted_presentation_time_us = timings
+                            .as_ref()
+                            .map(|timings| timings.predicted_presentation_time())
+                            .unwrap_or_default(),
+                        "scroll trace"
+                    );
+                });
+            });
+        }
 
         let pinned_to_bottom = Rc::new(RefCell::new(true));
+        let pagination_armed = Rc::new(Cell::new(true));
         {
             let pinned = pinned_to_bottom.clone();
+            let pin_candidate = Rc::new(Cell::new(false));
+            let pagination_armed = pagination_armed.clone();
             scroller.vadjustment().connect_value_changed(move |adj| {
+                let was_pinned = *pinned.borrow();
                 let at_bottom = adj.value() + adj.page_size() >= adj.upper() - 32.0;
-                *pinned.borrow_mut() = at_bottom;
+                if !at_bottom {
+                    *pinned.borrow_mut() = false;
+                    pin_candidate.set(false);
+                } else if !was_pinned && !pin_candidate.replace(true) {
+                    // A virtual list can report the exact bottom briefly while
+                    // it re-estimates row heights. Accept it only if it stays
+                    // there, otherwise a transient layout poisons live-edge
+                    // state and the next post yanks history to the bottom.
+                    let adjustment = adj.clone();
+                    let pinned = pinned.clone();
+                    let pin_candidate = pin_candidate.clone();
+                    glib::timeout_add_local_once(std::time::Duration::from_millis(80), move || {
+                        if !pin_candidate.replace(false) {
+                            return;
+                        }
+                        if adjustment.value() + adjustment.page_size() >= adjustment.upper() - 32.0
+                        {
+                            *pinned.borrow_mut() = true;
+                        }
+                    });
+                }
 
-                // Reaching the top asks for the page before this one. The
-                // threshold is a screenful rather than zero, so the next page
-                // is usually already there by the time it is needed.
-                if adj.value() <= adj.page_size() && adj.upper() > adj.page_size() {
+                if scroll_trace_enabled() {
+                    tracing::info!(
+                        target: "mm_adw::scroll",
+                        event = "adjustment-value-changed",
+                        value = adj.value(),
+                        upper = adj.upper(),
+                        page_size = adj.page_size(),
+                        was_pinned,
+                        at_bottom,
+                        near_history_start = adj.value() < adj.page_size() * 2.0,
+                        "scroll trace"
+                    );
+                }
+
+                if at_bottom || adj.value() > adj.page_size() * 3.0 {
+                    pagination_armed.set(true);
+                }
+                // This deliberately mirrors Fractal: observe GTK's scroll
+                // state without installing a competing gesture controller or
+                // writing Adjustment.value. The latch makes the threshold
+                // edge-triggered while preserving GTK's kinetic scrolling.
+                if !at_bottom
+                    && pagination_armed.get()
+                    && adj.value() < adj.page_size() * 2.0
+                    && adj.upper() > adj.page_size()
+                {
+                    pagination_armed.set(false);
                     on_scrollback();
                 }
             });
         }
+        scroller.vadjustment().connect_changed(|adj| {
+            if scroll_trace_enabled() {
+                tracing::info!(
+                    target: "mm_adw::scroll",
+                    event = "adjustment-bounds-changed",
+                    value = adj.value(),
+                    upper = adj.upper(),
+                    page_size = adj.page_size(),
+                    "scroll trace"
+                );
+            }
+        });
 
         // --- composer
         let entry = gtk::TextView::builder()
@@ -481,7 +834,7 @@ impl ChatView {
             .build();
         conversation.append(&connection);
         conversation.append(&call_banner);
-        conversation.append(&scroller);
+        conversation.append(&scroll_overlay);
         conversation.append(&edit_banner);
         conversation.append(&typing);
         conversation.append(&attachments);
@@ -499,8 +852,6 @@ impl ChatView {
             .width_request(32)
             .height_request(32)
             .build();
-        spinner.start();
-
         let stack = gtk::Stack::new();
         stack.add_named(&placeholder, Some("empty"));
         stack.add_named(&spinner, Some("loading"));
@@ -546,7 +897,9 @@ impl ChatView {
             title,
             subtitle,
             messages,
-            scroller,
+            message_list,
+            visible_posts,
+            render_context,
             entry,
             call_button,
             inbox_button,
@@ -555,6 +908,7 @@ impl ChatView {
             call_banner_label,
             join_button,
             stack,
+            loading_spinner: spinner,
             complete,
             priority_action,
             agent_button,
@@ -565,10 +919,11 @@ impl ChatView {
             editing,
             restoring,
             showing: RefCell::new(None),
-            older_spinner: RefCell::new(None),
+            older_spinner,
             loading: Rc::new(RefCell::new(false)),
             connection,
             pinned_to_bottom,
+            pagination_armed,
         }
     }
 
@@ -848,84 +1203,289 @@ impl ChatView {
     /// highlights it. Returns false when that message is not on screen — the
     /// caller then knows it has to fetch further back first.
     pub fn scroll_to_post(&self, post_id: &str) -> bool {
-        let mut child = self.messages.first_child();
-        while let Some(row) = child {
-            let matches = unsafe { row.data::<String>("post-id") }
-                .map(|id| unsafe { id.as_ref() } == post_id)
-                .unwrap_or(false);
-            if matches {
-                // The allocation is not final until the frame is laid out, so
-                // the scroll waits for it rather than aiming at zero.
-                let scroller = self.scroller.clone();
-                let target = row.clone();
-                glib::idle_add_local_once(move || {
-                    if let Some(bounds) = target.compute_bounds(&scroller) {
-                        let adjustment = scroller.vadjustment();
-                        let middle = adjustment.value() + bounds.y() as f64
-                            - (adjustment.page_size() - bounds.height() as f64) / 2.0;
-                        adjustment.set_value(middle.max(0.0));
-                    }
-                });
-                row.add_css_class("message-highlight");
-                let fading = row.clone();
-                glib::timeout_add_local_once(std::time::Duration::from_secs(2), move || {
-                    fading.remove_css_class("message-highlight");
-                });
+        let Some(position) = (0..self.messages.n_items()).find(|&position| {
+            model_item(&self.messages, position)
+                .and_then(|i| i.post_id().map(str::to_owned))
+                .as_deref()
+                == Some(post_id)
+        }) else {
+            return false;
+        };
+
+        if let Some(FeedItem::Post {
+            post,
+            grouped,
+            revision,
+            ..
+        }) = model_item(&self.messages, position)
+        {
+            let replacement = glib::BoxedAnyObject::new(FeedItem::Post {
+                post,
+                grouped,
+                highlight: true,
+                revision,
+            });
+            self.messages.splice(position, 1, &[replacement]);
+        }
+        if scroll_trace_enabled() {
+            tracing::warn!(
+                target: "mm_adw::scroll",
+                event = "programmatic-scroll-to",
+                reason = "explicit-post-navigation",
+                post_id,
+                position,
+                "scroll trace"
+            );
+        }
+        self.message_list
+            .scroll_to(position, gtk::ListScrollFlags::FOCUS, None);
+
+        let model = self.messages.clone();
+        let id = post_id.to_string();
+        glib::timeout_add_local_once(std::time::Duration::from_secs(2), move || {
+            let Some(position) = (0..model.n_items()).find(|&position| {
+                model_item(&model, position)
+                    .and_then(|i| i.post_id().map(str::to_owned))
+                    .as_deref()
+                    == Some(id.as_str())
+            }) else {
+                return;
+            };
+            if let Some(FeedItem::Post {
+                post,
+                grouped,
+                revision,
+                ..
+            }) = model_item(&model, position)
+            {
+                model.splice(
+                    position,
+                    1,
+                    &[glib::BoxedAnyObject::new(FeedItem::Post {
+                        post,
+                        grouped,
+                        highlight: false,
+                        revision,
+                    })],
+                );
+            }
+        });
+        true
+    }
+
+    /// The stable item currently crossing 30% of the viewport. Returning a
+    /// post id rather than pixels makes the position survive fonts, window
+    /// width and late media layout.
+    pub fn current_anchor(&self) -> Option<(String, Option<String>)> {
+        let channel_id = self.showing.borrow().clone()?;
+        if *self.pinned_to_bottom.borrow() {
+            return Some((channel_id, None));
+        }
+        let target_y = self.message_list.height() as f32 * 0.30;
+        let mut best: Option<(String, f32)> = None;
+        self.visible_posts.borrow_mut().retain(|(post_id, weak)| {
+            let Some(widget) = weak.upgrade() else {
+                return false;
+            };
+            if !widget.is_mapped() {
                 return true;
             }
-            child = row.next_sibling();
+            if let Some(bounds) = widget.compute_bounds(&self.message_list) {
+                let distance = (bounds.y() - target_y).abs();
+                if best.as_ref().is_none_or(|(_, old)| distance < *old) {
+                    best = Some((post_id.clone(), distance));
+                }
+            }
+            true
+        });
+        Some((channel_id, best.map(|(post_id, _)| post_id)))
+    }
+
+    /// Restores a saved post and then aligns its top to 30% of the viewport.
+    /// This is an explicit navigation operation, not pagination compensation;
+    /// normal kinetic scrolling never writes Adjustment.value.
+    pub fn restore_anchor(&self, post_id: &str) -> bool {
+        let Some(position) = (0..self.messages.n_items()).find(|&position| {
+            model_item(&self.messages, position)
+                .and_then(|item| item.post_id().map(str::to_owned))
+                .as_deref()
+                == Some(post_id)
+        }) else {
+            return false;
+        };
+        if scroll_trace_enabled() {
+            tracing::warn!(
+                target: "mm_adw::scroll",
+                event = "programmatic-scroll-to",
+                reason = "restore-saved-anchor",
+                post_id,
+                position,
+                "scroll trace"
+            );
         }
-        false
+        self.message_list
+            .scroll_to(position, gtk::ListScrollFlags::NONE, None);
+
+        let wanted = post_id.to_string();
+        let rows = self.visible_posts.clone();
+        let Some(adjustment) = self.message_list.vadjustment() else {
+            return false;
+        };
+        let attempts = Rc::new(Cell::new(0u8));
+        self.message_list.add_tick_callback(move |list, _| {
+            attempts.set(attempts.get() + 1);
+            let widget = rows
+                .borrow()
+                .iter()
+                .find_map(|(post_id, weak)| (post_id == &wanted).then(|| weak.upgrade()).flatten());
+            if let Some(widget) = widget {
+                if let Some(bounds) = widget.compute_bounds(list) {
+                    let target = list.height() as f64 * 0.30;
+                    let value = adjustment.value() + bounds.y() as f64 - target;
+                    let maximum = (adjustment.upper() - adjustment.page_size()).max(0.0);
+                    adjustment.set_value(value.clamp(0.0, maximum));
+                    return glib::ControlFlow::Break;
+                }
+            }
+            if attempts.get() >= 8 {
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
+            }
+        });
+        true
     }
 
     /// Says, at the top of the feed, that the page before this one is on its
     /// way. Without it a scrollback that takes a moment looks like the start
     /// of the channel.
     pub fn set_loading_older(&self, loading: bool) {
-        let mut slot = self.older_spinner.borrow_mut();
-        if !loading {
-            // `prepend_older` may have taken it out already, along with the
-            // rest of the stale decoration above the first row.
-            if let Some(row) = slot.take() {
-                if row.parent().as_ref() == Some(self.messages.upcast_ref::<gtk::Widget>()) {
-                    self.messages.remove(&row);
-                }
-            }
-            return;
+        if scroll_trace_enabled() {
+            tracing::info!(
+                target: "mm_adw::scroll",
+                event = "older-loading-indicator",
+                loading,
+                "scroll trace"
+            );
         }
-        if slot.is_some() {
-            return;
+        if loading {
+            self.older_spinner.set_visible(true);
+            self.older_spinner.start();
+        } else {
+            self.older_spinner.stop();
+            self.older_spinner.set_visible(false);
         }
-        let row = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .halign(gtk::Align::Center)
-            .margin_top(8)
-            .margin_bottom(8)
-            .build();
-        // adw::Spinner needs libadwaita 1.6; GTK's own works everywhere.
-        let spinner = gtk::Spinner::new();
-        spinner.start();
-        row.append(&spinner);
-        self.messages.prepend(&row);
-        *slot = Some(row);
     }
 
-    /// How far the feed is scrolled, and how tall it is. Used to keep the
-    /// reader looking at the same message when older ones are added above.
-    pub fn scroll_anchor(&self) -> (f64, f64) {
-        let adjustment = self.scroller.vadjustment();
-        (adjustment.value(), adjustment.upper())
+    /// A network error should be retryable on the next adjustment change even
+    /// if the reader is still close to the history edge.
+    pub fn retry_older_on_next_edge_change(&self) {
+        self.pagination_armed.set(true);
     }
 
-    /// Restores the view after older messages were prepended: whatever the
-    /// feed grew by, the scroll position moves down by the same amount. See
-    /// `after_relayout` for why this waits rather than reading `upper` here.
-    pub fn restore_scroll(&self, anchor: (f64, f64)) {
-        let adjustment = self.scroller.vadjustment();
-        let (value, previous_upper) = anchor;
-        after_relayout(&adjustment, previous_upper, move |adjustment| {
-            adjustment.set_value(value + (adjustment.upper() - previous_upper));
+    fn replace_feed(
+        &self,
+        items: Vec<FeedItem>,
+        state: &SharedState,
+        avatars: &Avatars,
+        actions: &MessageActions,
+    ) {
+        *self.render_context.borrow_mut() = Some(RenderContext {
+            state: state.clone(),
+            avatars: avatars.clone(),
+            actions: actions.clone(),
         });
+
+        let old_len = self.messages.n_items() as usize;
+        let old: Vec<FeedItem> = (0..old_len as u32)
+            .filter_map(|position| model_item(&self.messages, position))
+            .collect();
+
+        let mut prefix = 0usize;
+        while prefix < old.len()
+            && prefix < items.len()
+            && old[prefix].fingerprint() == items[prefix].fingerprint()
+        {
+            prefix += 1;
+        }
+        let mut suffix = 0usize;
+        while suffix < old.len().saturating_sub(prefix)
+            && suffix < items.len().saturating_sub(prefix)
+            && old[old.len() - 1 - suffix].fingerprint()
+                == items[items.len() - 1 - suffix].fingerprint()
+        {
+            suffix += 1;
+        }
+
+        let removed = old.len().saturating_sub(prefix + suffix);
+        let end = items.len().saturating_sub(suffix);
+        if removed == 0 && prefix == end {
+            return;
+        }
+        let additions: Vec<glib::BoxedAnyObject> = items[prefix..end]
+            .iter()
+            .cloned()
+            .map(glib::BoxedAnyObject::new)
+            .collect();
+        if scroll_trace_enabled() {
+            let adjustment = self.message_list.vadjustment();
+            tracing::info!(
+                target: "mm_adw::scroll",
+                event = "feed-splice",
+                old_items = old.len(),
+                new_items = items.len(),
+                prefix,
+                suffix,
+                removed,
+                added = additions.len(),
+                value = adjustment.as_ref().map(gtk::Adjustment::value),
+                upper = adjustment.as_ref().map(gtk::Adjustment::upper),
+                page_size = adjustment.as_ref().map(gtk::Adjustment::page_size),
+                "scroll trace"
+            );
+        }
+        self.messages
+            .splice(prefix as u32, removed as u32, &additions);
+    }
+
+    /// Rebinds only rows that use a newly-arrived non-avatar resource.
+    /// Avatars update their weakly registered widgets directly; file previews,
+    /// video heads and custom emoji need their containing row rebuilt because
+    /// they can change the row's widget shape.
+    pub fn refresh_resource(
+        &self,
+        key: &str,
+        state: &SharedState,
+        avatars: &Avatars,
+        actions: &MessageActions,
+    ) {
+        if !key.contains(':') {
+            return;
+        }
+        *self.render_context.borrow_mut() = Some(RenderContext {
+            state: state.clone(),
+            avatars: avatars.clone(),
+            actions: actions.clone(),
+        });
+        let affected: Vec<(u32, FeedItem)> = (0..self.messages.n_items())
+            .filter_map(|position| {
+                let item = model_item(&self.messages, position)?;
+                item.uses_resource(key).then_some((position, item))
+            })
+            .collect();
+        if scroll_trace_enabled() && !affected.is_empty() {
+            tracing::info!(
+                target: "mm_adw::scroll",
+                event = "resource-rows-refresh",
+                key,
+                rows = affected.len(),
+                "scroll trace"
+            );
+        }
+        for (position, item) in affected {
+            self.messages
+                .splice(position, 1, &[glib::BoxedAnyObject::new(item)]);
+        }
     }
 
     /// Adds the just-fetched older page to the top of the feed without
@@ -942,10 +1502,9 @@ impl ChatView {
     /// builds the new rows and splices them in.
     ///
     /// `merged` is the channel's full post list (oldest first) *after* the
-    /// new page was folded in, and `new_count` is how many posts at its front
-    /// are the ones this call adds — the same shape `refresh` itself already
-    /// works from, so a caller that already has the feed does not have to
-    /// reshape it to use this.
+    /// new page was folded in — the same shape `refresh` itself already works
+    /// from, so a caller that already has the feed does not have to reshape it
+    /// to use this.
     ///
     /// `at_oldest_title` carries both the "did this page reach the very
     /// start of the channel" flag and the name that goes on the label if so
@@ -954,103 +1513,20 @@ impl ChatView {
     pub fn prepend_older(
         &self,
         merged: &[Post],
-        new_count: usize,
         at_oldest_title: Option<&str>,
         state: &SharedState,
         avatars: &Avatars,
         actions: &MessageActions,
+        restored: impl FnOnce() + 'static,
     ) {
-        if new_count == 0 {
-            return;
-        }
-        let new_posts = &merged[..new_count];
-
-        // Everything currently above the first real message row is a day
-        // separator or a system-event block decided back when that row was
-        // the start of everything we had. It no longer is, so it is stale —
-        // rebuilt below against the posts that now come before it. A real
-        // row is the only kind of widget `message::build` tags with an id.
-        let mut child = self.messages.first_child();
-        while let Some(widget) = child {
-            if unsafe { widget.data::<String>("post-id") }.is_some() {
-                break;
-            }
-            let next = widget.next_sibling();
-            self.messages.remove(&widget);
-            child = next;
-        }
-
+        // Keep the existing ListStore objects and let GtkListView retain its
+        // own scroll anchor across the prefix splice. Do not intercept smooth
+        // scrolling or write Adjustment.value here: both fight GTK's kinetic
+        // scrolling and can turn one gesture into a jump through the new page.
         let crt = state.borrow().crt_enabled;
-        let mut prefix: Vec<gtk::Widget> = Vec::new();
-        if let Some(title) = at_oldest_title {
-            prefix.push(start_label(title));
-        }
-
-        let mut last_author: Option<String> = None;
-        let mut last_at: Millis = 0;
-        let mut last_day: Option<String> = None;
-        let mut system_run: Vec<&Post> = Vec::new();
-
-        for post in new_posts {
-            if post.is_deleted() || (crt && post.is_reply()) {
-                continue;
-            }
-
-            let day = message::format_day(post.create_at);
-            if last_day.as_deref() != Some(day.as_str()) {
-                prefix.extend(message::system_block(&system_run, state, actions));
-                system_run.clear();
-                prefix.push(message::day_separator(&day));
-                last_day = Some(day);
-                last_author = None;
-            }
-
-            if post.is_system() {
-                system_run.push(post);
-                last_author = None;
-                continue;
-            }
-
-            prefix.extend(message::system_block(&system_run, state, actions));
-            system_run.clear();
-
-            let author = state.borrow().author_name(post);
-            let grouped = last_author.as_deref() == Some(author.as_str())
-                && post.create_at - last_at < message::GROUPING_WINDOW_MS;
-            prefix.push(message::build(
-                post,
-                state,
-                avatars,
-                actions,
-                RowOptions {
-                    grouped,
-                    show_thread_footer: true,
-                },
-            ));
-            last_author = Some(author);
-            last_at = post.create_at;
-        }
-
-        // ponytail: a trailing system run here that turns out to combine with
-        // the old block's first post (also a system event) draws as two rows
-        // instead of one merged sentence — cosmetic, and gone the next time
-        // this channel gets a full `refresh` (e.g. leaving and coming back).
-        prefix.extend(message::system_block(&system_run, state, actions));
-
-        // The seam: a day boundary the old block could not have known about,
-        // since when it was drawn it believed it was the first thing here.
-        if let Some(old_first) = merged.get(new_count) {
-            let day = message::format_day(old_first.create_at);
-            if last_day.as_deref() != Some(day.as_str()) {
-                prefix.push(message::day_separator(&day));
-            }
-        }
-
-        let mut anchor: Option<gtk::Widget> = None;
-        for widget in prefix {
-            self.messages.insert_child_after(&widget, anchor.as_ref());
-            anchor = Some(widget);
-        }
+        let items = build_feed_items(merged, state, crt, None, at_oldest_title);
+        self.replace_feed(items, state, avatars, actions);
+        restored();
     }
 
     /// Appends a just-arrived post as one row, instead of rebuilding the
@@ -1074,44 +1550,55 @@ impl ChatView {
             return false;
         }
 
-        // The trailing widget has to be an actual message row — a day
-        // separator, a system block, or the empty/loading placeholder means
-        // there is nothing sound to append after.
-        let Some(prev_id) = self
-            .messages
-            .last_child()
-            .and_then(|w| unsafe { w.data::<String>("post-id") })
-            .map(|p| unsafe { p.as_ref() }.clone())
+        let Some((
+            _,
+            FeedItem::Post {
+                post: prev_post, ..
+            },
+        )) = (0..self.messages.n_items()).rev().find_map(|position| {
+            model_item(&self.messages, position)
+                .and_then(|item| matches!(item, FeedItem::Post { .. }).then_some((position, item)))
+        })
         else {
             return false;
         };
-        let prev_post = state.borrow().post(&prev_id);
 
         let day = message::format_day(post.create_at);
-        let same_day = prev_post
-            .as_ref()
-            .is_some_and(|p| message::format_day(p.create_at) == day);
+        let same_day = message::format_day(prev_post.create_at) == day;
         if !same_day {
-            self.messages.append(&message::day_separator(&day));
+            self.messages
+                .append(&glib::BoxedAnyObject::new(FeedItem::Day(day)));
         }
 
-        self.messages.append(&message::build(
-            post,
-            state,
-            avatars,
-            actions,
-            RowOptions {
-                grouped: groups_with(prev_post.as_ref(), post, state),
-                show_thread_footer: true,
-            },
-        ));
+        *self.render_context.borrow_mut() = Some(RenderContext {
+            state: state.clone(),
+            avatars: avatars.clone(),
+            actions: actions.clone(),
+        });
+        self.messages
+            .append(&glib::BoxedAnyObject::new(FeedItem::Post {
+                post: Rc::new(post.clone()),
+                grouped: groups_with(Some(prev_post.as_ref()), post, state),
+                highlight: false,
+                revision: post_revision(post, state),
+            }));
 
         if *self.pinned_to_bottom.borrow() {
-            let adjustment = self.scroller.vadjustment();
-            // Not laid out yet — same one-frame wait `refresh` uses below.
-            glib::idle_add_local_once(move || {
-                adjustment.set_value(adjustment.upper() - adjustment.page_size());
-            });
+            if scroll_trace_enabled() {
+                tracing::warn!(
+                    target: "mm_adw::scroll",
+                    event = "programmatic-scroll-to",
+                    reason = "live-append-while-pinned",
+                    post_id = post.id,
+                    position = self.messages.n_items().saturating_sub(1),
+                    "scroll trace"
+                );
+            }
+            self.message_list.scroll_to(
+                self.messages.n_items().saturating_sub(1),
+                gtk::ListScrollFlags::NONE,
+                None,
+            );
         }
         true
     }
@@ -1128,33 +1615,37 @@ impl ChatView {
         avatars: &Avatars,
         actions: &MessageActions,
     ) -> bool {
-        let mut child = self.messages.first_child();
-        while let Some(row) = child {
-            let matches = unsafe { row.data::<String>("post-id") }
-                .map(|id| unsafe { id.as_ref() } == &post.id)
-                .unwrap_or(false);
-            if matches {
-                let prev_post = row
-                    .prev_sibling()
-                    .and_then(|w| unsafe { w.data::<String>("post-id") })
-                    .and_then(|id| state.borrow().post(unsafe { id.as_ref() }));
-                let built = message::build(
-                    post,
-                    state,
-                    avatars,
-                    actions,
-                    RowOptions {
-                        grouped: groups_with(prev_post.as_ref(), post, state),
-                        show_thread_footer: true,
-                    },
-                );
-                self.messages.insert_child_after(&built, Some(&row));
-                self.messages.remove(&row);
-                return true;
-            }
-            child = row.next_sibling();
-        }
-        false
+        let Some(position) = (0..self.messages.n_items()).find(|&position| {
+            model_item(&self.messages, position)
+                .and_then(|item| item.post_id().map(str::to_owned))
+                .as_deref()
+                == Some(post.id.as_str())
+        }) else {
+            return false;
+        };
+        let prev_post = (0..position)
+            .rev()
+            .filter_map(|at| model_item(&self.messages, at))
+            .find_map(|item| match item {
+                FeedItem::Post { post, .. } => Some(post),
+                _ => None,
+            });
+        *self.render_context.borrow_mut() = Some(RenderContext {
+            state: state.clone(),
+            avatars: avatars.clone(),
+            actions: actions.clone(),
+        });
+        self.messages.splice(
+            position,
+            1,
+            &[glib::BoxedAnyObject::new(FeedItem::Post {
+                post: Rc::new(post.clone()),
+                grouped: groups_with(prev_post.as_deref(), post, state),
+                highlight: false,
+                revision: post_revision(post, state),
+            })],
+        );
+        true
     }
 
     /// Drops the row for a deleted post, if it is on screen. The post itself
@@ -1163,17 +1654,13 @@ impl ChatView {
     /// have nothing left under it after this is a small cosmetic leftover,
     /// gone on the next full `refresh` (a channel switch, for instance).
     pub fn remove_post(&self, post_id: &str) {
-        let mut child = self.messages.first_child();
-        while let Some(row) = child {
-            let matches = unsafe { row.data::<String>("post-id") }
-                .map(|id| unsafe { id.as_ref() } == post_id)
-                .unwrap_or(false);
-            let next = row.next_sibling();
-            if matches {
-                self.messages.remove(&row);
-                return;
-            }
-            child = next;
+        if let Some(position) = (0..self.messages.n_items()).find(|&position| {
+            model_item(&self.messages, position)
+                .and_then(|item| item.post_id().map(str::to_owned))
+                .as_deref()
+                == Some(post_id)
+        }) {
+            self.messages.remove(position);
         }
     }
 
@@ -1189,12 +1676,14 @@ impl ChatView {
         let Some(channel_id) = st.current_channel.clone() else {
             drop(st);
             self.set_inbox_count(inbox_count);
+            self.loading_spinner.stop();
             self.stack.set_visible_child_name("empty");
             return;
         };
         let Some(channel) = st.channel(&channel_id).cloned() else {
             drop(st);
             self.set_inbox_count(inbox_count);
+            self.loading_spinner.stop();
             self.stack.set_visible_child_name("empty");
             return;
         };
@@ -1203,6 +1692,11 @@ impl ChatView {
         // with no posts and nothing in flight is genuinely empty.
         let waiting =
             *self.loading.borrow() && st.feeds.get(&channel_id).is_none_or(|f| f.posts.is_empty());
+        if waiting {
+            self.loading_spinner.start();
+        } else {
+            self.loading_spinner.stop();
+        }
         self.stack
             .set_visible_child_name(if waiting { "loading" } else { "conversation" });
         self.title.set_text(&st.channel_title(&channel));
@@ -1219,12 +1713,14 @@ impl ChatView {
             .filter(|_| st.unread(&channel_id).is_unread())
             .and_then(|m| m.last_viewed_at)
             .filter(|at| *at > 0);
-        let mut unread_drawn = false;
-
         // Whether this is a redraw of what is already on screen, as opposed
         // to arriving in a different channel — the scroll position is only
         // worth keeping in the first case.
         let same_channel = self.showing.borrow().as_deref() == Some(channel_id.as_str());
+        if !same_channel {
+            *self.pinned_to_bottom.borrow_mut() = true;
+            self.pagination_armed.set(true);
+        }
         *self.showing.borrow_mut() = Some(channel_id.clone());
 
         let empty = crate::state::ChannelFeed::default();
@@ -1237,170 +1733,164 @@ impl ChatView {
         drop(st);
 
         self.set_inbox_count(inbox_count);
-
-        while let Some(child) = self.messages.first_child() {
-            self.messages.remove(&child);
-        }
-
-        // Only claim "this is the start" when we actually hold the oldest
-        // block; otherwise there is simply more history we have not paged in.
-        if at_oldest && !posts.is_empty() {
-            self.messages.append(&start_label(&channel_title));
-        }
-
-        if posts.is_empty() {
-            self.messages.append(
-                &adw::StatusPage::builder()
-                    .icon_name("chat-message-new-symbolic")
-                    .title("No messages yet")
-                    .description("Say something to get started.")
-                    .vexpand(true)
-                    .build(),
+        let items = build_feed_items(
+            &posts,
+            state,
+            crt,
+            unread_since,
+            at_oldest.then_some(channel_title.as_str()),
+        );
+        if scroll_trace_enabled() {
+            tracing::info!(
+                target: "mm_adw::scroll",
+                event = "feed-refresh",
+                channel_id,
+                same_channel,
+                at_latest,
+                pinned = *self.pinned_to_bottom.borrow(),
+                posts = posts.len(),
+                model_items = self.messages.n_items(),
+                "scroll trace"
             );
         }
-
-        let mut last_author: Option<String> = None;
-        let mut last_at: Millis = 0;
-        let mut last_day: Option<String> = None;
-        // System posts are buffered rather than drawn as they arrive: a run
-        // of joins/leaves/adds/removes only turns into its combined row (see
-        // `message::system_block`) once it is known to be complete, i.e. the
-        // next thing is not another system post.
-        let mut system_run: Vec<&Post> = Vec::new();
-
-        for post in &posts {
-            if post.is_deleted() {
-                continue;
-            }
-            // Belt and braces: under CRT a reply must never reach the channel
-            // feed, and a server that sends one anyway should not break the
-            // reading order.
-            if crt && post.is_reply() {
-                continue;
-            }
-
-            // The line where reading stopped last time. Drawn once, above
-            // the first message newer than the last view — which is what
-            // makes "what did I miss" answerable without counting.
-            if let Some(at) = unread_since {
-                if post.create_at > at && !unread_drawn {
-                    for widget in message::system_block(&system_run, state, actions) {
-                        self.messages.append(&widget);
-                    }
-                    system_run.clear();
-                    self.messages.append(&message::unread_line());
-                    unread_drawn = true;
-                }
-            }
-
-            let day = message::format_day(post.create_at);
-            if last_day.as_deref() != Some(day.as_str()) {
-                // A run does not span a day boundary, or a join from
-                // yesterday would read as having just happened.
-                for widget in message::system_block(&system_run, state, actions) {
-                    self.messages.append(&widget);
-                }
-                system_run.clear();
-                self.messages.append(&message::day_separator(&day));
-                last_day = Some(day);
-                last_author = None;
-            }
-
-            if post.is_system() {
-                system_run.push(post);
-                last_author = None;
-                continue;
-            }
-
-            for widget in message::system_block(&system_run, state, actions) {
-                self.messages.append(&widget);
-            }
-            system_run.clear();
-
-            let author = state.borrow().author_name(post);
-            let grouped = last_author.as_deref() == Some(author.as_str())
-                && post.create_at - last_at < message::GROUPING_WINDOW_MS;
-
-            self.messages.append(&message::build(
-                post,
-                state,
-                avatars,
-                actions,
-                RowOptions {
-                    grouped,
-                    show_thread_footer: true,
-                },
-            ));
-            last_author = Some(author);
-            last_at = post.create_at;
-        }
-        for widget in message::system_block(&system_run, state, actions) {
-            self.messages.append(&widget);
-        }
+        self.replace_feed(items, state, avatars, actions);
 
         // Scrolling to the bottom only makes sense when the bottom is the
         // newest message; in a history block it would jump into the past.
         if at_latest && *self.pinned_to_bottom.borrow() {
-            let adjustment = self.scroller.vadjustment();
-            let previous_upper = adjustment.upper();
-            after_relayout(&adjustment, previous_upper, |adjustment| {
-                adjustment.set_value(adjustment.upper() - adjustment.page_size());
-            });
-        } else if same_channel {
-            // Reading somewhere up the history and something redrew the feed —
-            // a reaction, an edit, a message arriving below. Every row was
-            // rebuilt, so the scroll position means nothing until the new rows
-            // are allocated; without putting it back, reacting to a message
-            // throws the reader somewhere else entirely.
-            let adjustment = self.scroller.vadjustment();
-            let keep = adjustment.value();
-            let was = adjustment.upper();
-            // Anchored to the *bottom*: rows are added below and above during
-            // a session, and the distance to the end is what the reader is
-            // actually looking at.
-            after_relayout(&adjustment, was, move |adjustment| {
-                let from_end = (was - keep).max(0.0);
-                adjustment.set_value((adjustment.upper() - from_end).max(0.0));
-            });
+            // GtkListView owns deferred measurement of its virtual rows. Its
+            // position API can target an item before layout; adjustment.upper
+            // cannot and left a freshly-opened channel at its oldest message.
+            if scroll_trace_enabled() {
+                tracing::warn!(
+                    target: "mm_adw::scroll",
+                    event = "programmatic-scroll-to",
+                    reason = if same_channel {
+                        "same-channel-refresh-while-pinned"
+                    } else {
+                        "channel-open-at-latest"
+                    },
+                    channel_id,
+                    position = self.messages.n_items().saturating_sub(1),
+                    "scroll trace"
+                );
+            }
+            self.message_list.scroll_to(
+                self.messages.n_items().saturating_sub(1),
+                gtk::ListScrollFlags::NONE,
+                None,
+            );
         }
     }
 }
 
-/// Runs `apply` once the feed's scrollable height actually changes from
-/// `previous_upper`, instead of on whatever `changed` fires first.
-///
-/// `upper` only tells the truth once the rows just added or rebuilt have
-/// been laid out, which is a frame away — reading it right after the append
-/// gives the height from before, so a caller that acted immediately would be
-/// working from stale numbers. Worse, for a scrollback prepend specifically,
-/// landing at the wrong position reads as "still at the top", which asks for
-/// the page before this one again immediately, and again — that runaway is
-/// what made this app "not responding" in the first place.
-///
-/// `changed` is the adjustment saying its own bounds moved, but it can fire
-/// before the new layout has landed too; skipping calls where `upper` still
-/// matches the recorded baseline waits past those. One shot: the handler
-/// takes itself off once it acts. Shared by every place a message row gets
-/// added or rebuilt and the scroll position has to follow.
-fn after_relayout(
-    adjustment: &gtk::Adjustment,
-    previous_upper: f64,
-    apply: impl Fn(&gtk::Adjustment) + 'static,
-) {
-    let handler: Rc<RefCell<Option<glib::SignalHandlerId>>> = Rc::new(RefCell::new(None));
-    let id = adjustment.connect_changed({
-        let handler = handler.clone();
-        move |adjustment| {
-            if adjustment.upper() == previous_upper {
-                return;
-            }
-            apply(adjustment);
-            if let Some(id) = handler.borrow_mut().take() {
-                adjustment.disconnect(id);
-            }
+struct HashWriter<'a>(&'a mut DefaultHasher);
+
+impl Write for HashWriter<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.write(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Everything that changes one rendered post, reduced to one value while the
+/// item is built. JSON is streamed straight into the hasher, so even complex
+/// Mattermost props and metadata allocate no intermediate Vec/String.
+fn post_revision(post: &Post, state: &SharedState) -> u64 {
+    let mut hash = DefaultHasher::new();
+    let _ = serde_json::to_writer(HashWriter(&mut hash), post);
+    let st = state.borrow();
+    st.author_name(post).hash(&mut hash);
+    st.presence(&post.user_id).hash(&mut hash);
+    st.saved_posts.contains(&post.id).hash(&mut hash);
+    st.me.id.hash(&mut hash);
+    if let Some(status) = st
+        .users
+        .get(&post.user_id)
+        .and_then(|user| user.custom_status())
+    {
+        status.emoji.hash(&mut hash);
+        status.text.hash(&mut hash);
+        status.expires_at.hash(&mut hash);
+    }
+    hash.finish()
+}
+
+fn flush_system(run: &mut Vec<&Post>, items: &mut Vec<FeedItem>) {
+    if run.is_empty() {
+        return;
+    }
+    items.push(FeedItem::System(Rc::new(
+        run.iter().map(|post| (*post).clone()).collect(),
+    )));
+    run.clear();
+}
+
+fn build_feed_items(
+    posts: &[Post],
+    state: &SharedState,
+    crt: bool,
+    unread_since: Option<Millis>,
+    at_oldest_title: Option<&str>,
+) -> Vec<FeedItem> {
+    let mut items = Vec::with_capacity(posts.len() + 4);
+    if let Some(title) = at_oldest_title.filter(|_| !posts.is_empty()) {
+        items.push(FeedItem::Start(title.to_string()));
+    }
+    if posts.is_empty() {
+        items.push(FeedItem::Empty);
+        return items;
+    }
+
+    let mut unread_drawn = false;
+    let mut last_author: Option<String> = None;
+    let mut last_at: Millis = 0;
+    let mut last_day: Option<String> = None;
+    let mut system_run: Vec<&Post> = Vec::new();
+
+    for post in posts {
+        if post.is_deleted() || (crt && post.is_reply()) {
+            continue;
         }
-    });
-    *handler.borrow_mut() = Some(id);
+        if unread_since.is_some_and(|at| post.create_at > at) && !unread_drawn {
+            flush_system(&mut system_run, &mut items);
+            items.push(FeedItem::Unread);
+            unread_drawn = true;
+        }
+
+        let day = message::format_day(post.create_at);
+        if last_day.as_deref() != Some(day.as_str()) {
+            flush_system(&mut system_run, &mut items);
+            items.push(FeedItem::Day(day.clone()));
+            last_day = Some(day);
+            last_author = None;
+        }
+
+        if post.is_system() {
+            system_run.push(post);
+            last_author = None;
+            continue;
+        }
+
+        flush_system(&mut system_run, &mut items);
+        let author = state.borrow().author_name(post);
+        let grouped = last_author.as_deref() == Some(author.as_str())
+            && post.create_at.saturating_sub(last_at) < message::GROUPING_WINDOW_MS;
+        items.push(FeedItem::Post {
+            post: Rc::new(post.clone()),
+            grouped,
+            highlight: false,
+            revision: post_revision(post, state),
+        });
+        last_author = Some(author);
+        last_at = post.create_at;
+    }
+    flush_system(&mut system_run, &mut items);
+    items
 }
 
 /// The label marking the true start of a channel's history. Shared by a full

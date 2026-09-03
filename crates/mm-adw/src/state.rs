@@ -133,6 +133,9 @@ pub struct AppState {
     pub memberships: HashMap<String, ChannelMember>,
     pub categories: OrderedSidebarCategories,
     pub current_channel: Option<String>,
+    /// Per-channel stable message at roughly 30% of the viewport. Absence
+    /// means the reader left that channel at its live bottom.
+    pub scroll_anchors: HashMap<String, String>,
 
     pub users: HashMap<String, User>,
     pub statuses: HashMap<String, Presence>,
@@ -255,6 +258,7 @@ impl AppState {
             memberships: HashMap::new(),
             categories: OrderedSidebarCategories::default(),
             current_channel: None,
+            scroll_anchors: HashMap::new(),
             users,
             statuses: HashMap::new(),
             feeds: HashMap::new(),

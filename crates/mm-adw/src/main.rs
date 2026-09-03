@@ -15,6 +15,7 @@ mod cache;
 mod demo;
 mod emoji;
 mod markdown;
+mod resource_cache;
 mod runtime;
 mod session;
 mod state;
@@ -56,9 +57,16 @@ fn main() -> gtk::glib::ExitCode {
     // than the process failing visibly.
     mattermost_api::tls::install_crypto_provider();
 
+    let mut flags = gio::ApplicationFlags::HANDLES_OPEN;
+    // Profiling and screenshot runs need an isolated second process without
+    // stealing activation from the person's live client. This is deliberately
+    // opt-in: normal launches retain the single-instance contract.
+    if std::env::var_os("MM_ADW_NON_UNIQUE").is_some() {
+        flags |= gio::ApplicationFlags::NON_UNIQUE;
+    }
     let app = adw::Application::builder()
         .application_id(APP_ID)
-        .flags(gio::ApplicationFlags::HANDLES_OPEN)
+        .flags(flags)
         .build();
 
     app.connect_startup(|app| {

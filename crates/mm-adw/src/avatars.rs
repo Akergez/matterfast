@@ -14,9 +14,11 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
+use gtk::glib::object::ObjectExt;
 use gtk::{gdk, glib};
 use mattermost_api::Client;
 
+use crate::resource_cache::ResourceCache;
 use crate::runtime;
 
 #[derive(Default)]
@@ -36,6 +38,10 @@ struct Inner {
     /// What the textures add up to, kept as they go in and out rather than
     /// recomputed: the answer is wanted on every insert.
     held: usize,
+    /// Live avatar widgets waiting for, or currently showing, a user's
+    /// picture. Weak references keep virtualised rows recyclable: the cache
+    /// must never become the owner of a row that GtkListView has unbound.
+    avatar_widgets: HashMap<String, Vec<glib::WeakRef<adw::Avatar>>>,
 }
 
 /// What a decoded texture costs in memory: four bytes a pixel, whatever it
@@ -70,8 +76,9 @@ impl Inner {
     }
 }
 
-/// Fired on the GTK thread when a texture lands.
-type LoadedCallback = Rc<RefCell<Option<Box<dyn Fn()>>>>;
+/// Fired on the GTK thread when a resource lands. The key lets consumers
+/// invalidate one affected row instead of rebuilding every conversation.
+type LoadedCallback = Rc<RefCell<Option<Box<dyn Fn(&str)>>>>;
 
 /// Marks a cache key as a file thumbnail rather than a user's picture.
 const FILE_PREFIX: &str = "file:";
@@ -142,6 +149,7 @@ fn decode(id: &str, bytes: Vec<u8>) -> Result<gdk::Texture, glib::Error> {
 pub struct Avatars {
     inner: Rc<RefCell<Inner>>,
     client: Client,
+    resources: ResourceCache,
     /// Notifies the view that it should redraw. Debouncing is the caller's
     /// business.
     on_loaded: LoadedCallback,
@@ -149,14 +157,20 @@ pub struct Avatars {
 
 impl Avatars {
     pub fn new(client: Client) -> Self {
+        let resources = ResourceCache::open(client.site_url());
         Avatars {
             inner: Rc::new(RefCell::new(Inner::default())),
             client,
+            resources,
             on_loaded: Rc::new(RefCell::new(None)),
         }
     }
 
-    pub fn connect_loaded(&self, f: impl Fn() + 'static) {
+    pub(crate) fn resources(&self) -> ResourceCache {
+        self.resources.clone()
+    }
+
+    pub fn connect_loaded(&self, f: impl Fn(&str) + 'static) {
         *self.on_loaded.borrow_mut() = Some(Box::new(f));
     }
 
@@ -248,19 +262,37 @@ impl Avatars {
         avatar.set_show_initials(true);
         match self.texture(user_id) {
             Some(texture) => avatar.set_custom_image(Some(&texture)),
-            None => avatar.set_custom_image(gdk::Paintable::NONE),
+            None => {
+                avatar.set_custom_image(gdk::Paintable::NONE);
+                if !user_id.is_empty() {
+                    let mut inner = self.inner.borrow_mut();
+                    let widgets = inner.avatar_widgets.entry(user_id.to_string()).or_default();
+                    // A row may have been recycled since the last request.
+                    // Clear its dead weak reference before adding the new one.
+                    widgets.retain(|weak| weak.upgrade().is_some());
+                    widgets.push(avatar.downgrade());
+                }
+            }
         }
     }
 
     /// Drops a cached picture so the next request refetches — used when a
     /// user's `last_picture_update` moves.
     pub fn forget(&self, user_id: &str) {
-        let mut inner = self.inner.borrow_mut();
-        if let Some(texture) = inner.textures.remove(user_id) {
-            inner.held = inner.held.saturating_sub(texture_bytes(&texture));
+        {
+            let mut inner = self.inner.borrow_mut();
+            if let Some(texture) = inner.textures.remove(user_id) {
+                inner.held = inner.held.saturating_sub(texture_bytes(&texture));
+            }
+            inner.failed.remove(user_id);
+            inner.order.retain(|key| key != user_id);
         }
-        inner.failed.remove(user_id);
-        inner.order.retain(|key| key != user_id);
+        let resources = self.resources.clone();
+        let key = user_id.to_string();
+        runtime::runtime().spawn(async move { resources.remove(key).await });
+        // Existing widgets still show the old paintable. Fetch immediately;
+        // the weak widget list below will replace it in place when it lands.
+        self.request(user_id);
     }
 
     fn request(&self, user_id: &str) {
@@ -279,31 +311,48 @@ impl Avatars {
         }
 
         let client = self.client.clone();
+        let resources = self.resources.clone();
         let fetch_id = user_id.to_string();
         let done_id = user_id.to_string();
         let this = self.clone();
 
         runtime::spawn(
             async move {
-                if let Some(file_id) = fetch_id.strip_prefix(FILE_PREFIX) {
-                    return client.file_thumbnail_bytes(file_id).await;
-                }
-                if let Some(file_id) = fetch_id.strip_prefix(FILE_PREVIEW_PREFIX) {
-                    return client.file_preview_bytes(file_id).await;
-                }
-                if let Some(file_id) = fetch_id.strip_prefix(VIDEO_HEAD_PREFIX) {
-                    return client.download_file_range(file_id, VIDEO_HEAD_BYTES).await;
-                }
-                if let Some(name) = fetch_id.strip_prefix(EMOJI_PREFIX) {
-                    // Two calls: the name has to become an id before the image
-                    // can be asked for.
-                    let emoji = client.emoji_by_name(name).await?;
-                    return client.emoji_image_bytes(&emoji.id).await;
-                }
-                client.user_image_bytes(&fetch_id).await
+                let ttl = if fetch_id.starts_with(EMOJI_PREFIX)
+                    || (!fetch_id.contains(':') && !fetch_id.is_empty())
+                {
+                    // Names and profile pictures are mutable. A websocket
+                    // update invalidates them immediately while the app is
+                    // open; this bounds staleness across restarts.
+                    std::time::Duration::from_secs(24 * 60 * 60)
+                } else {
+                    // File ids identify immutable uploads.
+                    std::time::Duration::from_secs(30 * 24 * 60 * 60)
+                };
+                let cache_key = fetch_id.clone();
+                resources
+                    .get_or_fetch(cache_key, ttl, || async move {
+                        if let Some(file_id) = fetch_id.strip_prefix(FILE_PREFIX) {
+                            return client.file_thumbnail_bytes(file_id).await;
+                        }
+                        if let Some(file_id) = fetch_id.strip_prefix(FILE_PREVIEW_PREFIX) {
+                            return client.file_preview_bytes(file_id).await;
+                        }
+                        if let Some(file_id) = fetch_id.strip_prefix(VIDEO_HEAD_PREFIX) {
+                            return client.download_file_range(file_id, VIDEO_HEAD_BYTES).await;
+                        }
+                        if let Some(name) = fetch_id.strip_prefix(EMOJI_PREFIX) {
+                            let emoji = client.emoji_by_name(name).await?;
+                            return client.emoji_image_bytes(&emoji.id).await;
+                        }
+                        client.user_image_bytes(&fetch_id).await
+                    })
+                    .await
             },
             move |result| {
                 let mut loaded = false;
+                let mut avatar_widgets = Vec::new();
+                let mut loaded_texture = None;
                 {
                     let mut inner = this.inner.borrow_mut();
                     inner.pending.remove(&done_id);
@@ -312,7 +361,7 @@ impl Avatars {
                         // caller inspects and plays these, this cache just
                         // spares it a second fetch on the next redraw.
                         Ok(bytes) if done_id.starts_with(VIDEO_HEAD_PREFIX) => {
-                            inner.heads.insert(done_id, Rc::new(bytes));
+                            inner.heads.insert(done_id.clone(), Rc::new(bytes));
                             inner.trim();
                             loaded = true;
                         }
@@ -321,8 +370,18 @@ impl Avatars {
                                 Ok(texture) => {
                                     inner.held += texture_bytes(&texture);
                                     inner.order.push(done_id.clone());
-                                    if let Some(old) = inner.textures.insert(done_id, texture) {
+                                    if let Some(old) =
+                                        inner.textures.insert(done_id.clone(), texture.clone())
+                                    {
                                         inner.held = inner.held.saturating_sub(texture_bytes(&old));
+                                    }
+                                    loaded_texture = Some(texture);
+                                    if !done_id.contains(':') {
+                                        avatar_widgets = inner
+                                            .avatar_widgets
+                                            .get(&done_id)
+                                            .cloned()
+                                            .unwrap_or_default();
                                     }
                                     inner.trim();
                                     loaded = true;
@@ -340,7 +399,7 @@ impl Avatars {
                                 }
                                 Err(e) => {
                                     tracing::warn!(error = %e, "undecodable avatar image");
-                                    inner.failed.insert(done_id);
+                                    inner.failed.insert(done_id.clone());
                                 }
                             }
                         }
@@ -357,15 +416,22 @@ impl Avatars {
                         }
                         Err(e) => {
                             tracing::debug!(error = %e, "avatar fetch failed");
-                            inner.failed.insert(done_id);
+                            inner.failed.insert(done_id.clone());
                         }
                     }
                 }
                 // The borrow is released before the callback: it will almost
                 // certainly redraw, and redrawing reads this same map.
                 if loaded {
+                    if let Some(texture) = loaded_texture.as_ref() {
+                        for weak in avatar_widgets {
+                            if let Some(avatar) = weak.upgrade() {
+                                avatar.set_custom_image(Some(texture));
+                            }
+                        }
+                    }
                     if let Some(callback) = this.on_loaded.borrow().as_ref() {
-                        callback();
+                        callback(&done_id);
                     }
                 }
             },

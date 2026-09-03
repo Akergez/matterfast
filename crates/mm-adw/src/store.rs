@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use gtk::glib;
 use mattermost_api::models::{Channel, ChannelMember, Post, User};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::de::DeserializeOwned;
 use tokio::sync::Mutex;
 
@@ -219,6 +219,59 @@ impl Store {
         }
         posts.reverse();
         Ok(posts)
+    }
+
+    /// A cached window around one stable post, returned oldest first. The
+    /// anchor itself is included exactly once; ties use the post id just like
+    /// `posts()` so two messages sharing a millisecond remain deterministic.
+    pub async fn posts_around(
+        &self,
+        channel_id: &str,
+        post_id: &str,
+        before: usize,
+        after: usize,
+    ) -> Result<Vec<Post>, Error> {
+        let conn = self.conn.lock().await;
+        let anchor: Option<(i64, String)> = conn
+            .query_row(
+                "SELECT create_at, body FROM posts WHERE channel_id = ?1 AND id = ?2",
+                params![channel_id, post_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let Some((create_at, body)) = anchor else {
+            return Ok(Vec::new());
+        };
+
+        let mut older = Vec::new();
+        let mut stmt = conn.prepare_cached(
+            "SELECT body FROM posts WHERE channel_id = ?1
+             AND (create_at < ?2 OR (create_at = ?2 AND id < ?3))
+             ORDER BY create_at DESC, id DESC LIMIT ?4",
+        )?;
+        let rows = stmt.query_map(
+            params![channel_id, create_at, post_id, before as i64],
+            |row| row.get::<_, String>(0),
+        )?;
+        for row in rows {
+            older.push(serde_json::from_str(&row?)?);
+        }
+        older.reverse();
+        older.push(serde_json::from_str(&body)?);
+
+        let mut stmt = conn.prepare_cached(
+            "SELECT body FROM posts WHERE channel_id = ?1
+             AND (create_at > ?2 OR (create_at = ?2 AND id > ?3))
+             ORDER BY create_at ASC, id ASC LIMIT ?4",
+        )?;
+        let rows = stmt.query_map(
+            params![channel_id, create_at, post_id, after as i64],
+            |row| row.get::<_, String>(0),
+        )?;
+        for row in rows {
+            older.push(serde_json::from_str(&row?)?);
+        }
+        Ok(older)
     }
 
     /// Drops every post in a channel past the newest `keep_per_channel`, in

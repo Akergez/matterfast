@@ -9,7 +9,9 @@
 /* ── channel list ──────────────────────────────────────────────────────
    Adwaita paints a sidebar row edge to edge, which reads as a stack of cards
    once every row has an avatar in it. Fractal's answer, copied here: strip the
-   row itself and draw on its child instead, so the highlight is an inset pill.
+   row itself and draw on a background wrapper instead, so the highlight is an
+   inset pill. The content keeps its own breathing room inside that wrapper:
+   neighbouring highlights therefore stop 2px apart without moving anything.
    The row still owns the selection *state* — only the paint moves. */
 .channel-list > row {
   margin: 0;
@@ -24,23 +26,26 @@
   background: none;
 }
 
-.channel-list > row > box {
+.channel-list > row > .channel-row-background {
   margin: 1px 6px;
-  padding: 5px 8px;
   border-radius: 9px;
+}
+
+.channel-row-content {
+  padding: 5px 8px;
 }
 
 /* Mixed against the foreground rather than fixed greys, so the pill follows
    the light/dark theme and the contrast setting on its own. */
-.channel-list > row:hover > box {
+.channel-list > row:hover > .channel-row-background {
   background-color: color-mix(in srgb, currentColor 7%, transparent);
 }
 
-.channel-list > row:selected > box {
+.channel-list > row:selected > .channel-row-background {
   background-color: color-mix(in srgb, currentColor 10%, transparent);
 }
 
-.channel-list > row:selected:hover > box {
+.channel-list > row:selected:hover > .channel-row-background {
   background-color: color-mix(in srgb, currentColor 13%, transparent);
 }
 
@@ -106,6 +111,12 @@
 
 /* One message. Consecutive messages from the same author are drawn "grouped":
    no avatar, no repeated name. */
+.message-list > row {
+  padding: 0;
+  min-height: 0;
+  background: none;
+}
+
 .message-author {
   font-weight: bold;
 }

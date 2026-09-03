@@ -1,6 +1,7 @@
 //! The channel sidebar: an account/team switcher in the header, the list below.
 
 use std::cell::RefCell;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::rc::Rc;
 
 use adw::prelude::*;
@@ -30,6 +31,7 @@ pub struct ChannelSidebar {
     title: gtk::Label,
     switcher: Switcher,
     updating: Rc<RefCell<bool>>,
+    signature: std::cell::Cell<Option<u64>>,
 }
 
 impl ChannelSidebar {
@@ -111,6 +113,7 @@ impl ChannelSidebar {
         account_section.append(Some("Sign Out"), Some("win.sign-out"));
 
         let app_section = gtk::gio::Menu::new();
+        app_section.append(Some("Storage…"), Some("win.storage"));
         app_section.append(Some("Keep Running in Background"), Some("app.background"));
         app_section.append(Some("Quit"), Some("app.quit"));
         menu.append_section(None, &app_section);
@@ -171,6 +174,7 @@ impl ChannelSidebar {
             title,
             switcher,
             updating,
+            signature: std::cell::Cell::new(None),
         }
     }
 
@@ -181,6 +185,20 @@ impl ChannelSidebar {
     }
 
     pub fn refresh(&self, state: &SharedState, avatars: &Avatars) {
+        self.refresh_inner(state, avatars, false);
+    }
+
+    fn refresh_inner(&self, state: &SharedState, avatars: &Avatars, force: bool) {
+        let (groups, signature) = {
+            let st = state.borrow();
+            let groups = st.sidebar_groups();
+            let signature = sidebar_signature(&st, &groups);
+            (groups, signature)
+        };
+        if !force && self.signature.replace(Some(signature)) == Some(signature) {
+            return;
+        }
+        self.signature.set(Some(signature));
         self.switcher.refresh(state, avatars);
         *self.updating.borrow_mut() = true;
         while let Some(child) = self.list.first_child() {
@@ -196,7 +214,7 @@ impl ChannelSidebar {
             .unwrap_or_else(|| "Mattermost".to_string());
         self.title.set_text(&team_name);
 
-        for (category, channels) in st.sidebar_groups() {
+        for (category, channels) in groups {
             let header = category_header(&category.display_name);
             // Custom categories can be renamed and deleted; the built-in ones
             // (Favourites, Channels, Direct Messages) cannot, and offering it
@@ -233,6 +251,36 @@ impl ChannelSidebar {
         drop(st);
         *self.updating.borrow_mut() = false;
     }
+}
+
+fn sidebar_signature(
+    state: &crate::state::AppState,
+    groups: &[(mattermost_api::models::SidebarCategory, Vec<Channel>)],
+) -> u64 {
+    let mut hash = DefaultHasher::new();
+    state.current_team.hash(&mut hash);
+    state.current_channel.hash(&mut hash);
+    state.teammate_name_display().hash(&mut hash);
+    serde_json::to_vec(&(&state.me, &state.teams, &state.team_unreads, groups))
+        .unwrap_or_default()
+        .hash(&mut hash);
+    for (_, channels) in groups {
+        for channel in channels {
+            serde_json::to_vec(&state.memberships.get(&channel.id))
+                .unwrap_or_default()
+                .hash(&mut hash);
+            state.active_calls.get(&channel.id).hash(&mut hash);
+            state.channel_title(channel).hash(&mut hash);
+            if let Some(user_id) = channel.dm_teammate_id(&state.me.id) {
+                serde_json::to_vec(&state.users.get(user_id))
+                    .unwrap_or_default()
+                    .hash(&mut hash);
+                state.presence(user_id).hash(&mut hash);
+            }
+        }
+    }
+    state.presence(&state.me.id).hash(&mut hash);
+    hash.finish()
 }
 
 /// The status dot drawn over your own avatar.
@@ -477,6 +525,7 @@ fn channel_row(
         .margin_top(4)
         .margin_bottom(4)
         .build();
+    row_box.add_css_class("channel-row-content");
     row_box.append(&icon);
     row_box.append(&label);
 
@@ -527,7 +576,14 @@ fn channel_row(
         row_box.add_css_class("channel-row-muted");
     }
 
-    gtk::ListBoxRow::builder().child(&row_box).build()
+    // Paint selection/hover on a wrapper around the content margins. This
+    // makes adjacent pills nearly meet without changing row height or moving
+    // the icon and label.
+    let background = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    background.add_css_class("channel-row-background");
+    background.append(&row_box);
+
+    gtk::ListBoxRow::builder().child(&background).build()
 }
 
 /// Who is in the call, the way Slack marks a channel: a few faces and the

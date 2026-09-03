@@ -40,10 +40,12 @@ for a bot, a CLI, or a different front end.
 - Sidebar rows carry the faces of whoever is in a channel's call
 - Sidebar categories with the real ordering rules, unread/mention/muted
   styling, and a row menu to mute a channel or move it to another category
-- Message list: author grouping, day separators, edits, attachments, message
-  priority, system messages, webhook name overrides
-- **Profile pictures**, cached and shared across the message list, sidebar and
-  profile card
+- Virtualized message list: only the visible screenful has GTK widgets, while
+  author grouping, day separators, edits, attachments, message priority,
+  system messages and webhook name overrides remain intact
+- **Profile pictures and media**, shared in memory and persisted in an
+  expiring disk cache. Storage has a 5 GiB default global limit, LRU eviction,
+  and a Storage panel where the limit can be changed or the cache cleared
 - **Reactions as emoji**, not `:shortcodes:` — click a chip to toggle your own,
   pick one from the hover menu, or search the whole Unicode set. A server's own
   uploads are drawn as pictures, through the same image cache as avatars

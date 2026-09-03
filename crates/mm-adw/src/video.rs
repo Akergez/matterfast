@@ -96,7 +96,15 @@ pub fn show_remote(
     glib::spawn_future_local({
         let picture = picture.clone();
         async move {
+            let mut first = true;
             while let Ok(frame) = frames.recv().await {
+                if std::mem::take(&mut first) {
+                    tracing::info!(
+                        width = frame.width,
+                        height = frame.height,
+                        "the first frame of a remote video decoded"
+                    );
+                }
                 let texture = gdk::MemoryTexture::new(
                     frame.width as i32,
                     frame.height as i32,
@@ -171,7 +179,7 @@ mod pipe {
     impl VideoSender {
         /// Encodes the camera into `track`.
         pub fn camera(track: Arc<TrackLocalStaticSample>) -> Result<VideoSender, String> {
-            Self::spawn(&camera_launch(), track, None)
+            Self::spawn(&camera_launch(&camera_source()?), track, None)
         }
 
         /// Encodes a PipeWire node — the screen or window the portal handed us.
@@ -196,20 +204,24 @@ mod pipe {
             // The encoder runs on a GStreamer thread and the track is written
             // from Tokio, so the handover is a channel rather than a blocking
             // call.
-            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(Vec<u8>, Duration)>();
+            // Two frames are enough to overlap encoding and WebRTC. An
+            // unbounded queue turns temporary network backpressure into both
+            // growing memory and seconds of stale video.
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<(Vec<u8>, Duration)>(2);
             sink.set_callbacks(
                 gst_app::AppSinkCallbacks::builder()
                     .new_sample(move |sink| {
                         let sample = sink.pull_sample().map_err(|_| gst::FlowError::Eos)?;
+                        if tx.capacity() == 0 {
+                            return Ok(gst::FlowSuccess::Ok);
+                        }
                         let buffer = sample.buffer().ok_or(gst::FlowError::Error)?;
                         let map = buffer.map_readable().map_err(|_| gst::FlowError::Error)?;
                         let duration = buffer
                             .duration()
                             .map(|d| Duration::from_nanos(d.nseconds()))
                             .unwrap_or(Duration::from_millis(1000 / MAX_FPS as u64));
-                        if tx.send((map.to_vec(), duration)).is_err() {
-                            return Err(gst::FlowError::Eos);
-                        }
+                        let _ = tx.try_send((map.to_vec(), duration));
                         Ok(gst::FlowSuccess::Ok)
                     })
                     .build(),
@@ -266,6 +278,9 @@ mod pipe {
             gst_app::AppSinkCallbacks::builder()
                 .new_sample(move |sink| {
                     let sample = sink.pull_sample().map_err(|_| gst::FlowError::Eos)?;
+                    if tx.is_full() {
+                        return Ok(gst::FlowSuccess::Ok);
+                    }
                     let buffer = sample.buffer().ok_or(gst::FlowError::Error)?;
                     let caps = sample.caps().ok_or(gst::FlowError::Error)?;
                     let info =
@@ -340,13 +355,47 @@ mod pipe {
         Ok((node_id, fd))
     }
 
-    fn camera_launch() -> String {
+    /// The first camera GStreamer can really open.
+    ///
+    /// `v4l2src` on its own takes `/dev/video0`, which on a phone is as likely
+    /// to be an ISP node as a camera — the PinePhone Pro answers there with
+    /// "not a capture device". The device monitor asks the v4l2, libcamera and
+    /// PipeWire providers what is actually attached instead of guessing.
+    fn camera_source() -> Result<String, String> {
+        init()?;
+        let monitor = gst::DeviceMonitor::new();
+        monitor
+            .add_filter(Some("Video/Source"), None)
+            .ok_or("could not look for a camera")?;
+        monitor.start().map_err(|e| e.to_string())?;
+        let device = monitor.devices().into_iter().next();
+        monitor.stop();
+        let device = device.ok_or("no camera is available")?;
+        let factory = device
+            .create_element(None)
+            .map_err(|e| e.to_string())?
+            .factory()
+            .ok_or("the camera would not open")?
+            .name()
+            .to_string();
+        // Only v4l2 needs the node spelled out; libcamera and PipeWire sources
+        // address the camera themselves.
+        match device
+            .properties()
+            .and_then(|p| p.get::<String>("device.path").ok())
+        {
+            Some(path) => Ok(format!("{factory} device={path}")),
+            None => Ok(factory),
+        }
+    }
+
+    fn camera_launch(source: &str) -> String {
         format!(
-            "v4l2src ! videorate ! videoscale ! videoconvert \
+            "{source} ! videorate ! videoscale ! videoconvert \
              ! video/x-raw,width=640,height=480,framerate={MAX_FPS}/1 \
              ! vp8enc deadline=1 error-resilient=default keyframe-max-dist=60 \
                target-bitrate={CAMERA_BITRATE} \
-             ! appsink name=out sync=false"
+             ! appsink name=out sync=false max-buffers=2 drop=true"
         )
     }
 
@@ -356,7 +405,7 @@ mod pipe {
              ! videorate ! videoconvert ! video/x-raw,framerate={MAX_FPS}/1 \
              ! vp8enc deadline=1 error-resilient=default keyframe-max-dist=60 \
                target-bitrate={SCREEN_BITRATE} \
-             ! appsink name=out sync=false"
+             ! appsink name=out sync=false max-buffers=2 drop=true"
         )
     }
 
@@ -366,16 +415,34 @@ mod pipe {
                caps=application/x-rtp,media=video,clock-rate=90000,\
 encoding-name={encoding},payload={payload_type} \
              ! rtpjitterbuffer latency=150 ! {decode} ! videoconvert \
-             ! appsink name=out caps=video/x-raw,format=RGBA sync=false"
+             ! appsink name=out caps=video/x-raw,format=RGBA \
+               sync=false max-buffers=2 drop=true"
         )
     }
 
     fn build(launch: &str) -> Result<gst::Pipeline, String> {
         init()?;
-        gst::parse::launch(launch)
+        let pipeline = gst::parse::launch(launch)
             .map_err(|e| e.to_string())?
             .downcast::<gst::Pipeline>()
-            .map_err(|_| "not a pipeline".to_string())
+            .map_err(|_| "not a pipeline".to_string())?;
+        // A pipeline that gives up reports it on its bus and nowhere else:
+        // `set_state` returned Ok long before, so without this watch a decoder
+        // that died is indistinguishable from a peer who sends nothing.
+        if let Some(bus) = pipeline.bus() {
+            let _ = bus.add_watch_local(|_, msg| {
+                if let gst::MessageView::Error(err) = msg.view() {
+                    tracing::warn!(
+                        source = %msg.src().map(|s| s.path_string()).unwrap_or_default(),
+                        error = %err.error(),
+                        debug = %err.debug().unwrap_or_default(),
+                        "a video pipeline failed",
+                    );
+                }
+                gst::glib::ControlFlow::Continue
+            });
+        }
+        Ok(pipeline)
     }
 
     fn play(pipeline: &gst::Pipeline) -> Result<(), String> {
@@ -404,7 +471,7 @@ encoding-name={encoding},payload={payload_type} \
         fn every_pipeline_parses() {
             init().expect("gstreamer failed to initialise");
             for launch in [
-                camera_launch(),
+                camera_launch("v4l2src"),
                 screen_launch(3, 42),
                 receive_launch("VP8", "rtpvp8depay ! vp8dec", 96),
             ] {

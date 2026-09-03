@@ -23,6 +23,7 @@ mod profile;
 mod rhs;
 mod sidebar;
 pub mod sso;
+mod storage;
 mod switcher;
 
 use std::cell::RefCell;
@@ -311,6 +312,7 @@ enum MenuAction {
     ChannelNotifications,
     LeaveChannel,
     PinnedPosts,
+    Storage,
 }
 
 /// How many rows the quick switcher offers per source. Long enough to find
@@ -880,7 +882,15 @@ fn build_session_ui(
     video_overlay.set_child(Some(&split));
     video_overlay.add_overlay(&videos);
 
-    toasts.set_child(Some(&video_overlay));
+    // A breakpoint bin rather than the window's own breakpoints: `narrow` has to
+    // follow the *allocated* width, and a second window breakpoint would cancel
+    // the sidebar one — only the last matching breakpoint is ever applied.
+    let bin = adw::BreakpointBin::builder()
+        .width_request(360)
+        .height_request(400)
+        .child(&video_overlay)
+        .build();
+    toasts.set_child(Some(&bin));
 
     let avatars = Avatars::new(state.borrow().client.clone());
 
@@ -918,18 +928,30 @@ fn build_session_ui(
     });
 
     // Below this the thread panel has to overlay rather than take a column.
-    const STATIC_PANEL_MIN_WIDTH: i32 = 1200;
-    window.connect_default_width_notify({
+    // `default-width` cannot answer that: a maximized or tiled window keeps the
+    // size it would restore to, so a phone compositor left this reading 1320 and
+    // the panel took a column that fell off the side of the screen.
+    const STATIC_PANEL_MIN_WIDTH: f64 = 1200.0;
+    let panel_breakpoint = adw::Breakpoint::new(adw::BreakpointCondition::new_length(
+        adw::BreakpointConditionLengthType::MaxWidth,
+        STATIC_PANEL_MIN_WIDTH,
+        adw::LengthUnit::Sp,
+    ));
+    for (apply, is_narrow) in [(true, true), (false, false)] {
         let ui = ui.clone();
         let narrow = narrow.clone();
-        move |window| {
-            let is_narrow = window.default_width() < STATIC_PANEL_MIN_WIDTH;
+        let handler = move |_: &adw::Breakpoint| {
             if narrow.replace(is_narrow) != is_narrow {
                 ui.refresh_panel_mode();
             }
+        };
+        if apply {
+            panel_breakpoint.connect_apply(handler);
+        } else {
+            panel_breakpoint.connect_unapply(handler);
         }
-    });
-    narrow.set(window.default_width() < STATIC_PANEL_MIN_WIDTH);
+    }
+    bin.add_breakpoint(panel_breakpoint);
 
     // The dock lives in the sidebar, except when the sidebar is a page you have
     // navigated away from — then it belongs under the conversation.
@@ -983,6 +1005,7 @@ fn build_session_ui(
         ("channel-notifications", MenuAction::ChannelNotifications),
         ("leave-channel", MenuAction::LeaveChannel),
         ("pinned-posts", MenuAction::PinnedPosts),
+        ("storage", MenuAction::Storage),
     ] {
         let entry = gtk::gio::SimpleAction::new(name, None);
         entry.connect_activate({
@@ -1072,25 +1095,28 @@ fn build_session_ui(
         }
     }
 
-    // A picture arriving is a reason to redraw wherever a face is showing —
-    // but pictures arrive in flocks, and a redraw is the whole conversation
-    // plus the whole sidebar. One redraw for the flock: the first arrival
-    // books it, the rest of the burst lands inside the wait and is drawn by
-    // the same pass.
+    // Faces update their weakly registered Avatar widgets directly. Resources
+    // that alter a message's widget tree rebind only the rows that reference
+    // that cache key; they must never replace the whole ListStore, because
+    // doing so destroys GtkListView's scroll anchor.
     avatars.connect_loaded({
         let ui = ui.clone();
-        move || {
+        move |key| {
+            if !key.contains(':') {
+                ui.refresh_completion_avatars();
+                return;
+            }
             if ui.avatar_redraw_pending.replace(true) {
                 return;
             }
             let ui = ui.clone();
+            let key = key.to_string();
             glib::timeout_add_local_once(AVATAR_REDRAW_WAIT, move || {
                 ui.avatar_redraw_pending.set(false);
-                ui.refresh_messages();
-                // The sidebar draws faces too, and so does an open mention
-                // popover; neither notices on its own.
-                ui.channels.refresh(&ui.state, &ui.avatars);
-                ui.refresh_completion_avatars();
+                let actions = ui.message_actions();
+                ui.chat
+                    .refresh_resource(&key, &ui.state, &ui.avatars, &actions);
+                ui.right.refresh(&ui.state, &ui.avatars, &actions);
             });
         }
     });
@@ -1298,9 +1324,19 @@ impl Ui {
                     return;
                 };
                 post.message = message;
-                st.apply_post(post);
+                st.apply_post(post.clone());
                 drop(st);
-                self.refresh_messages();
+                let actions = self.message_actions();
+                if !self
+                    .chat
+                    .replace_post(&post, &self.state, &self.avatars, &actions)
+                {
+                    self.refresh_messages();
+                } else {
+                    // A visible thread/search result can contain this post as
+                    // well. The channel feed stays a one-row splice above.
+                    self.right.refresh(&self.state, &self.avatars, &actions);
+                }
             }
             // The final text already arrived as a Text frame, and the post is
             // updated server-side too; nothing left to do.
@@ -1551,12 +1587,29 @@ impl Ui {
         });
     }
 
+    fn capture_scroll_anchor(&self) {
+        let Some((channel_id, post_id)) = self.chat.current_anchor() else {
+            return;
+        };
+        let mut st = self.state.borrow_mut();
+        match post_id {
+            Some(post_id) => {
+                st.scroll_anchors.insert(channel_id, post_id);
+            }
+            None => {
+                st.scroll_anchors.remove(&channel_id);
+            }
+        }
+    }
+
     fn save_snapshot(&self) {
+        self.capture_scroll_anchor();
         let st = self.state.borrow();
         crate::cache::save(&crate::cache::Snapshot {
             server: st.client.site_url().to_string(),
             current_team: st.current_team.clone(),
             current_channel: st.current_channel.clone(),
+            scroll_anchors: st.scroll_anchors.clone(),
         });
         drop(st);
 
@@ -1822,6 +1875,7 @@ impl Ui {
             MenuAction::ChannelNotifications => self.channel_notifications(),
             MenuAction::LeaveChannel => self.leave_channel(),
             MenuAction::PinnedPosts => self.show_pinned(),
+            MenuAction::Storage => storage::show(&self.window, self.avatars.resources()),
         }
     }
 
@@ -4397,6 +4451,14 @@ impl Ui {
     /// scroll event.
     fn load_older(self: &Rc<Self>) {
         if self.loading_older.get() {
+            if chat::scroll_trace_enabled() {
+                tracing::info!(
+                    target: "mm_adw::scroll",
+                    event = "pagination-suppressed",
+                    reason = "already-loading",
+                    "scroll trace"
+                );
+            }
             return;
         }
         let (client, crt, channel_id, oldest) = {
@@ -4408,6 +4470,15 @@ impl Ui {
                 return;
             };
             if feed.at_oldest {
+                if chat::scroll_trace_enabled() {
+                    tracing::info!(
+                        target: "mm_adw::scroll",
+                        event = "pagination-suppressed",
+                        reason = "at-oldest",
+                        channel_id,
+                        "scroll trace"
+                    );
+                }
                 return;
             }
             let Some(oldest) = feed.posts.first().map(|p| p.id.clone()) else {
@@ -4417,8 +4488,16 @@ impl Ui {
         };
 
         self.loading_older.set(true);
+        if chat::scroll_trace_enabled() {
+            tracing::info!(
+                target: "mm_adw::scroll",
+                event = "pagination-request",
+                channel_id,
+                oldest,
+                "scroll trace"
+            );
+        }
         self.chat.set_loading_older(true);
-        let anchor = self.chat.scroll_anchor();
         let ui = self.clone();
         runtime::spawn(
             async move {
@@ -4429,11 +4508,28 @@ impl Ui {
                 Ok::<_, mattermost_api::Error>((channel_id, posts, authors, statuses))
             },
             move |result| {
-                ui.loading_older.set(false);
                 ui.chat.set_loading_older(false);
                 let Ok((channel_id, posts, authors, statuses)) = result else {
+                    if chat::scroll_trace_enabled() {
+                        tracing::warn!(
+                            target: "mm_adw::scroll",
+                            event = "pagination-error",
+                            "scroll trace"
+                        );
+                    }
+                    ui.loading_older.set(false);
+                    ui.chat.retry_older_on_next_edge_change();
                     return;
                 };
+                if chat::scroll_trace_enabled() {
+                    tracing::info!(
+                        target: "mm_adw::scroll",
+                        event = "pagination-response",
+                        channel_id,
+                        posts = posts.posts.len(),
+                        "scroll trace"
+                    );
+                }
                 let kept;
                 // Only built when the channel this page belongs to is still
                 // the one on screen: a `prepend_older` for a feed nobody is
@@ -4450,7 +4546,6 @@ impl Ui {
                     // the feed should stop asking.
                     let exhausted = older.posts.is_empty();
                     kept = older.posts.clone();
-                    let new_count = older.posts.len();
                     let now_at_oldest = exhausted || older.at_oldest;
                     // Computed before the mutable borrow below so this can
                     // still call the ordinary (immutable) state accessors.
@@ -4467,7 +4562,7 @@ impl Ui {
                         }
                         feed.at_oldest = now_at_oldest;
                         if showing {
-                            prepend = Some((feed.posts.clone(), new_count, at_oldest_title));
+                            prepend = Some((feed.posts.clone(), at_oldest_title));
                         }
                     }
                 }
@@ -4475,19 +4570,19 @@ impl Ui {
                 // whole feed (see `ChatView::prepend_older`) — the fix for
                 // the scrollback stall, which used to redraw everything ever
                 // paged into this channel on every page turn.
-                if let Some((merged, new_count, at_oldest_title)) = prepend {
+                if let Some((merged, at_oldest_title)) = prepend {
                     let actions = ui.message_actions();
+                    let restored_ui = ui.clone();
                     ui.chat.prepend_older(
                         &merged,
-                        new_count,
                         at_oldest_title.as_deref(),
                         &ui.state,
                         &ui.avatars,
                         &actions,
+                        move || restored_ui.loading_older.set(false),
                     );
-                    // The feed grew upwards, so the view has to move down by
-                    // the same amount or the reader is thrown back in time.
-                    ui.chat.restore_scroll(anchor);
+                } else {
+                    ui.loading_older.set(false);
                 }
                 ui.store_posts(kept);
             },
@@ -5195,6 +5290,7 @@ impl Ui {
 
     fn select_channel(self: &Rc<Self>, channel_id: String) {
         self.split.set_show_content(true);
+        self.capture_scroll_anchor();
         // Flush the outgoing channel's draft *before* the composer is pointed
         // at a new one, or the text would be filed under the wrong channel.
         self.save_draft();
@@ -5206,6 +5302,9 @@ impl Ui {
             st.current_channel = Some(channel_id.clone());
         }
         self.refresh_messages();
+        if let Some(anchor) = self.state.borrow().scroll_anchors.get(&channel_id).cloned() {
+            self.chat.restore_anchor(&anchor);
+        }
         self.refresh_call_ui();
         self.refresh_typing();
         self.restore_draft();
@@ -5264,6 +5363,11 @@ impl Ui {
                             }
                             ui.chat.set_loading(false);
                             ui.refresh_messages();
+                            if let Some(anchor) =
+                                ui.state.borrow().scroll_anchors.get(&channel_id).cloned()
+                            {
+                                ui.chat.restore_anchor(&anchor);
+                            }
                             ui.chat.focus_composer();
                             ui.resolve_mentions();
                             // Straight into the store, so the next launch has
@@ -6008,6 +6112,7 @@ impl Ui {
                         }
                     }
                     tt::SCREEN | tt::VIDEO => {
+                        tracing::info!(%session_id, track = %track_type, "a remote video arrived");
                         let who = self.speaker_name(&session_id);
                         let title = if track_type == tt::SCREEN {
                             format!("{who} is sharing a screen")
@@ -6020,7 +6125,10 @@ impl Ui {
                                     .borrow_mut()
                                     .insert(format!("{session_id}:{track_type}"), view);
                             }
-                            Err(e) => self.toast(&format!("Could not show the video: {e}")),
+                            Err(e) => {
+                                tracing::warn!(error = %e, "could not show a remote video");
+                                self.toast(&format!("Could not show the video: {e}"))
+                            }
                         }
                     }
                     other => tracing::debug!(track = other, "ignoring a remote track"),
@@ -6799,6 +6907,7 @@ fn bootstrap(ui: Rc<Ui>, on_auth_failure: Option<Box<dyn FnOnce()>>) {
                         if st.current_team.is_none() {
                             st.current_team = pointer.current_team.clone();
                         }
+                        st.scroll_anchors.clone_from(&pointer.scroll_anchors);
                     }
                 }
                 ui.refresh_all();
@@ -6806,16 +6915,29 @@ fn bootstrap(ui: Rc<Ui>, on_auth_failure: Option<Box<dyn FnOnce()>>) {
                 // And the messages for wherever we were, so the conversation
                 // is there too rather than just the list around it.
                 if let Some(channel_id) = pointer
-                    .and_then(|p| p.current_channel)
+                    .as_ref()
+                    .and_then(|p| p.current_channel.clone())
                     .filter(|id| ui.state.borrow().current_channel.as_deref() != Some(id.as_str()))
                 {
+                    let anchor = pointer
+                        .as_ref()
+                        .and_then(|p| p.scroll_anchors.get(&channel_id).cloned());
                     let ui = ui.clone();
                     runtime::spawn(
                         async move {
-                            let posts = store.posts(&channel_id, INITIAL_POSTS as usize).await;
-                            (channel_id, posts)
+                            let posts = if let Some(post_id) = anchor.as_deref() {
+                                let around = store.posts_around(&channel_id, post_id, 10, 10).await;
+                                match around {
+                                    Ok(posts) if !posts.is_empty() => Ok(posts),
+                                    Ok(_) => store.posts(&channel_id, INITIAL_POSTS as usize).await,
+                                    Err(error) => Err(error),
+                                }
+                            } else {
+                                store.posts(&channel_id, INITIAL_POSTS as usize).await
+                            };
+                            (channel_id, anchor, posts)
                         },
-                        move |(channel_id, posts)| {
+                        move |(channel_id, anchor, posts)| {
                             let Ok(posts) = posts else { return };
                             if posts.is_empty() {
                                 return;
@@ -6830,6 +6952,9 @@ fn bootstrap(ui: Rc<Ui>, on_auth_failure: Option<Box<dyn FnOnce()>>) {
                                 }
                             }
                             ui.refresh_messages();
+                            if let Some(anchor) = anchor {
+                                ui.chat.restore_anchor(&anchor);
+                            }
                         },
                     );
                 }

@@ -17,6 +17,12 @@ static RUNTIME: OnceLock<Runtime> = OnceLock::new();
 pub fn runtime() -> &'static Runtime {
     RUNTIME.get_or_init(|| {
         tokio::runtime::Builder::new_multi_thread()
+            // REST, websocket and cache work is I/O-bound. Tokio's default is
+            // one worker per logical CPU (14 on the profiling machine), which
+            // bought no latency and reserved a stack per idle worker. Two can
+            // overlap network and disk without turning a desktop client into
+            // a thread farm; blocking codecs use their own dedicated pools.
+            .worker_threads(2)
             .enable_all()
             .thread_name("mm-io")
             .build()

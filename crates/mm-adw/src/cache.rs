@@ -5,6 +5,7 @@
 //! because it is two strings, it is read once before anything else exists, and
 //! a database open is a slower way to answer "where was I".
 
+use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -22,6 +23,8 @@ pub struct Snapshot {
     pub current_team: Option<String>,
     #[serde(default)]
     pub current_channel: Option<String>,
+    #[serde(default)]
+    pub scroll_anchors: HashMap<String, String>,
 }
 
 fn path() -> PathBuf {

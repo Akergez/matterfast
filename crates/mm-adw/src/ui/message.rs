@@ -24,6 +24,10 @@ pub const GROUPING_WINDOW_MS: Millis = 5 * 60 * 1000;
 /// as a click rather than the start of a text selection.
 const CLICK_DRAG_THRESHOLD: f64 = 4.0;
 
+/// Upload ids are immutable; the global physical size limit is the normal
+/// eviction mechanism, while this prevents abandoned entries living forever.
+const FILE_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(30 * 24 * 60 * 60);
+
 /// Whether a press-then-release at these two points was a click (as opposed
 /// to a drag that grew a text selection). Pulled out of the gesture handlers
 /// below so it is the same test either way `released` fails to fire: on an
@@ -881,8 +885,9 @@ fn attachment(
         open.add_css_class("attachment-button");
         open.connect_clicked({
             let state = state.clone();
+            let resources = avatars.resources();
             let file = file.clone();
-            move |button| open_image(&state, &file, button)
+            move |button| open_image(&state, &resources, &file, button)
         });
         return open.upcast();
     }
@@ -894,6 +899,7 @@ fn attachment(
     // the server itself makes no thumbnail for video (it 400s `no_thumbnail`).
     if super::media::is_playable(file) {
         let client = state.borrow().client.clone();
+        let resources = avatars.resources();
         // The player is kept alive by the closure the poster button holds, and
         // both die with the row. Its Drop removes the temp file(s) it wrote.
         let player = Rc::new_cyclic(|weak: &std::rc::Weak<super::media::Player>| {
@@ -918,8 +924,16 @@ fn attachment(
             super::media::Player::new(file, poster, keep, move |file_id| {
                 let Some(player) = weak.upgrade() else { return };
                 let client = client.clone();
+                let resources = resources.clone();
                 crate::runtime::spawn(
-                    async move { client.download_file(&file_id).await },
+                    async move {
+                        let key = format!("original:{file_id}");
+                        resources
+                            .get_or_fetch(key, FILE_CACHE_TTL, || async move {
+                                client.download_file(&file_id).await
+                            })
+                            .await
+                    },
                     move |result| match result {
                         Ok(bytes) => player.set_data(bytes),
                         Err(e) => tracing::warn!(error = %e, "could not fetch the media"),
@@ -959,8 +973,9 @@ fn attachment(
     save.add_css_class("circular");
     save.connect_clicked({
         let state = state.clone();
+        let resources = avatars.resources();
         let file = file.clone();
-        move |button| save_attachment(&state, &file, button)
+        move |button| save_attachment(&state, &resources, &file, button)
     });
 
     let row = gtk::Box::builder()
@@ -980,6 +995,7 @@ fn attachment(
 /// rather than handed to anything else as a URL.
 fn save_attachment(
     state: &SharedState,
+    resources: &crate::resource_cache::ResourceCache,
     file: &mattermost_api::models::FileInfo,
     anchor: &gtk::Button,
 ) {
@@ -989,6 +1005,7 @@ fn save_attachment(
         .build();
     let parent = anchor.root().and_downcast::<adw::ApplicationWindow>();
     let client = state.borrow().client.clone();
+    let resources = resources.clone();
     let file_id = file.id.clone();
 
     dialog.save(
@@ -998,11 +1015,15 @@ fn save_attachment(
             let Ok(target) = result else { return };
             let Some(path) = target.path() else { return };
             let client = client.clone();
+            let resources = resources.clone();
             let file_id = file_id.clone();
             crate::runtime::spawn(
                 async move {
-                    let bytes = client
-                        .download_file(&file_id)
+                    let key = format!("original:{file_id}");
+                    let bytes = resources
+                        .get_or_fetch(key, FILE_CACHE_TTL, || async move {
+                            client.download_file(&file_id).await
+                        })
                         .await
                         .map_err(|e| e.to_string())?;
                     tokio::fs::write(&path, bytes)
@@ -1021,14 +1042,27 @@ fn save_attachment(
 
 /// Opens the full-size image in its own window. The original is behind the
 /// session token, so it is fetched rather than handed to an external viewer.
-fn open_image(state: &SharedState, file: &mattermost_api::models::FileInfo, anchor: &gtk::Button) {
+fn open_image(
+    state: &SharedState,
+    resources: &crate::resource_cache::ResourceCache,
+    file: &mattermost_api::models::FileInfo,
+    anchor: &gtk::Button,
+) {
     let client = state.borrow().client.clone();
+    let resources = resources.clone();
     let file_id = file.id.clone();
     let title = file.name.clone();
     let parent = anchor.root().and_downcast::<adw::ApplicationWindow>();
 
     crate::runtime::spawn(
-        async move { client.download_file(&file_id).await },
+        async move {
+            let key = format!("original:{file_id}");
+            resources
+                .get_or_fetch(key, FILE_CACHE_TTL, || async move {
+                    client.download_file(&file_id).await
+                })
+                .await
+        },
         move |result| {
             let Ok(bytes) = result else { return };
             let Ok(texture) = gtk::gdk::Texture::from_bytes(&gtk::glib::Bytes::from_owned(bytes))

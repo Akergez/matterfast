@@ -17,6 +17,8 @@ use std::path::{Path, PathBuf};
 use adw::prelude::*;
 use gtk::{gio, glib};
 
+pub const DEFAULT_CACHE_BYTES: u64 = 5 * 1024 * 1024 * 1024;
+
 /// Keeps the application alive without a window, so the websocket stays
 /// connected and notifications keep arriving.
 ///
@@ -47,6 +49,20 @@ impl Background {
     }
 }
 
+/// Total on-disk HTTP/media cache allowance. Five GiB is large enough for
+/// image-heavy channels while still being an explicit, user-visible bound.
+pub fn cache_limit_bytes() -> u64 {
+    read_value(&path(), "cache_limit_bytes")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(DEFAULT_CACHE_BYTES)
+}
+
+pub fn set_cache_limit_bytes(bytes: u64) {
+    if let Err(error) = write_value(&path(), "cache_limit_bytes", bytes.into()) {
+        tracing::warn!(%error, "could not save the cache limit");
+    }
+}
+
 fn path() -> PathBuf {
     glib::user_config_dir()
         .join(crate::APP_ID)
@@ -54,6 +70,10 @@ fn path() -> PathBuf {
 }
 
 fn read(file: &Path) -> Option<bool> {
+    read_value(file, "background")?.as_bool()
+}
+
+fn read_value(file: &Path, key: &str) -> Option<serde_json::Value> {
     let raw = match fs::read_to_string(file) {
         Ok(raw) => raw,
         // No file is the ordinary first run, not something to report.
@@ -64,7 +84,7 @@ fn read(file: &Path) -> Option<bool> {
         }
     };
     match serde_json::from_str::<serde_json::Value>(&raw) {
-        Ok(v) => v.get("background")?.as_bool(),
+        Ok(v) => v.get(key).cloned(),
         Err(e) => {
             tracing::warn!("could not parse the settings: {e}");
             None
@@ -76,6 +96,10 @@ fn read(file: &Path) -> Option<bool> {
 /// is the shared settings file, and clobbering a key some later version added
 /// is the kind of bug nobody traces back to here.
 fn write(file: &Path, on: bool) -> std::io::Result<()> {
+    write_value(file, "background", on.into())
+}
+
+fn write_value(file: &Path, key: &str, value: serde_json::Value) -> std::io::Result<()> {
     fs::create_dir_all(file.parent().expect("settings path always has a parent"))?;
     let mut settings = fs::read_to_string(file)
         .ok()
@@ -83,7 +107,7 @@ fn write(file: &Path, on: bool) -> std::io::Result<()> {
             serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&raw).ok()
         })
         .unwrap_or_default();
-    settings.insert("background".into(), on.into());
+    settings.insert(key.into(), value);
     fs::write(file, serde_json::Value::Object(settings).to_string())
 }
 
