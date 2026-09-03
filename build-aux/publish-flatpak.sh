@@ -66,6 +66,23 @@ if [[ -n ${FLATPAK_GPG_ID:-} ]]; then
     # which cannot contain a socket.
     GNUPGHOME=$(mktemp -d)
     export GNUPGHOME
+    # gpg-agent runs pinentry for anything touching a secret key, including
+    # importing an unprotected one, and the build image ships no pinentry at
+    # all. This key deliberately has no passphrase, so an empty answer is
+    # always the right one.
+    cat > "$GNUPGHOME/pinentry" <<'PINENTRY'
+#!/bin/sh
+echo "OK Pleased to meet you"
+while IFS= read -r line; do
+  case "$line" in
+    GETPIN*) printf 'D \nOK\n' ;;
+    BYE*)    echo "OK closing connection"; exit 0 ;;
+    *)       echo "OK" ;;
+  esac
+done
+PINENTRY
+    chmod 700 -- "$GNUPGHOME/pinentry"
+    printf 'pinentry-program %s/pinentry\n' "$GNUPGHOME" > "$GNUPGHOME/gpg-agent.conf"
     trap 'rm -rf -- "$GNUPGHOME"; eval "${ssh_cleanup:-:}"' EXIT
     key=$FLATPAK_GPG_KEY_B64
     unset FLATPAK_GPG_KEY_B64
