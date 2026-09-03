@@ -1,11 +1,12 @@
 //! The channel sidebar: an account/team switcher in the header, the list below.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::rc::Rc;
 
 use adw::prelude::*;
-use mattermost_api::models::{Channel, ChannelType, Presence, User};
+use mattermost_api::models::{CategoryType, Channel, ChannelType, Presence, User};
 
 use crate::avatars::Avatars;
 use crate::state::SharedState;
@@ -22,6 +23,14 @@ pub enum RowAction {
     DeleteCategory,
 }
 
+/// Which row a widget is, so a refresh can tell "this row moved" apart from
+/// "a different row landed in that position".
+#[derive(PartialEq, Eq, Hash)]
+enum RowKey {
+    Category(String),
+    Channel(String),
+}
+
 pub struct ChannelSidebar {
     pub widget: adw::ToolbarView,
     categories: Rc<dyn Fn(String, RowAction)>,
@@ -32,6 +41,12 @@ pub struct ChannelSidebar {
     switcher: Switcher,
     updating: Rc<RefCell<bool>>,
     signature: std::cell::Cell<Option<u64>>,
+    /// What the list currently shows, in order: each row, the state it was
+    /// drawn from, and the widget drawn for it. Kept beside the `ListBox`
+    /// because the box itself remembers only widgets, and a refresh has to
+    /// answer "is this still the right picture of this channel" without
+    /// asking the widget.
+    rows: RefCell<Vec<(RowKey, u64, gtk::ListBoxRow)>>,
 }
 
 impl ChannelSidebar {
@@ -175,6 +190,7 @@ impl ChannelSidebar {
             switcher,
             updating,
             signature: std::cell::Cell::new(None),
+            rows: RefCell::new(Vec::new()),
         }
     }
 
@@ -185,25 +201,16 @@ impl ChannelSidebar {
     }
 
     pub fn refresh(&self, state: &SharedState, avatars: &Avatars) {
-        self.refresh_inner(state, avatars, false);
-    }
-
-    fn refresh_inner(&self, state: &SharedState, avatars: &Avatars, force: bool) {
         let (groups, signature) = {
             let st = state.borrow();
             let groups = st.sidebar_groups();
             let signature = sidebar_signature(&st, &groups);
             (groups, signature)
         };
-        if !force && self.signature.replace(Some(signature)) == Some(signature) {
+        if self.signature.replace(Some(signature)) == Some(signature) {
             return;
         }
-        self.signature.set(Some(signature));
         self.switcher.refresh(state, avatars);
-        *self.updating.borrow_mut() = true;
-        while let Some(child) = self.list.first_child() {
-            self.list.remove(&child);
-        }
 
         let st = state.borrow();
         let team_name = st
@@ -214,43 +221,207 @@ impl ChannelSidebar {
             .unwrap_or_else(|| "Matras".to_string());
         self.title.set_text(&team_name);
 
+        // What every row depends on but no row owns: the naming style decides
+        // every title, and the category names are the "Move to …" items in
+        // every row's menu.
+        let shared = {
+            let mut hash = DefaultHasher::new();
+            st.teammate_name_display().hash(&mut hash);
+            for category in &st.categories.categories {
+                (&category.id, &category.display_name).hash(&mut hash);
+            }
+            hash.finish()
+        };
+
+        let mut old: HashMap<RowKey, (u64, gtk::ListBoxRow)> = self
+            .rows
+            .take()
+            .into_iter()
+            .map(|(key, revision, widget)| (key, (revision, widget)))
+            .collect();
+        // Removing, inserting and selecting rows all make the ListBox emit
+        // `row-selected`, and none of it is the user picking a channel.
+        *self.updating.borrow_mut() = true;
+
+        let mut rows: Vec<(RowKey, u64, gtk::ListBoxRow)> = Vec::new();
         for (category, channels) in groups {
-            let header = category_header(&category.display_name);
+            let key = RowKey::Category(category.id.clone());
             // Custom categories can be renamed and deleted; the built-in ones
             // (Favourites, Channels, Direct Messages) cannot, and offering it
             // would only produce a server error.
-            if category.r#type == mattermost_api::models::CategoryType::Custom {
-                attach_category_menu(&header, &category.id, &self.categories);
-            }
-            self.list.append(&header);
+            let custom = category.r#type == CategoryType::Custom;
+            let revision = {
+                let mut hash = DefaultHasher::new();
+                (&category.display_name, custom).hash(&mut hash);
+                hash.finish()
+            };
+            let widget = reuse_or_build(&self.list, &mut old, &key, revision, || {
+                let header = category_header(&category.display_name);
+                if custom {
+                    attach_category_menu(&header, &category.id, &self.categories);
+                }
+                header
+            });
+            rows.push((key, revision, widget));
 
             for channel in channels {
-                let title = st.channel_title(&channel);
-                // A DM is a person, so it gets that person's face with the
-                // presence badge, exactly like a message row.
-                let icon = channel
-                    .dm_teammate_id(&st.me.id)
-                    .map(|user_id| dm_avatar(avatars, user_id, &title, st.presence(user_id)));
-                // A DM is a person, and their status says whether writing to
-                // them is worth doing now.
-                let status = channel
-                    .dm_teammate_id(&st.me.id)
-                    .and_then(|id| st.users.get(id))
-                    .and_then(|user| user.custom_status())
-                    .filter(|status| !status.emoji.is_empty());
-                let row = channel_row(&channel, &title, icon, status, avatars, &st);
-                unsafe { row.set_data("channel-id", channel.id.clone()) };
-                attach_row_menu(&row, &channel.id, &st, &self.categories);
-                self.list.append(&row);
-
-                if st.current_channel.as_deref() == Some(channel.id.as_str()) {
-                    self.list.select_row(Some(&row));
-                }
+                let key = RowKey::Channel(channel.id.clone());
+                let revision = channel_revision(&channel, &st, shared);
+                let widget = reuse_or_build(&self.list, &mut old, &key, revision, || {
+                    let title = st.channel_title(&channel);
+                    // A DM is a person, so it gets that person's face with the
+                    // presence badge, exactly like a message row.
+                    let icon = channel
+                        .dm_teammate_id(&st.me.id)
+                        .map(|user_id| dm_avatar(avatars, user_id, &title, st.presence(user_id)));
+                    // A DM is a person, and their status says whether writing
+                    // to them is worth doing now.
+                    let status = channel
+                        .dm_teammate_id(&st.me.id)
+                        .and_then(|id| st.users.get(id))
+                        .and_then(|user| user.custom_status())
+                        .filter(|status| !status.emoji.is_empty());
+                    let row = channel_row(&channel, &title, icon, status, avatars, &st);
+                    unsafe { row.set_data("channel-id", channel.id.clone()) };
+                    attach_row_menu(&row, &channel.id, &st, &self.categories);
+                    row
+                });
+                rows.push((key, revision, widget));
             }
         }
+
+        // Whatever nothing claimed held a place that no longer exists.
+        for (_, (_, widget)) in old {
+            self.list.remove(&widget);
+        }
+
+        // The list now holds exactly the kept rows, in the order they were in
+        // before. Walk the positions once and move the ones that are in the
+        // wrong place: reordering is a channel changing category or a
+        // recency sort turning over, which happens far less than a badge
+        // changing, and an unparent/insert pair is still cheaper than
+        // rebuilding the widget tree it moves.
+        for (index, (_, _, widget)) in rows.iter().enumerate() {
+            let index = index as i32;
+            if self.list.row_at_index(index).as_ref() == Some(widget) {
+                continue;
+            }
+            if widget.parent().is_some() {
+                self.list.remove(widget);
+            }
+            self.list.insert(widget, index);
+        }
+        // Nothing should be left over — but a channel that the server briefly
+        // reports in two categories would leave one widget unclaimed on every
+        // refresh, and a sidebar that grows a row a second is worse than one
+        // that shows a duplicate.
+        while let Some(extra) = self.list.row_at_index(rows.len() as i32) {
+            self.list.remove(&extra);
+        }
+
+        // Selection follows the current channel rather than being written
+        // while the rows are built: a row that never moved keeps its
+        // selection, so switching channels no longer touches any row but the
+        // two whose highlight actually changes.
+        let selected = st.current_channel.as_deref().and_then(|current| {
+            rows.iter()
+                .find(|(key, _, _)| matches!(key, RowKey::Channel(id) if id == current))
+                .map(|(_, _, widget)| widget)
+        });
+        self.list.select_row(selected);
+
+        *self.rows.borrow_mut() = rows;
         drop(st);
         *self.updating.borrow_mut() = false;
     }
+}
+
+/// The widget for one row: the one already on screen when nothing it draws
+/// has moved, a fresh one otherwise. A stale widget leaves the list here, so
+/// that by the time positions are assigned the list holds only survivors.
+fn reuse_or_build(
+    list: &gtk::ListBox,
+    old: &mut HashMap<RowKey, (u64, gtk::ListBoxRow)>,
+    key: &RowKey,
+    revision: u64,
+    build: impl FnOnce() -> gtk::ListBoxRow,
+) -> gtk::ListBoxRow {
+    match old.remove(key) {
+        Some((drawn_from, widget)) if drawn_from == revision => widget,
+        Some((_, stale)) => {
+            list.remove(&stale);
+            build()
+        }
+        None => build(),
+    }
+}
+
+/// Everything that changes how one channel row is drawn, or what its context
+/// menu offers, reduced to one value — the sidebar's equivalent of
+/// `chat::post_revision`.
+///
+/// Deliberately *not* the current channel: which row is selected is the
+/// ListBox's own business, and folding it in here would rebuild two rows on
+/// every switch for the sake of a CSS class. Nor the raw unread message
+/// count, only `is_unread()`: a second unread message draws the same dot as
+/// the first.
+fn channel_revision(channel: &Channel, state: &crate::state::AppState, shared: u64) -> u64 {
+    let mut hash = DefaultHasher::new();
+    shared.hash(&mut hash);
+    channel.id.hash(&mut hash);
+    channel.r#type.hash(&mut hash);
+    state.channel_title(channel).hash(&mut hash);
+
+    let unread = state.unread(&channel.id);
+    (
+        unread.mentions,
+        unread.urgent,
+        unread.muted,
+        unread.is_unread(),
+    )
+        .hash(&mut hash);
+    state.drafts.contains_key(&channel.id).hash(&mut hash);
+
+    if let Some(people) = state.active_calls.get(&channel.id) {
+        people.hash(&mut hash);
+        // The faces carry names, and a name can arrive after the call does.
+        for user_id in people {
+            state
+                .users
+                .get(user_id)
+                .map(|user| user.display_name(state.teammate_name_display()))
+                .hash(&mut hash);
+        }
+    }
+
+    if let Some(user_id) = channel.dm_teammate_id(&state.me.id) {
+        state.presence(user_id).hash(&mut hash);
+        if let Some(status) = state
+            .users
+            .get(user_id)
+            .and_then(|user| user.custom_status())
+        {
+            (
+                status.emoji,
+                status.text,
+                status.duration,
+                status.expires_at,
+            )
+                .hash(&mut hash);
+        }
+    }
+
+    // Which category the channel is in decides which "Move to …" items its
+    // menu leaves out.
+    state
+        .categories
+        .categories
+        .iter()
+        .find(|c| c.channel_ids.contains(&channel.id))
+        .map(|c| &c.id)
+        .hash(&mut hash);
+
+    hash.finish()
 }
 
 fn sidebar_signature(
@@ -270,6 +441,11 @@ fn sidebar_signature(
                 .unwrap_or_default()
                 .hash(&mut hash);
             state.active_calls.get(&channel.id).hash(&mut hash);
+            // The pencil is drawn from this and nothing else, so without it
+            // here the refresh that saving a draft asks for returns early:
+            // emptying a composer left the pencil on the row until some
+            // unrelated event happened to move the signature.
+            state.drafts.contains_key(&channel.id).hash(&mut hash);
             state.channel_title(channel).hash(&mut hash);
             if let Some(user_id) = channel.dm_teammate_id(&state.me.id) {
                 serde_json::to_vec(&state.users.get(user_id))
@@ -866,5 +1042,54 @@ impl Switcher {
                 self.teams.select_row(Some(&row));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mattermost_api::models::{ChannelMember, ClientConfig};
+    use mattermost_api::Client;
+
+    /// One channel with `total` posts in it, of which `read` have been seen.
+    fn revision(total: i64, read: i64, mentions: i64) -> u64 {
+        let client = Client::new("http://x.test").unwrap();
+        let mut st =
+            crate::state::AppState::new(client, User::default(), ClientConfig::default(), false);
+        st.channels.insert(
+            "c1".into(),
+            Channel {
+                id: "c1".into(),
+                total_msg_count: total,
+                ..Default::default()
+            },
+        );
+        st.memberships.insert(
+            "c1".into(),
+            ChannelMember {
+                channel_id: "c1".into(),
+                msg_count: read,
+                mention_count: mentions,
+                ..Default::default()
+            },
+        );
+        channel_revision(&st.channels["c1"], &st, 0)
+    }
+
+    /// The dot on an unread row says "something is here", not how much, so a
+    /// second unread message must not cost a rebuilt row.
+    #[test]
+    fn more_of_the_same_unread_does_not_move_the_revision() {
+        assert_eq!(revision(10, 9, 0), revision(11, 9, 0));
+    }
+
+    #[test]
+    fn becoming_unread_moves_the_revision() {
+        assert_ne!(revision(10, 10, 0), revision(11, 10, 0));
+    }
+
+    #[test]
+    fn a_mention_moves_the_revision_because_the_badge_counts() {
+        assert_ne!(revision(11, 9, 1), revision(11, 9, 2));
     }
 }

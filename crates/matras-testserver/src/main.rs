@@ -186,12 +186,36 @@ fn username(user_id: &str) -> &'static str {
     }
 }
 
-fn channel_name(channel_id: &str) -> &'static str {
+fn channel_name(channel_id: &str) -> String {
     match channel_id {
-        DEV => "Development",
-        DM_LENA => "",
-        _ => "General",
+        DEV => "Development".to_string(),
+        DM_LENA => String::new(),
+        _ => match filler_index(channel_id) {
+            Some(n) => format!("Channel {n:02}"),
+            None => "General".to_string(),
+        },
     }
+}
+
+/// Extra open channels beyond the three hand-written ones. Three rows rebuild
+/// too fast to time, so any work on how the sidebar redraws itself needs a
+/// realistic list to show up at all — `MM_CHANNELS=100` is what the sidebar
+/// profiling runs use.
+fn filler_count() -> usize {
+    std::env::var("MM_CHANNELS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0)
+}
+
+fn filler_id(n: usize) -> String {
+    id("cx", n as i64)
+}
+
+/// The inverse of `filler_id`, so the per-channel handlers can answer for a
+/// generated channel without keeping a table of them.
+fn filler_index(channel_id: &str) -> Option<usize> {
+    channel_id.strip_prefix("cx")?.parse().ok()
 }
 
 fn user(user_id: &str) -> Value {
@@ -224,6 +248,24 @@ fn user(user_id: &str) -> Value {
 }
 
 fn channel(channel_id: &str) -> Value {
+    if let Some(n) = filler_index(channel_id) {
+        return json!({
+            "id": channel_id,
+            "create_at": 1_700_000_000_000i64,
+            "update_at": 1_700_000_000_000i64,
+            "delete_at": 0,
+            "team_id": TEAM,
+            "type": "O",
+            "display_name": channel_name(channel_id),
+            "name": format!("channel-{n}"),
+            "header": "",
+            "purpose": "",
+            "last_post_at": now(),
+            "total_msg_count": 6,
+            "total_msg_count_root": 6,
+            "creator_id": SARA,
+        });
+    }
     let (name, display, kind, total) = match channel_id {
         DEV => ("development", "Development", "O", 12),
         DM_LENA => (
@@ -327,23 +369,37 @@ async fn my_team_members() -> Json<Value> {
 }
 
 async fn my_channels() -> Json<Value> {
-    Json(json!([channel(GENERAL), channel(DEV), channel(DM_LENA)]))
+    let mut out = vec![channel(GENERAL), channel(DEV), channel(DM_LENA)];
+    out.extend((0..filler_count()).map(|n| channel(&filler_id(n))));
+    Json(Value::Array(out))
 }
 
 async fn my_channel_members() -> Json<Value> {
-    Json(json!([
+    let mut out = vec![
         membership(GENERAL, 0, 0),
         membership(DEV, 4, 1),
         membership(DM_LENA, 1, 0),
-    ]))
+    ];
+    // Not all alike: a few carry mentions and a few are already read, so the
+    // sidebar has badges, dots and plain rows to redraw rather than one shape.
+    out.extend((0..filler_count()).map(|n| {
+        membership(
+            &filler_id(n),
+            (n % 4) as i64,
+            if n % 7 == 0 { 1 + (n % 3) as i64 } else { 0 },
+        )
+    }));
+    Json(Value::Array(out))
 }
 
 async fn categories() -> Json<Value> {
+    let mut channels = vec![GENERAL.to_string(), DEV.to_string()];
+    channels.extend((0..filler_count()).map(filler_id));
     Json(json!({
         "categories": [
             {"id": "channels_cat", "user_id": ME, "team_id": TEAM, "sort_order": 10,
              "sorting": "alpha", "type": "channels", "display_name": "Channels",
-             "muted": false, "collapsed": false, "channel_ids": [GENERAL, DEV]},
+             "muted": false, "collapsed": false, "channel_ids": channels},
             {"id": "dm_cat", "user_id": ME, "team_id": TEAM, "sort_order": 20,
              "sorting": "recent", "type": "direct_messages", "display_name": "Direct Messages",
              "muted": false, "collapsed": false, "channel_ids": [DM_LENA]}
@@ -774,8 +830,15 @@ async fn colleague(app: Arc<App>) {
             .unwrap_or(12);
         tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
         let (user_id, channel_id, message, root) = lines[i % lines.len()];
+        // With generated channels present, spread the noise across them: the
+        // sidebar's redraw cost is per row, and it only shows when the badges
+        // move around a long list rather than in the same three places.
+        let channel_id = match filler_count() {
+            0 => channel_id.to_string(),
+            n => filler_id(i % n),
+        };
         i += 1;
-        let post = app.add_post(channel_id, user_id, message, root);
+        let post = app.add_post(&channel_id, user_id, message, root);
         let mentions = if message.contains("@anton") {
             vec![ME]
         } else {
