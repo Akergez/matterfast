@@ -124,12 +124,17 @@ test:
   stage: test
   extends: [.rust, .amd64]
   script:
+    # What running needs on top of what building needs. The GStreamer plugins
+    # are for two unit tests that parse every pipeline the application uses,
+    # which only works where the elements they name exist; sway and Mesa's
+    # software Vulkan are for the UI scenarios.
+    - apt-get install -y -q --no-install-recommends
+        gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-pipewire
+        sway mesa-vulkan-drivers
     - cargo test --workspace --locked
     # The scenarios in crates/matterfast/tests/ui, played into the real
-    # application under a headless compositor, drawn by Mesa's software
-    # Vulkan. In the same job as the unit tests so the dependencies are
-    # compiled once.
-    - apt-get install -y -q --no-install-recommends sway mesa-vulkan-drivers
+    # application under a headless compositor. In the same job as the unit
+    # tests so the dependencies are compiled once.
     - cargo build --locked -p matterfast -p matterfast-testserver
     # sway refuses to start as root.
     - useradd --create-home ui
