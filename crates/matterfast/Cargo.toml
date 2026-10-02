@@ -14,6 +14,8 @@ chrono-tz = "0.10"
 cpal = "0.18.2"
 dirs = "6"
 emojis = "0.9.0"
+# A theme extension from Zed's registry is a gzipped tarball.
+flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
 futures-util.workspace = true
 gpui-kit = "0.7.0"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
@@ -21,10 +23,14 @@ mattermost-api = { path = "../mattermost-api" }
 mattermost-calls = { path = "../mattermost-calls" }
 opus = "0.3.1"
 rand = "0.9"
+# The same reqwest the API crate uses, for the one thing that is not a
+# Mattermost server: Zed's extension registry (`zed_extensions.rs`).
+reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls", "query"] }
 pulldown-cmark = { version = "0.13.4", default-features = false }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde.workspace = true
 serde_json.workspace = true
+tar = { version = "0.4", default-features = false }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "fs"] }
 tracing.workspace = true
@@ -48,3 +54,10 @@ gstreamer-video = "0.24.5"
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
 notify-rust = "4"
+
+# A second launch reaches the first through a named pipe, which is Tokio's to
+# serve, and the sign-in link scheme is registered in the registry: there is
+# no installer to do either.
+[target.'cfg(windows)'.dependencies]
+tokio = { workspace = true, features = ["net", "io-util"] }
+windows-registry = "0.6"

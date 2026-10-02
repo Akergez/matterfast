@@ -8,6 +8,7 @@
 //! Steps:
 //! - `wait:<ms>`
 //! - `click:<x>,<y>`, `rclick:<x>,<y>`, `move:<x>,<y>`
+//! - `drag:<x>,<y>,<to-x>,<to-y>` — press, carry, let go
 //! - `scroll:<x>,<y>,<dy>` — positive `dy` scrolls towards older content
 //! - `key:<keystroke>` — `ctrl-k`, `escape`, `enter`
 //! - `type:<text>`
@@ -24,6 +25,12 @@
 //! - `channel=<title>` — the open channel, as the sidebar names it
 //! - `dialog=open|closed`
 //! - `theme=light|dark`
+//! - `theme-name=<name>` — the theme being worn, as the settings list it
+//! - `search=<text>` — what is in the search box
+//! - `search-hints=<a>|<b>|…` — the rows offered under it, empty when closed
+//! - `search-hits=<n>` — how many messages the last search found
+//! - `sidebar-width=<px>|auto`, `panel-width=<px>|auto` — what a side column
+//!   was dragged to, or `auto` for one left at its share of the window
 //!
 //! Coordinates are divided by `MATTERFAST_SCRIPT_SCALE`, so they can be read
 //! straight off a screenshot taken on a scaled display.
@@ -45,6 +52,7 @@ enum Step {
     Wait(u64),
     Click(f32, f32, bool),
     Move(f32, f32),
+    Drag(f32, f32, f32, f32),
     Scroll(f32, f32, f32),
     Key(String),
     Type(String),
@@ -71,6 +79,10 @@ fn parse(script: &str) -> Vec<Step> {
                 },
                 "move" => match numbers(rest)?[..] {
                     [x, y] => Step::Move(x, y),
+                    _ => return None,
+                },
+                "drag" => match numbers(rest)?[..] {
+                    [x, y, to_x, to_y] => Step::Drag(x, y, to_x, to_y),
                     _ => return None,
                 },
                 "scroll" => match numbers(rest)?[..] {
@@ -139,6 +151,22 @@ fn observe(what: &str, window: &mut Window, cx: &mut App) -> Option<String> {
             .unwrap_or_default(),
         "dialog" => if window.has_active_dialog(cx) { "open" } else { "closed" }.to_string(),
         "theme" => if cx.theme().mode.is_dark() { "dark" } else { "light" }.to_string(),
+        "theme-name" => cx.theme().theme_name().to_string(),
+        "search" => ui.map(|ui| ui.search_box.text(cx)).unwrap_or_default(),
+        "search-hints" => ui.map(|ui| ui.search_box.offered().join("|")).unwrap_or_default(),
+        "search-hits" => ui
+            .map(|ui| ui.state.borrow().search_results.len())
+            .unwrap_or(0)
+            .to_string(),
+        "sidebar-width" | "panel-width" => {
+            let divider = if what == "sidebar-width" {
+                super::Divider::Sidebar
+            } else {
+                super::Divider::Panel
+            };
+            ui.and_then(|ui| ui.widths.get(divider))
+                .map_or("auto".to_string(), |width| width.round().to_string())
+        }
         _ => return None,
     })
 }
@@ -176,6 +204,42 @@ fn next(handle: AnyWindowHandle, mut steps: VecDeque<Step>, cx: &mut App) {
                 PlatformInput::MouseUp(MouseUpEvent {
                     button,
                     position,
+                    modifiers: Modifiers::default(),
+                    click_count: 1,
+                }),
+                cx,
+            );
+        }
+        Step::Drag(x, y, to_x, to_y) => {
+            let (from, to) = (at(*x, *y), at(*to_x, *to_y));
+            pointer(window, from, cx);
+            window.dispatch_event(
+                PlatformInput::MouseDown(MouseDownEvent {
+                    button: MouseButton::Left,
+                    position: from,
+                    modifiers: Modifiers::default(),
+                    click_count: 1,
+                    first_mouse: false,
+                }),
+                cx,
+            );
+            // Halfway first: a drag begins on the move that leaves the place
+            // it was pressed, and only the moves after that one carry it.
+            let halfway = point((from.x + to.x) / 2., (from.y + to.y) / 2.);
+            for position in [halfway, to, to] {
+                window.dispatch_event(
+                    PlatformInput::MouseMove(MouseMoveEvent {
+                        position,
+                        pressed_button: Some(MouseButton::Left),
+                        modifiers: Modifiers::default(),
+                    }),
+                    cx,
+                );
+            }
+            window.dispatch_event(
+                PlatformInput::MouseUp(MouseUpEvent {
+                    button: MouseButton::Left,
+                    position: to,
                     modifiers: Modifiers::default(),
                     click_count: 1,
                 }),

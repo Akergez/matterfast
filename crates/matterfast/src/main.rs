@@ -28,9 +28,14 @@ mod runtime;
 mod session;
 mod state;
 mod store;
+mod themes;
 mod timefmt;
 mod ui;
+#[cfg(any(windows, test))]
+mod url_scheme;
 mod video;
+mod zed_extensions;
+mod zed_theme;
 
 pub const APP_ID: &str = "io.gitlab.akergez.Matterfast";
 
@@ -64,6 +69,12 @@ fn main() {
         return;
     }
     let later_launches = unique.then(ipc::listen).flatten();
+    // Only the copy people actually use claims the sign-in links: a demo or
+    // a profiling run must not take them away from it.
+    #[cfg(windows)]
+    if unique {
+        url_scheme::register();
+    }
 
     gpui_kit::application()
         .with_assets(gpui_kit::assets::AllAssets)
@@ -74,6 +85,7 @@ fn main() {
         .run(move |cx| {
             gpui_kit::init(cx);
             fonts::install(cx);
+            themes::load(cx);
             appearance::apply(None, cx);
             runtime::install(cx);
             ui::init(cx);

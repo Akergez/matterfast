@@ -46,7 +46,9 @@ pub struct Post {
     pub props: Props,
     #[serde(default)]
     pub hashtags: String,
-    #[serde(default)]
+    /// Go writes a nil slice as `null`, and a post read back out of the
+    /// search has one here where a post in a channel has `[]`.
+    #[serde(default, deserialize_with = "super::null_as_empty")]
     pub file_ids: Vec<String>,
     #[serde(default)]
     pub pending_post_id: String,
@@ -185,7 +187,7 @@ pub struct MessageAttachment {
     pub title: String,
     #[serde(default)]
     pub title_link: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_empty")]
     pub fields: Vec<AttachmentField>,
     #[serde(default)]
     pub footer: String,
@@ -273,19 +275,21 @@ impl AttachmentField {
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct PostMetadata {
-    #[serde(default)]
+    // Every list here may arrive as `null` rather than be left out: which it
+    // is depends on the route the post came by, not on the post.
+    #[serde(default, deserialize_with = "super::null_as_empty")]
     pub embeds: Vec<PostEmbed>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::null_as_empty")]
     pub emojis: Vec<Emoji>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::null_as_empty")]
     pub files: Vec<FileInfo>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::null_as_default")]
     pub images: HashMap<String, PostImage>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::null_as_empty")]
     pub reactions: Vec<Reaction>,
     #[serde(default)]
     pub priority: Option<PostPriority>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::null_as_empty")]
     pub acknowledgements: Vec<PostAcknowledgement>,
 }
 
@@ -376,9 +380,9 @@ pub struct Reaction {
 /// `order` is **newest-first**; `posts` is keyed by id.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct PostList {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::null_as_empty")]
     pub order: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::null_as_default")]
     pub posts: HashMap<String, Post>,
     #[serde(default)]
     pub next_post_id: String,
@@ -498,8 +502,25 @@ pub struct UserThreads {
 pub struct PostSearchResults {
     #[serde(flatten)]
     pub posts: PostList,
-    #[serde(default)]
+    /// Which words of each post matched, by post id. Only a server with a
+    /// search engine behind it fills this in. One searching its own database
+    /// has nothing to say, and says it in either of two ways: the whole map
+    /// is `null`, or every hit is in it with `null` for its words. Go writes
+    /// a nil map and a nil slice alike.
+    #[serde(default, deserialize_with = "matches_or_nothing")]
     pub matches: HashMap<String, Vec<String>>,
+}
+
+fn matches_or_nothing<'de, D>(d: D) -> Result<HashMap<String, Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let found: Option<HashMap<String, Option<Vec<String>>>> = Option::deserialize(d)?;
+    Ok(found
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(post, words)| (post, words.unwrap_or_default()))
+        .collect())
 }
 
 /// `server/public/model/scheduled_post.go` — a [`Post`] plus the time to send
@@ -614,6 +635,48 @@ mod null_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What a server searching its own database answers: `Matches` is a nil
+    /// map there, and Go writes a nil map as `null`.
+    #[test]
+    fn search_results_without_highlights_parse() {
+        let body = r#"{
+            "order": ["hxr1zmb3xtdppmsfcqbdyfhz9r"],
+            "posts": {"hxr1zmb3xtdppmsfcqbdyfhz9r": {
+                "id": "hxr1zmb3xtdppmsfcqbdyfhz9r", "create_at": 1700000000000,
+                "user_id": "kzjm6dkpppfj7cw1j5pnfjqxxy",
+                "channel_id": "5b3zgc9dabnj9mymkecux3q7wc", "message": "found",
+                "file_ids": null, "participants": null,
+                "metadata": {"embeds": null, "emojis": null, "files": null,
+                             "images": null, "reactions": null,
+                             "acknowledgements": null}}},
+            "next_post_id": "", "prev_post_id": "", "has_next": false,
+            "first_inaccessible_post_time": 0,
+            "matches": null
+        }"#;
+        let results: PostSearchResults = serde_json::from_str(body).unwrap();
+        assert_eq!(results.posts.order.len(), 1);
+        assert!(results.matches.is_empty());
+    }
+
+    /// What a real server was seen to answer: the map is there, with every
+    /// hit in it, and nothing for any of them — `null` where the list of
+    /// matched words would be. It is the last field of the body, which is
+    /// where the decoder gave up.
+    #[test]
+    fn search_results_with_a_null_list_of_matches_parse() {
+        let body = r#"{
+            "order": ["hxr1zmb3xtdppmsfcqbdyfhz9r"],
+            "posts": {"hxr1zmb3xtdppmsfcqbdyfhz9r": {
+                "id": "hxr1zmb3xtdppmsfcqbdyfhz9r", "message": "found"}},
+            "matches": {"hxr1zmb3xtdppmsfcqbdyfhz9r": null,
+                        "kzjm6dkpppfj7cw1j5pnfjqxxy": ["found"]}
+        }"#;
+        let results: PostSearchResults = serde_json::from_str(body).unwrap();
+        assert_eq!(results.posts.order.len(), 1);
+        assert!(results.matches["hxr1zmb3xtdppmsfcqbdyfhz9r"].is_empty());
+        assert_eq!(results.matches["kzjm6dkpppfj7cw1j5pnfjqxxy"], ["found"]);
+    }
 
     /// A response body with both buckets, field for field as the Go structs
     /// tag them (`model.ScheduledPost` embedding `model.Draft`).

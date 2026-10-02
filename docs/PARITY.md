@@ -14,7 +14,10 @@ attachments, priority, system messages, webhook name overrides; scrollback a
 page at a time, anchored so the view does not jump; a channel with unread
 messages opens at them and draws a "New messages" line; threads with CRT
 respected; the inbox of mentions, followed threads and saved posts; pinned
-messages; search across a team, and `file:` to search attachments.
+messages; search across a team from the title bar, in the asker's time zone
+and a page at a time, with the modifiers (`from:`, `in:`, `before:`, `after:`,
+`on:`) suggested and completed as they are typed, and `file:` to search
+attachments.
 
 **Rendering** — Markdown: bold, italic, strike, links, lists, block quotes,
 inline code, fenced code on its own panel, tables laid out as rows. Emoji

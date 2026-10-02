@@ -11,8 +11,8 @@
 //! finds a live socket says what it was started for and exits; a launch that
 //! does not becomes the one listening.
 //!
-//! Windows has no such socket in the standard library, and this is not yet
-//! done another way there: every launch is its own copy.
+//! On Windows the socket is a named pipe (`ipc_windows.rs`) and everything
+//! else is the same: the same two requests, in the same one line each.
 
 #[cfg(unix)]
 use std::io::{BufRead, BufReader, Write};
@@ -32,8 +32,10 @@ pub enum Request {
     Open(String),
 }
 
-// Only the socket speaks this, and Windows has no socket yet.
-#[cfg_attr(not(unix), allow(dead_code))]
+#[cfg(windows)]
+#[path = "ipc_windows.rs"]
+mod pipe;
+
 impl Request {
     fn encode(&self) -> String {
         match self {
@@ -91,11 +93,8 @@ fn socket_path() -> PathBuf {
 pub fn forward(requests: &[Request]) -> bool {
     #[cfg(unix)]
     return forward_to(&socket_path(), requests);
-    #[cfg(not(unix))]
-    {
-        let _ = requests;
-        false
-    }
+    #[cfg(windows)]
+    return pipe::forward_to(&pipe::pipe_name(), requests);
 }
 
 #[cfg(unix)]
@@ -118,8 +117,8 @@ fn forward_to(path: &std::path::Path, requests: &[Request]) -> bool {
 pub fn listen() -> Option<async_channel::Receiver<Request>> {
     #[cfg(unix)]
     return listen_at(socket_path());
-    #[cfg(not(unix))]
-    None
+    #[cfg(windows)]
+    return pipe::listen_at(pipe::pipe_name());
 }
 
 #[cfg(unix)]
@@ -197,6 +196,8 @@ mod tests {
         assert_eq!(Request::Open("a://b\nactivate".into()).encode().lines().count(), 1);
     }
 
+    // The socket; the pipe has the same test beside it in `ipc_windows.rs`.
+    #[cfg(unix)]
     #[test]
     fn a_second_launch_reaches_the_first() {
         let dir = std::env::temp_dir().join(format!("matterfast-ipc-test-{}", std::process::id()));

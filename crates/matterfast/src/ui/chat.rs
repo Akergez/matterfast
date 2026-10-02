@@ -16,7 +16,7 @@ use gpui_kit::component::input::{
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Disableable, Sizable};
+use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Disableable, Sizable, Size};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     div, list, px, AnyElement, App, ClipboardEntry, Entity, ExternalPaths, FollowMode,
@@ -1216,13 +1216,14 @@ fn composer(ui: &Rc<Ui>, cx: &App) -> AnyElement {
     h_flex()
         .flex_none()
         .w_full()
-        .gap_1()
+        .gap_2()
         .px_3()
         .pt_1()
         .pb_3()
-        .items_end()
+        .items_center()
         .child(
             kit::icon_button("attach", Lucide::Paperclip, "Attach a file")
+                .with_size(Size::Medium)
                 .on_click(ui.click(|ui, cx| ui.dispatch(Action::PickAttachment, cx))),
         )
         .child(
@@ -1230,7 +1231,6 @@ fn composer(ui: &Rc<Ui>, cx: &App) -> AnyElement {
             // cannot see is one you will send by accident.
             Button::new("priority")
                 .icon(Lucide::CircleAlert)
-                .small()
                 .tooltip("Message priority")
                 .when(priority == "urgent", |button| button.danger())
                 .when(priority == "important", |button| button.primary())
@@ -1254,6 +1254,7 @@ fn composer(ui: &Rc<Ui>, cx: &App) -> AnyElement {
         )
         .child(
             kit::icon_button("schedule", Lucide::AlarmClock, "Send later")
+                .with_size(Size::Medium)
                 .on_click(ui.click(|ui, cx| ui.dispatch(Action::ScheduleMessage, cx))),
         )
         .child(
@@ -1330,7 +1331,6 @@ fn composer(ui: &Rc<Ui>, cx: &App) -> AnyElement {
             Button::new("send")
                 .icon(Lucide::SendHorizontal)
                 .primary()
-                .small()
                 .tooltip("Send  (Enter)")
                 .on_click(ui.click(|ui, cx| ui.chat.submit(ui, cx))),
         )

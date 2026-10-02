@@ -3,12 +3,12 @@ resolver = "2"
 members = ["crates/mattermost-api", "crates/mattermost-calls", "crates/matterfast", "crates/matterfast-testserver"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.85"
 license = "GPL-3.0-only"
 authors = ["Akergez"]
-repository = "https://gitlab.com/akergez/matterfast"
+repository = "https://gitlab.com/ragusseven/matterfast"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

@@ -1,0 +1,35 @@
+# mode: server
+# size: 1320x840
+#
+# The search box in the title bar says what a search can be made of: empty, it
+# lists the modifiers; after `from:` it lists people, and a row picked with
+# the arrows is written into the line. Enter with nothing picked searches.
+wait:5000
+expect:session=yes
+key:ctrl-f
+wait:800
+expect:search-hints=from:|in:|before:|after:|on:|file:
+type:fr
+wait:500
+expect:search-hints=from:
+type:om:
+wait:1000
+# The people this client knows, then whoever else the server names.
+expect:search-hints=Anton Ivanov|Lena Petrova|Mikk Tamm|Sara Okafor|Olga Belova
+key:down
+key:down
+wait:300
+key:enter
+wait:600
+# The line now ends in a space, and a new word offers the modifiers again —
+# without `file:`, which only means something as the first word.
+expect:search-hints=from:|in:|before:|after:|on:
+type:fix
+wait:400
+expect:search=from:lena fix
+expect:search-hints=
+key:enter
+wait:2500
+# Lena said "fix" once, in the direct messages.
+expect:search-hits=1
+quit

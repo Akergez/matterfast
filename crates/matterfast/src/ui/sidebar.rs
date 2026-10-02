@@ -1,20 +1,18 @@
 //! The channel sidebar: an account/team switcher in the header, the list below.
 
-use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{ContextMenuExt, DropdownMenu, PopupMenuItem};
 use gpui_kit::component::popover::Popover;
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Selectable, Sizable};
+use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Sizable};
 use gpui_kit::prelude::*;
-use gpui_kit::{div, px, AnyElement, App, ElementId, Entity, FontWeight, Window};
+use gpui_kit::{div, px, AnyElement, App, ElementId, FontWeight, Window};
 use mattermost_api::models::{CategoryType, Channel, ChannelType, SidebarCategory};
 
 use super::kit::{self, Lucide};
 use super::message::{emoji_element, status_is_live};
-use super::{Action, MenuAction, Ui, WindowSlot};
+use super::{Action, MenuAction, Ui};
 use crate::background::Background;
 use crate::state::AppState;
 
@@ -30,56 +28,13 @@ pub enum RowAction {
 }
 
 /// The channel list, pane one.
-pub struct ChannelSidebar {
-    window: Rc<WindowSlot>,
-    /// The search box, while there is a window to put it in.
-    search: RefCell<Option<Entity<InputState>>>,
-    /// Whether the search bar is showing under the header.
-    search_open: Cell<bool>,
-}
+pub struct ChannelSidebar;
 
 impl ChannelSidebar {
-    pub fn new(window: Rc<WindowSlot>) -> Self {
-        ChannelSidebar {
-            window,
-            search: RefCell::new(None),
-            search_open: Cell::new(false),
-        }
-    }
-
-    pub(super) fn attach(&self, search: Entity<InputState>) {
-        *self.search.borrow_mut() = Some(search);
-    }
-
-    pub(super) fn detach(&self) {
-        self.search.borrow_mut().take();
-    }
-
     /// The list is drawn from the state every frame, so all a refresh has to
     /// do is ask for a frame.
     pub fn refresh(&self, cx: &mut App) {
         cx.refresh_windows();
-    }
-
-    /// Opens the search bar and puts the cursor in it.
-    pub fn focus_search(&self, cx: &mut App) {
-        self.search_open.set(true);
-        cx.refresh_windows();
-        let Some(search) = self.search.borrow().clone() else {
-            return;
-        };
-        self.window.update(cx, move |window, cx| {
-            search.update(cx, |search, cx| search.focus(window, cx));
-        });
-    }
-
-    fn toggle_search(&self, cx: &mut App) {
-        if self.search_open.get() {
-            self.search_open.set(false);
-            cx.refresh_windows();
-        } else {
-            self.focus_search(cx);
-        }
     }
 }
 
@@ -531,7 +486,6 @@ fn main_menu(ui: &Rc<Ui>) -> AnyElement {
 /// Draws the sidebar. `dock` is the call dock, which is pinned under the
 /// channel list for as long as a call runs.
 pub fn render(ui: &Rc<Ui>, dock: Option<AnyElement>, cx: &mut App) -> AnyElement {
-    let sidebar = &ui.channels;
     let st = ui.state.borrow();
     let theme = cx.theme();
     let team_name = st
@@ -559,9 +513,10 @@ pub fn render(ui: &Rc<Ui>, dock: Option<AnyElement>, cx: &mut App) -> AnyElement
                 .child(team_name),
         )
         .child(
-            kit::icon_button("search", Lucide::Search, "Search messages")
-                .selected(sidebar.search_open.get())
-                .on_click(ui.click(|ui, cx| ui.channels.toggle_search(cx))),
+            // Going to a channel by name: the list's own search, as opposed
+            // to the search of messages in the title bar.
+            kit::icon_button("find-channel", Lucide::ListFilter, "Find channel  (Ctrl+K)")
+                .on_click(ui.click(|ui, cx| ui.menu_action(MenuAction::QuickSwitch, cx))),
         )
         .child(main_menu(ui));
 
@@ -574,7 +529,7 @@ pub fn render(ui: &Rc<Ui>, dock: Option<AnyElement>, cx: &mut App) -> AnyElement
     }
     drop(st);
 
-    let mut pane = v_flex()
+    let pane = v_flex()
         .size_full()
         .bg(theme.sidebar)
         .text_color(theme.sidebar_foreground)
@@ -582,48 +537,9 @@ pub fn render(ui: &Rc<Ui>, dock: Option<AnyElement>, cx: &mut App) -> AnyElement
         .border_color(theme.sidebar_border)
         .child(header);
 
-    // A search bar rather than a dialog: it belongs to the list it filters
-    // into, and Escape puts it away without losing your place.
-    if sidebar.search_open.get() {
-        if let Some(search) = sidebar.search.borrow().clone() {
-            pane = pane.child(
-                div()
-                    .flex_none()
-                    .p_2()
-                    .child(Input::new(&search).prefix(Lucide::Search).cleanable(true)),
-            );
-        }
-    }
-
     pane.child(list.overflow_y_scroll())
         .when_some(dock, |pane, dock| pane.child(dock))
         .into_any_element()
-}
-
-/// Builds the search box and wires what it reports to the session.
-pub(super) fn build_search(
-    ui: &Rc<Ui>,
-    window: &mut Window,
-    cx: &mut App,
-) -> (Entity<InputState>, gpui_kit::Subscription) {
-    let search = cx.new(|cx| {
-        InputState::new(window, cx)
-            .placeholder("Search messages, or file: to search attachments")
-    });
-    let weak = Rc::downgrade(ui);
-    let subscription = cx.subscribe(&search, move |search, event: &InputEvent, cx| {
-        let Some(ui) = weak.upgrade() else { return };
-        // On Enter, not on every keystroke: a post search is a round trip to
-        // the server, and searching per character would be a request per
-        // character.
-        if let InputEvent::PressEnter { .. } = event {
-            let terms = search.read(cx).value().trim().to_string();
-            if !terms.is_empty() {
-                ui.dispatch(Action::Search(terms), cx);
-            }
-        }
-    });
-    (search, subscription)
 }
 
 #[cfg(test)]

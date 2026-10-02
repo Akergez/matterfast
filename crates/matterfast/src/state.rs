@@ -239,6 +239,12 @@ pub struct AppState {
     /// The last search's hits, newest first, and whether one is in flight.
     pub search_results: Vec<Post>,
     pub searching: bool,
+    /// What the hits are for, how many pages of them are here, and whether
+    /// the last page came back full — which is all the server says about
+    /// there being more.
+    pub search_terms: String,
+    pub search_pages: u32,
+    pub search_more: bool,
     /// Posts you saved. Mattermost has no "saved" flag on a post — it is a
     /// preference in the `flagged_post` category, one row per post id.
     pub saved_posts: HashSet<String>,
@@ -333,6 +339,9 @@ impl AppState {
             pending_files: Vec::new(),
             search_results: Vec::new(),
             searching: false,
+            search_terms: String::new(),
+            search_pages: 0,
+            search_more: false,
             saved_posts: HashSet::new(),
             reaction_unread: 0,
             typing: HashMap::new(),

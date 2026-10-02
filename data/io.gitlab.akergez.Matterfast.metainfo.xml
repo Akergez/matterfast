@@ -22,12 +22,12 @@
   </description>
 
   <launchable type="desktop-id">io.gitlab.akergez.Matterfast.desktop</launchable>
-  <url type="homepage">https://gitlab.com/akergez/matterfast</url>
-  <url type="bugtracker">https://gitlab.com/akergez/matterfast/-/issues</url>
+  <url type="homepage">https://gitlab.com/ragusseven/matterfast</url>
+  <url type="bugtracker">https://gitlab.com/ragusseven/matterfast/-/issues</url>
 
   <screenshots>
     <screenshot type="default">
-      <image>https://gitlab.com/akergez/matterfast/-/raw/master/docs/screenshots/main.png</image>
+      <image>https://gitlab.com/ragusseven/matterfast/-/raw/master/docs/screenshots/main.png</image>
       <caption>A channel, its thread panel and the call dock</caption>
     </screenshot>
   </screenshots>
@@ -38,6 +38,7 @@
   </content_rating>
 
   <releases>
+    <release version="0.2.0" date="2026-10-03"/>
     <release version="0.1.0" date="2026-09-03"/>
   </releases>
 </component>

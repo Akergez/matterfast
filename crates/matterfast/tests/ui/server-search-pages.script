@@ -1,0 +1,21 @@
+# mode: server
+# size: 1320x840
+# server: MM_HISTORY=150
+#
+# A search comes a page at a time: sixty hits, and the next sixty when the
+# list is scrolled to its end — not before, and not two pages for one scroll.
+wait:6000
+key:ctrl-f
+wait:800
+type:backlog
+key:enter
+wait:3000
+expect:search-hits=60
+# The panel of hits is the right third of the window.
+scroll:1120,450,-20000
+wait:3000
+expect:search-hits=120
+scroll:1120,450,-40000
+wait:3000
+expect:search-hits=150
+quit

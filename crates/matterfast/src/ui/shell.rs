@@ -7,9 +7,10 @@
 //! is the call dock, which is pinned there for as long as a call runs and
 //! moves under the conversation once the sidebar is a separate page.
 //!
-//! Nothing about the layout is stored: it is read off the window's width on
-//! every frame, which is the only thing that is true when a window is tiled,
-//! maximized or dragged onto a phone-sized screen.
+//! The layout is read off the window's width on every frame, which is the
+//! only thing that is true when a window is tiled, maximized or dragged onto
+//! a phone-sized screen. The one thing kept is how wide the two side columns
+//! were dragged (`Widths`), and that is a wish the window's width overrules.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -17,15 +18,14 @@ use std::sync::{Arc, OnceLock};
 
 use gpui_kit::component::button::Button;
 use gpui_kit::component::input::Escape;
-use gpui_kit::component::kbd::Kbd;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{
-    h_flex, v_flex, ActiveTheme, Icon, Selectable, Sizable, TitleBar, WindowExt,
+    h_flex, v_flex, ActiveTheme, Selectable, Sizable, TitleBar, WindowExt,
 };
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    div, img, px, size, AnyElement, AnyWindowHandle, App, Bounds, Context, Entity, FocusHandle,
-    FontWeight, Global, Image, ImageFormat, KeyBinding, MouseButton, ObjectFit, Pixels,
+    div, img, px, size, AnyElement, AnyWindowHandle, App, Bounds, Context, DragMoveEvent, Entity,
+    FocusHandle, FontWeight, Global, Image, ImageFormat, KeyBinding, MouseButton, ObjectFit, Pixels,
     Subscription, Window, WindowBounds, WindowOptions,
 };
 use mattermost_api::models::{ClientConfig, User};
@@ -33,7 +33,7 @@ use mattermost_api::models::{ClientConfig, User};
 use super::kit::{self, Lucide};
 use super::login::{LoginResult, LoginView};
 use super::rhs::PanelMode;
-use super::{Action, MenuAction, Ui};
+use super::{Action, Divider, MenuAction, Ui};
 use crate::background::Background;
 use crate::ipc::Request;
 use crate::notifications::Notifier;
@@ -401,10 +401,10 @@ impl Shell {
     fn show_session(&mut self, ui: Rc<Ui>, window: &mut Window, cx: &mut Context<Self>) {
         let (composer, composer_events) = super::chat::build_composer(&ui, window, cx);
         let (reply, reply_events) = super::rhs::build_composer(&ui, window, cx);
-        let (search, search_events) = super::sidebar::build_search(&ui, window, cx);
+        let (search, search_events) = super::search::build(&ui, window, cx);
         ui.chat.attach(composer);
         ui.right.attach(reply);
-        ui.channels.attach(search);
+        ui.search_box.attach(search);
         self._session_subscriptions = vec![composer_events, reply_events, search_events];
         self.stage = Stage::Session(ui.clone());
         cx.notify();
@@ -513,6 +513,9 @@ impl Shell {
     /// to on the left, the way to anywhere in the middle, what is waiting for
     /// you on the right. The bar under all of it is what drags the window, so
     /// everything that takes a click keeps the press to itself.
+    ///
+    /// It is painted as the channel sidebar is: the two are one frame around
+    /// the conversation, in one colour, and everything else is the page.
     fn title_bar(&self, window: &mut Window, cx: &mut Context<Self>) -> TitleBar {
         let theme = cx.theme().clone();
         let width = f32::from(window.viewport_size().width);
@@ -543,8 +546,17 @@ impl Shell {
             .justify_end();
         let mut bar = h_flex().size_full().gap_3().items_center();
 
+        // The toolkit's bar is a gradient of its own colour; a flat fill in
+        // the sidebar's is what makes the two read as one surface.
+        let framed = || {
+            TitleBar::new()
+                .bg(theme.sidebar)
+                .border_color(theme.sidebar_border)
+                .text_color(theme.sidebar_foreground)
+        };
+
         let Some(ui) = self.session().cloned() else {
-            return TitleBar::new().child(bar.child(name));
+            return framed().child(bar.child(name));
         };
         let (server, mentions) = {
             let st = ui.state.borrow();
@@ -561,32 +573,11 @@ impl Shell {
             );
         }
 
-        let jump = h_flex()
-            .id("title-jump")
-            .flex_none()
-            .w(px(column_width(width, 0.32, 150.0, 380.0)))
-            .h(px(24.))
-            .px_2()
-            .gap_2()
-            .items_center()
-            .rounded(theme.radius)
-            .border_1()
-            .border_color(theme.border)
-            .bg(theme.background.opacity(0.6))
-            .text_xs()
-            .text_color(theme.muted_foreground)
-            .cursor_pointer()
-            .hover(|jump| jump.bg(theme.secondary_hover).text_color(theme.foreground))
-            .child(Icon::from(Lucide::Search).xsmall())
-            .child(div().flex_1().min_w_0().truncate().child("Jump to…"))
-            .when(roomy, |jump| {
-                jump.children(Kbd::binding_for_action(&QuickSwitch, Some(CONTEXT), window))
-            })
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_click(cx.listener(|shell, _, _, cx| {
-                cx.stop_propagation();
-                shell.menu(MenuAction::QuickSwitch, cx)
-            }));
+        // Searching messages is the one thing done from anywhere, so it has
+        // the middle of the bar; going to a channel is done from the list of
+        // channels, and its button is there.
+        let search =
+            super::search::render(&ui, column_width(width, 0.32, 150.0, 380.0), window, cx);
 
         let inbox_open =
             ui.overlay.shown() && matches!(ui.right.mode(cx), PanelMode::Inbox);
@@ -610,8 +601,8 @@ impl Shell {
                 ),
         );
 
-        bar = bar.child(name).child(jump).child(actions);
-        TitleBar::new().child(bar)
+        bar = bar.child(name).child(search).child(actions);
+        framed().child(bar)
     }
 }
 
@@ -721,6 +712,71 @@ fn column_width(window: f32, fraction: f32, min: f32, max: f32) -> f32 {
     (window * fraction).clamp(min, max)
 }
 
+/// How wide a side column is: what the person dragged it to if they did, its
+/// share of the window otherwise. A dragged width may go past the share's own
+/// bounds, but never so far that the conversation is squeezed out — `most` is
+/// what is left for the column in this window, and wins over `least`.
+fn dragged_width(dragged: Option<f32>, share: f32, least: f32, most: f32) -> f32 {
+    dragged.map_or(share, |width| width.max(least)).min(most)
+}
+
+/// The thinnest a side column can be dragged, and the most of the window it
+/// may take.
+const DRAGGED_MIN: f32 = 180.0;
+const DRAGGED_SHARE: f32 = 0.45;
+
+/// What follows the pointer while a divider is dragged: nothing. The column
+/// moving is the feedback.
+struct DividerGhost;
+
+impl Render for DividerGhost {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        gpui_kit::Empty
+    }
+}
+
+/// The strip that is dragged to resize a side column. It lies over the border
+/// between two panes, a few pixels to either side, and draws nothing until
+/// the pointer is on it. A double click gives the column back its share.
+fn divider(ui: &Rc<Ui>, which: Divider, offset: f32, cx: &App) -> AnyElement {
+    const GRIP: f32 = 7.0;
+    let line = cx.theme().ring;
+    let strip = div()
+        .id(match which {
+            Divider::Sidebar => "divider-sidebar",
+            Divider::Panel => "divider-panel",
+        })
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .w(px(GRIP))
+        .flex()
+        .justify_center()
+        .cursor_col_resize()
+        .occlude()
+        .group("divider")
+        .child(
+            div()
+                .w(px(2.))
+                .h_full()
+                .group_hover("divider", move |mark| mark.bg(line)),
+        )
+        .on_drag(which, |_, _, _, cx| cx.new(|_| DividerGhost))
+        .on_click({
+            let reset = ui.click(move |ui, cx| ui.widths.set(which, None, cx));
+            move |click, window, cx| {
+                if click.click_count() == 2 {
+                    reset(click, window, cx);
+                }
+            }
+        });
+    match which {
+        Divider::Sidebar => strip.left(px(offset - GRIP / 2.0)),
+        Divider::Panel => strip.right(px(offset - GRIP / 2.0)),
+    }
+    .into_any_element()
+}
+
 /// The three panes, laid out for however wide the window is right now.
 fn session(ui: &Rc<Ui>, window: &mut Window, cx: &mut App) -> AnyElement {
     ui.learn_unknown_mentions();
@@ -749,12 +805,36 @@ fn session(ui: &Rc<Ui>, window: &mut Window, cx: &mut App) -> AnyElement {
 
     // On a phone the panel is a page: a strip of conversation left showing
     // beside it is too narrow to read and too easy to tap by accident.
+    ui.widths.save_when_settled(cx);
+    let most = (width * DRAGGED_SHARE).max(DRAGGED_MIN);
+    let sidebar_width = dragged_width(
+        ui.widths.get(Divider::Sidebar),
+        column_width(width, 0.24, 220.0, 360.0),
+        DRAGGED_MIN,
+        most,
+    );
     let panel_width = if collapsed {
         width
     } else {
-        column_width(width, 0.30, 320.0, 460.0).min(width)
+        dragged_width(
+            ui.widths.get(Divider::Panel),
+            column_width(width, 0.30, 320.0, 460.0),
+            DRAGGED_MIN,
+            most,
+        )
     };
-    let mut panes = h_flex().relative().size_full().min_h_0();
+    let mut panes = h_flex().relative().size_full().min_h_0().on_drag_move({
+        let ui = ui.clone();
+        move |moved: &DragMoveEvent<Divider>, _, cx| {
+            let which = *moved.drag(cx);
+            let pointer = moved.event.position.x;
+            let dragged = match which {
+                Divider::Sidebar => pointer - moved.bounds.left(),
+                Divider::Panel => moved.bounds.right() - pointer,
+            };
+            ui.widths.set(which, Some(f32::from(dragged).round()), cx);
+        }
+    });
 
     if collapsed {
         // Two pages of a stack. The dock lives in the sidebar, except when
@@ -777,7 +857,7 @@ fn session(ui: &Rc<Ui>, window: &mut Window, cx: &mut App) -> AnyElement {
                 div()
                     .flex_none()
                     .h_full()
-                    .w(px(column_width(width, 0.24, 220.0, 360.0)))
+                    .w(px(sidebar_width))
                     .child(super::sidebar::render(ui, dock, cx)),
             )
             .child(
@@ -809,6 +889,13 @@ fn session(ui: &Rc<Ui>, window: &mut Window, cx: &mut App) -> AnyElement {
                 .child(panel)
                 .into_any_element()
         });
+        if !collapsed {
+            panes = panes.child(divider(ui, Divider::Panel, panel_width, cx));
+        }
+    }
+    // After the panes, so that it is above both of the two it sits between.
+    if !collapsed {
+        panes = panes.child(divider(ui, Divider::Sidebar, sidebar_width, cx));
     }
 
     panes
@@ -910,6 +997,17 @@ mod tests {
     fn a_server_is_named_the_way_people_say_it() {
         assert_eq!(pretty_server("https://mm.example.com/"), "mm.example.com");
         assert_eq!(pretty_server("http://localhost:8065"), "localhost:8065");
+    }
+
+    #[test]
+    fn a_dragged_column_keeps_its_width_and_leaves_room_for_the_conversation() {
+        // Untouched, it is its share of the window.
+        assert_eq!(dragged_width(None, 316.8, 180.0, 594.0), 316.8);
+        // Dragged, it is what it was dragged to, past the share's own bounds.
+        assert_eq!(dragged_width(Some(500.0), 316.8, 180.0, 594.0), 500.0);
+        assert_eq!(dragged_width(Some(40.0), 316.8, 180.0, 594.0), 180.0);
+        // A width chosen in a wide window does not swallow a narrow one.
+        assert_eq!(dragged_width(Some(500.0), 220.0, 180.0, 360.0), 360.0);
     }
 
     #[test]

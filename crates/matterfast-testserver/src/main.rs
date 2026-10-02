@@ -13,6 +13,11 @@
 //!
 //! Log in with any username and password. A background "colleague" posts every
 //! few seconds so live updates are visible without a second client.
+//!
+//! Under `/zed` it is also a fake of the one other server the client talks
+//! to: the Zed editor's extension registry, from which themes are installed.
+//! `MATTERFAST_THEMES_API=http://127.0.0.1:8065/zed` points the client at it,
+//! so installing a theme can be tested with no network.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -339,6 +344,72 @@ async fn client_config() -> Json<Value> {
     }))
 }
 
+/// The one extension the fake registry has. Its theme is in Zed's format,
+/// trailing comma and comment included, because published themes have them.
+const ZED_THEME: &str = r##"{
+  // A theme nobody else has, so a test cannot pass by finding a built-in one.
+  "name": "Testserver",
+  "author": "matterfast-testserver",
+  "themes": [
+    {
+      "name": "Testserver Dusk",
+      "appearance": "dark",
+      "style": {
+        "background": "#1b1d2aff",
+        "editor.background": "#14151fff",
+        "panel.background": "#1b1d2aff",
+        "elevated_surface.background": "#22243355",
+        "element.background": "#262a3cff",
+        "element.hover": "#30354bff",
+        "ghost_element.hover": "#30354b80",
+        "text": "#d6d9eaff",
+        "text.muted": "#8f94b3ff",
+        "text.accent": "#f2a65aff",
+        "border": "#30354bff",
+        "syntax": { "comment": { "color": "#8f94b3ff", "font_style": "italic" } },
+      }
+    }
+  ]
+}"##;
+
+async fn zed_extensions() -> Json<Value> {
+    Json(json!({ "data": [{
+        "id": "testserver-dusk",
+        "name": "Testserver Dusk",
+        "version": "1.0.0",
+        "description": "A theme served by the fake registry",
+        "authors": ["Test Server <test@example.invalid>"],
+        "repository": "https://example.invalid/testserver-dusk",
+        "schema_version": 1,
+        "wasm_api_version": null,
+        "provides": ["themes"],
+        "published_at": "2026-01-01T00:00:00Z",
+        "download_count": 1234
+    }] }))
+}
+
+/// An extension the way the registry packages one: `extension.toml` and a
+/// `themes` directory, gzipped.
+async fn zed_extension_download(Path(id): Path<String>) -> Response {
+    if id != "testserver-dusk" {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    let mut archive = tar::Builder::new(encoder);
+    for (path, text) in [
+        ("./extension.toml", "id = \"testserver-dusk\"\n"),
+        ("./themes/testserver-dusk.json", ZED_THEME),
+    ] {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(text.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        archive.append_data(&mut header, path, text.as_bytes()).unwrap();
+    }
+    let bytes = archive.into_inner().unwrap().finish().unwrap();
+    ([(header::CONTENT_TYPE, "application/octet-stream")], bytes).into_response()
+}
+
 async fn empty_object() -> Json<Value> {
     Json(json!({}))
 }
@@ -533,8 +604,14 @@ async fn users_query(Query(q): Query<HashMap<String, String>>) -> Json<Value> {
 /// `POST /users/search` — the whole directory, which is more than any client
 /// has loaded.
 async fn users_search(Json(body): Json<Value>) -> Json<Value> {
-    let term = body["term"].as_str().unwrap_or_default().to_lowercase();
-    let found = [ME, LENA, MIKK, SARA, OLGA]
+    Json(Value::Array(directory(body["term"].as_str().unwrap_or_default())))
+}
+
+/// Everybody whose handle or name begins with `term`, Olga included: she is
+/// on the server and in nothing the client has opened.
+fn directory(term: &str) -> Vec<Value> {
+    let term = term.to_lowercase();
+    [ME, LENA, MIKK, SARA, OLGA]
         .into_iter()
         .map(user)
         .filter(|u| {
@@ -542,8 +619,14 @@ async fn users_search(Json(body): Json<Value>) -> Json<Value> {
                 .iter()
                 .any(|key| u[key].as_str().unwrap_or_default().to_lowercase().starts_with(&term))
         })
-        .collect();
-    Json(Value::Array(found))
+        .collect()
+}
+
+/// `GET /users/autocomplete?name=…` — what the `@` list and the search box's
+/// `from:` list ask. With no channel named there is no `out_of_channel`.
+async fn users_autocomplete(Query(q): Query<HashMap<String, String>>) -> Json<Value> {
+    let name = q.get("name").map(String::as_str).unwrap_or_default();
+    Json(json!({ "users": directory(name) }))
 }
 
 /// `POST /users/usernames` — how a client resolves a mention of somebody it
@@ -805,18 +888,125 @@ async fn threads(State(app): State<Arc<App>>) -> Json<Value> {
     }))
 }
 
+/// A search as the real server reads one: words that must all be there (or
+/// any of them, for an "or" search), and the modifiers that narrow where and
+/// when. Enough of the grammar for a client to be tested against: `from:`,
+/// `in:`, `before:`, `after:`, `on:` and `-word`.
+#[derive(Debug, Default, PartialEq)]
+struct SearchTerms {
+    words: Vec<String>,
+    excluded: Vec<String>,
+    from: Vec<String>,
+    channels: Vec<String>,
+    /// Days since the Unix epoch, in the asker's time zone.
+    before: Option<i64>,
+    after: Option<i64>,
+    on: Option<i64>,
+}
+
+fn parse_search(terms: &str) -> SearchTerms {
+    let mut parsed = SearchTerms::default();
+    for token in terms.to_lowercase().split_whitespace() {
+        let token = token.trim_matches('"');
+        if let Some(name) = token.strip_prefix("from:") {
+            parsed.from.push(name.trim_start_matches('@').to_string());
+        } else if let Some(name) = token.strip_prefix("in:") {
+            parsed.channels.push(name.trim_start_matches('~').to_string());
+        } else if let Some(day) = token.strip_prefix("before:") {
+            parsed.before = day_number(day);
+        } else if let Some(day) = token.strip_prefix("after:") {
+            parsed.after = day_number(day);
+        } else if let Some(day) = token.strip_prefix("on:") {
+            parsed.on = day_number(day);
+        } else if let Some(word) = token.strip_prefix('-').filter(|word| !word.is_empty()) {
+            parsed.excluded.push(word.to_string());
+        } else if !token.trim_start_matches('@').is_empty() {
+            parsed.words.push(token.trim_start_matches('@').to_string());
+        }
+    }
+    parsed
+}
+
+/// `2026-10-03` as days since the Unix epoch; nothing for what is not a date.
+fn day_number(text: &str) -> Option<i64> {
+    let mut parts = text.split('-').map(|part| part.parse::<i64>().ok());
+    let (year, month, day) = (parts.next()??, parts.next()??, parts.next()??);
+    if parts.next().is_some() || !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    // Days from the civil calendar, with the year starting in March so that
+    // the leap day is the last day of it.
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = year.div_euclid(400);
+    let year_of_era = year.rem_euclid(400);
+    let day_of_year = (153 * ((month + 9) % 12) + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    Some(era * 146_097 + day_of_era - 719_468)
+}
+
+impl SearchTerms {
+    /// Whether a post is a hit. `offset` is the asker's time zone, in
+    /// seconds east of UTC: a day is theirs, not Greenwich's.
+    fn matches(&self, post: &Value, any_word: bool, offset: i64) -> bool {
+        let message = post["message"].as_str().unwrap_or_default().to_lowercase();
+        let has = |word: &String| message.contains(word.as_str());
+        let words = if any_word {
+            self.words.is_empty() || self.words.iter().any(has)
+        } else {
+            self.words.iter().all(has)
+        };
+        if !words || self.excluded.iter().any(has) {
+            return false;
+        }
+        let author = username(post["user_id"].as_str().unwrap_or_default());
+        if !self.from.is_empty() && !self.from.iter().any(|name| name == author) {
+            return false;
+        }
+        if !self.channels.is_empty() {
+            let found = channel(post["channel_id"].as_str().unwrap_or_default());
+            // A direct message is named by the other person, as `@handle`.
+            let name = if found["type"] == "D" {
+                "@lena".to_string()
+            } else {
+                found["name"].as_str().unwrap_or_default().to_string()
+            };
+            if !self.channels.iter().any(|wanted| *wanted == name) {
+                return false;
+            }
+        }
+        let day = (post["create_at"].as_i64().unwrap_or(0) / 1000 + offset).div_euclid(86_400);
+        self.before.is_none_or(|before| day < before)
+            && self.after.is_none_or(|after| day > after)
+            && self.on.is_none_or(|on| day == on)
+    }
+}
+
 async fn search_posts(State(app): State<Arc<App>>, Json(body): Json<Value>) -> Json<Value> {
-    let terms = body["terms"].as_str().unwrap_or_default().to_lowercase();
-    let needles: Vec<String> = terms
-        .split_whitespace()
-        .map(|t| t.trim_start_matches('@').to_string())
-        .filter(|t| !t.is_empty())
+    let terms = parse_search(body["terms"].as_str().unwrap_or_default());
+    let any_word = body["is_or_search"].as_bool().unwrap_or(false);
+    let offset = body["time_zone_offset"].as_i64().unwrap_or(0);
+    let mut list = post_list(&app, |post| terms.matches(post, any_word, offset));
+
+    // One page of it, newest first, as the real server cuts it.
+    let per_page = body["per_page"].as_u64().unwrap_or(60).max(1) as usize;
+    let page = body["page"].as_u64().unwrap_or(0) as usize;
+    let order: Vec<Value> = list["order"]
+        .as_array()
+        .map(|order| order.iter().skip(page * per_page).take(per_page).cloned().collect())
+        .unwrap_or_default();
+    if let Some(posts) = list["posts"].as_object_mut() {
+        posts.retain(|id, _| order.iter().any(|kept| kept == id));
+    }
+    // What a real server searching its own database was seen to say about
+    // which words matched: every hit is named, and has `null` for its words —
+    // a nil slice, as Go writes one. A client that expects a list there fails
+    // on every search that finds something, which is how this was noticed.
+    let matches: serde_json::Map<String, Value> = order
+        .iter()
+        .filter_map(|id| Some((id.as_str()?.to_string(), Value::Null)))
         .collect();
-    let mut list = post_list(&app, |p| {
-        let message = p["message"].as_str().unwrap_or_default().to_lowercase();
-        needles.iter().any(|n| message.contains(n))
-    });
-    list["matches"] = json!({});
+    list["order"] = order.into();
+    list["matches"] = matches.into();
     Json(list)
 }
 
@@ -1070,6 +1260,7 @@ async fn main() {
         .route("/users/{user}/teams/{team}/threads", get(threads))
         .route("/users/ids", post(users_by_ids))
         .route("/users/search", post(users_search))
+        .route("/users/autocomplete", get(users_autocomplete))
         .route("/users/usernames", post(users_by_usernames))
         .route("/users", get(users_query))
         .route("/users/status/ids", post(statuses))
@@ -1097,9 +1288,14 @@ async fn main() {
 
     // Request logging: without it there is no way to tell "the client never
     // asked" from "the server answered wrongly", which is most of debugging.
+    let zed = Router::new()
+        .route("/extensions", get(zed_extensions))
+        .route("/extensions/{id}/download", get(zed_extension_download));
+
     let router = Router::new()
         .nest("/api/v4", api)
         .with_state(app)
+        .nest("/zed", zed)
         .layer(middleware::from_fn(|req: Request, next: Next| async move {
             let method = req.method().clone();
             let path = req.uri().to_string();
@@ -1113,4 +1309,48 @@ async fn main() {
     let listener = tokio::net::TcpListener::bind(&address).await.unwrap();
     println!("fake Mattermost on http://{address} — any username and password will do");
     axum::serve(listener, router).await.unwrap();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_date_is_its_number_of_days_since_1970() {
+        assert_eq!(day_number("1970-01-01"), Some(0));
+        assert_eq!(day_number("2000-03-01"), Some(11_017));
+        assert_eq!(day_number("2026-10-03"), Some(20_729));
+        assert_eq!(day_number("2026-13-01"), None);
+        assert_eq!(day_number("yesterday"), None);
+    }
+
+    #[test]
+    fn a_search_is_words_and_modifiers() {
+        let terms = parse_search("Release -draft from:@Lena in:development after:2026-10-01");
+        assert_eq!(terms.words, ["release"]);
+        assert_eq!(terms.excluded, ["draft"]);
+        assert_eq!(terms.from, ["lena"]);
+        assert_eq!(terms.channels, ["development"]);
+        assert_eq!(terms.after, Some(20_727));
+    }
+
+    #[test]
+    fn a_post_is_a_hit_when_every_part_of_the_search_agrees() {
+        let noon = 20_729_i64 * 86_400_000 + 12 * 3_600_000;
+        let post = json!({"message": "Release notes draft is up", "user_id": LENA,
+                          "channel_id": DEV, "create_at": noon});
+        let hit = |terms: &str| parse_search(terms).matches(&post, false, 0);
+        assert!(hit("release notes"));
+        assert!(!hit("release tomorrow"));
+        assert!(parse_search("release tomorrow").matches(&post, true, 0));
+        assert!(hit("from:lena in:development"));
+        assert!(!hit("from:mikk"));
+        assert!(!hit("in:general"));
+        assert!(!hit("notes -draft"));
+        assert!(hit("on:2026-10-03"));
+        assert!(hit("after:2026-10-02 before:2026-10-04"));
+        assert!(!hit("before:2026-10-03"));
+        // Half a day east of Greenwich, noon is already tomorrow.
+        assert!(parse_search("on:2026-10-04").matches(&post, false, 13 * 3600));
+    }
 }

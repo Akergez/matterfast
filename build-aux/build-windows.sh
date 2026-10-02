@@ -108,6 +108,16 @@ if ! grep -q GPUI_FXC_RUNNER "$gpui_src/build.rs"; then
   (cd -- "$gpui_src" && git apply "$gpui_patch")
 fi
 
+# The two things that exist only on Windows — the named pipe a second launch
+# reaches the first through, and the registration of the sign-in link scheme —
+# have tests that only a Windows can run. wine is one, where it runs this
+# architecture's programs; asked for, because it is a second build of the
+# application and not every host's wine can (a 16k-page arm64 kernel cannot).
+if [[ -n ${MATTERFAST_WINDOWS_TEST:-} ]]; then
+  runner=CARGO_TARGET_$(tr 'a-z-' 'A-Z_' <<<"$target")_RUNNER
+  env "$runner=wine" cargo test --locked -p matterfast --target "$target" -- ipc url_scheme
+fi
+
 cargo build --profile "$profile" --locked -p matterfast --target "$target"
 
 name=matterfast-$version-windows-$arch

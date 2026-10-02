@@ -1,0 +1,39 @@
+# mode: server
+# size: 1320x840
+#
+# The search box with the mouse: a click in it opens the list of modifiers, a
+# click on `from:` writes it and lists people, and typing narrows that list —
+# to somebody the client has never met, whom only the server can name.
+wait:5000
+click:660,17
+wait:800
+expect:search-hints=from:|in:|before:|after:|on:|file:
+# The first row of the list, `from:`.
+move:600,79
+wait:300
+click:600,79
+wait:1000
+expect:search=from:
+expect:search-hints=Anton Ivanov|Lena Petrova|Mikk Tamm|Sara Okafor|Olga Belova
+type:mi
+wait:1000
+expect:search-hints=Mikk Tamm
+move:600,79
+wait:300
+click:600,79
+wait:800
+# The cursor is still in the box after a click on a row.
+type:staging
+wait:400
+expect:search=from:mikk staging
+key:enter
+wait:2500
+expect:search-hits=1
+# Olga is in no channel this client has opened: the row comes from the server.
+key:ctrl-a
+key:backspace
+wait:400
+type:from:ol
+wait:1200
+expect:search-hints=Olga Belova
+quit

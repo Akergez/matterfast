@@ -5,18 +5,25 @@
 //! and means what the desktop says right now — and again whenever it changes
 //! its mind, which a desktop on a day/night schedule does twice a day.
 //!
+//! Which theme is worn is a second choice, made once for each of the two:
+//! a light theme and a dark one, by name, out of [`crate::themes`]. Two
+//! choices rather than one list are what lets "System" go on meaning
+//! something when the themes are not the built-in pair.
+//!
 //! The fonts default to the ones the application brings with it (see
 //! [`crate::fonts`] for why it has to bring any). Choosing a system font is
 //! the person's call to make, with one honest caveat the settings dialog
 //! repeats: a variable font is loaded as its regular face only, so nothing in
 //! it comes out bold.
 
+use std::rc::Rc;
 use std::sync::OnceLock;
 
 use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::{App, SharedString, Window};
 
 use crate::background::{set_setting, setting};
+use crate::themes;
 
 /// Light, dark, or whatever the desktop is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -88,6 +95,30 @@ pub fn font_choice(role: FontRole) -> Option<String> {
         .filter(|family| !family.is_empty())
 }
 
+/// The setting a mode's theme is kept under.
+fn theme_key(mode: ThemeMode) -> &'static str {
+    if mode.is_dark() { "dark_theme" } else { "light_theme" }
+}
+
+/// The theme chosen for a mode, or nothing for the built-in one. It is a
+/// name and may be the name of a theme that is no longer there.
+pub fn theme_name(mode: ThemeMode) -> Option<String> {
+    setting(theme_key(mode))
+        .and_then(|value| value.as_str().map(str::to_string))
+        .filter(|name| !name.is_empty())
+}
+
+/// The name of the theme a mode wears: the chosen one, or the built-in one
+/// when nothing was chosen or the choice is gone.
+pub fn theme_for(mode: ThemeMode, cx: &App) -> SharedString {
+    themes::pick(mode, theme_name(mode).as_deref(), cx).name.clone()
+}
+
+pub fn set_theme_name(mode: ThemeMode, name: &str, window: &mut Window, cx: &mut App) {
+    set_setting(theme_key(mode), name.into());
+    apply(Some(window), cx);
+}
+
 pub fn set_theme_choice(choice: ThemeChoice, window: &mut Window, cx: &mut App) {
     set_setting("theme", choice.stored().into());
     apply(Some(window), cx);
@@ -113,7 +144,7 @@ pub fn built_in_fonts(cx: &App) -> (SharedString, SharedString) {
 }
 
 /// Makes the theme say what the settings say. Call after the bundled fonts
-/// are installed, again once there is a window — on Linux only a window knows
+/// are installed and the themes are loaded, again once there is a window — on Linux only a window knows
 /// what the desktop's appearance is — and whenever a choice changes.
 pub fn apply(window: Option<&mut Window>, cx: &mut App) {
     let built_in = built_in_fonts(cx);
@@ -127,9 +158,20 @@ pub fn apply(window: Option<&mut Window>, cx: &mut App) {
             .unwrap_or_else(|| cx.window_appearance())
             .into(),
     };
+    let wanted = themes::pick(mode, theme_name(mode).as_deref(), cx);
+    let theme = Theme::global(cx);
+    let worn = if mode.is_dark() { &theme.dark_theme } else { &theme.light_theme };
     // Loading a mode loads its theme file, fonts and all, so the fonts go on
     // afterwards and in an update of their own.
-    if Theme::global(cx).mode != mode {
+    if theme.mode != mode || !Rc::ptr_eq(worn, &wanted) {
+        // `change` loads whichever theme is registered for the mode, so the
+        // one wanted is registered first.
+        let theme = Theme::global_mut(cx);
+        if mode.is_dark() {
+            theme.dark_theme = wanted;
+        } else {
+            theme.light_theme = wanted;
+        }
         Theme::change(mode, None, cx);
     }
 

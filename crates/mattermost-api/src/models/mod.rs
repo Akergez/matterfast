@@ -55,6 +55,16 @@ where
     Ok(Option::deserialize(d)?.unwrap_or_default())
 }
 
+/// The same for anything with an empty value of its own — a map, mostly. Go
+/// writes a nil map as `null` just as it does a nil slice.
+pub(crate) fn null_as_default<'de, D, T>(d: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de> + Default,
+{
+    Ok(Option::deserialize(d)?.unwrap_or_default())
+}
+
 /// A user group, which can be @-mentioned when the server is licensed for it.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Group {

@@ -29,6 +29,7 @@ mod notify;
 mod profile;
 mod rhs;
 mod script;
+mod search;
 mod settings;
 mod shell;
 mod sidebar;
@@ -366,6 +367,10 @@ pub enum Action {
     Post(String, PostAction),
     /// Search this team's messages.
     Search(String),
+    /// The next page of the hits already showing.
+    SearchMore,
+    /// Ask the server who the name typed after `from:` could be.
+    SearchPeople,
     /// Open the file chooser to attach something.
     PickAttachment,
     /// Ask the LLM agent to summarise what is unread here.
@@ -512,6 +517,89 @@ impl Split {
     }
 }
 
+/// Which of the two dividers between the panes: the one after the channel
+/// list, or the one before the thread panel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Divider {
+    Sidebar,
+    Panel,
+}
+
+impl Divider {
+    fn key(self) -> &'static str {
+        match self {
+            Divider::Sidebar => "sidebar_width",
+            Divider::Panel => "panel_width",
+        }
+    }
+}
+
+/// How wide the person dragged the side columns, in pixels; nothing for a
+/// column left at its share of the window. It is about this machine's screen,
+/// so it is kept with the other settings of the machine, and read once: the
+/// settings are a file, and a width is asked for on every frame.
+pub struct Widths {
+    sidebar: Cell<Option<f32>>,
+    panel: Cell<Option<f32>>,
+    /// A drag moved a divider and the file does not know yet. Written when
+    /// the drag is over rather than on every pixel of it.
+    unsaved: Cell<bool>,
+}
+
+impl Default for Widths {
+    fn default() -> Self {
+        let stored = |divider: Divider| {
+            crate::background::setting(divider.key())
+                .and_then(|value| value.as_f64())
+                .map(|width| width as f32)
+                .filter(|width| width.is_finite() && *width > 0.0)
+        };
+        Widths {
+            sidebar: Cell::new(stored(Divider::Sidebar)),
+            panel: Cell::new(stored(Divider::Panel)),
+            unsaved: Cell::new(false),
+        }
+    }
+}
+
+impl Widths {
+    fn cell(&self, divider: Divider) -> &Cell<Option<f32>> {
+        match divider {
+            Divider::Sidebar => &self.sidebar,
+            Divider::Panel => &self.panel,
+        }
+    }
+
+    pub fn get(&self, divider: Divider) -> Option<f32> {
+        self.cell(divider).get()
+    }
+
+    /// `None` puts the column back to its share of the window.
+    pub fn set(&self, divider: Divider, width: Option<f32>, cx: &mut App) {
+        if self.cell(divider).replace(width) != width {
+            self.unsaved.set(true);
+            cx.refresh_windows();
+        }
+    }
+
+    /// Writes what a drag changed, once the drag has let go.
+    pub fn save_when_settled(&self, cx: &App) {
+        if cx.has_active_drag() || !self.unsaved.replace(false) {
+            return;
+        }
+        for divider in [Divider::Sidebar, Divider::Panel] {
+            let value = match self.get(divider) {
+                Some(width) => serde_json::json!(width.round()),
+                None => serde_json::Value::Null,
+            };
+            crate::background::set_setting(divider.key(), value);
+        }
+    }
+}
+
+/// How many hits a page of a search is.
+const SEARCH_PAGE: u32 = 60;
+
 /// The session.
 pub struct Ui {
     window: Rc<WindowSlot>,
@@ -522,6 +610,8 @@ pub struct Ui {
     pub right: RightPanel,
     pub overlay: Overlay,
     pub split: Split,
+    pub widths: Widths,
+    pub search_box: search::SearchBox,
     /// Remote screens and cameras, keyed by the media session they belong to
     /// and in the order they arrived.
     video_views: RefCell<Vec<(String, video::RemoteView)>>,
@@ -576,12 +666,14 @@ impl Ui {
         let window = Rc::new(WindowSlot::default());
         let avatars = Avatars::new(state.borrow().client.clone());
         let ui = Rc::new(Ui {
-            channels: ChannelSidebar::new(window.clone()),
+            channels: ChannelSidebar,
             dock: CallDock::new(),
             chat: ChatView::new(window.clone()),
             right: RightPanel::new(window.clone()),
             overlay: Overlay::default(),
             split: Split::default(),
+            widths: Widths::default(),
+            search_box: search::SearchBox::new(window.clone()),
             video_views: RefCell::new(Vec::new()),
             asked_handles: RefCell::new(std::collections::HashSet::new()),
             avatars: avatars.clone(),
@@ -855,7 +947,7 @@ impl Ui {
         self.window.set(None);
         self.chat.detach();
         self.right.detach();
-        self.channels.detach();
+        self.search_box.detach();
     }
 
     /// Says something that happened, where it will be seen and then go away.
@@ -1493,7 +1585,7 @@ impl Ui {
             MenuAction::ChannelBookmarks => self.channel_bookmarks(cx),
             MenuAction::BrowseTeams => self.browse_teams(cx),
             MenuAction::NewCategory => self.new_category(cx),
-            MenuAction::FocusSearch => self.channels.focus_search(cx),
+            MenuAction::FocusSearch => self.search_box.focus(cx),
             MenuAction::OpenInbox => self.open_inbox(cx),
             MenuAction::NextUnread => self.step_unread(true, cx),
             MenuAction::PreviousUnread => self.step_unread(false, cx),
@@ -3247,25 +3339,74 @@ impl Ui {
             let mut st = self.state.borrow_mut();
             st.searching = true;
             st.search_results.clear();
+            st.search_terms = terms.clone();
+            st.search_pages = 0;
+            st.search_more = false;
             (st.client.clone(), st.current_team.clone())
         };
         let Some(team_id) = team else { return };
 
         self.right.set_mode(PanelMode::Search(terms.clone()), cx);
+        self.right.search_from_the_top();
         self.refresh_panel_mode(cx);
         self.overlay.set_show_sidebar(true, cx);
         self.refresh_messages(cx);
+        self.search_page(client, team_id, terms, 0);
+    }
 
+    /// The page after the ones already showing, asked for when the list is
+    /// scrolled to its end.
+    fn search_more(self: &Rc<Self>, cx: &mut App) {
+        let (client, team, terms, page) = {
+            let mut st = self.state.borrow_mut();
+            if st.searching || !st.search_more {
+                return;
+            }
+            st.searching = true;
+            (
+                st.client.clone(),
+                st.current_team.clone(),
+                st.search_terms.clone(),
+                st.search_pages,
+            )
+        };
+        let Some(team_id) = team else { return };
+        self.refresh_messages(cx);
+        self.search_page(client, team_id, terms, page);
+    }
+
+    /// Fetches one page of hits and adds it under the pages before it.
+    fn search_page(
+        self: &Rc<Self>,
+        client: mattermost_api::Client,
+        team_id: String,
+        terms: String,
+        page: u32,
+    ) {
+        // The dates in a search are days of the person asking.
+        let offset = chrono::Local::now().offset().local_minus_utc();
+        let asked = terms.clone();
         let ui = self.clone();
         runtime::spawn(
             async move {
-                let hits = client.search_posts(&team_id, &terms, false).await?;
+                let search = mattermost_api::rest::PostSearch {
+                    time_zone_offset: offset,
+                    page,
+                    per_page: SEARCH_PAGE,
+                    ..mattermost_api::rest::PostSearch::new(&terms)
+                };
+                let hits = client.search_posts(&team_id, &search).await?;
                 let (authors, statuses) = hydrate_authors(&client, &hits.posts).await;
                 Ok::<_, mattermost_api::Error>((hits.posts, authors, statuses))
             },
             move |result, cx| {
                 {
                     let mut st = ui.state.borrow_mut();
+                    // An answer to a search that has since been replaced by
+                    // another has nowhere to go.
+                    if st.search_terms != asked || st.search_pages != page {
+                        return;
+                    }
                     st.searching = false;
                     match result {
                         Ok((posts, authors, statuses)) => {
@@ -3273,13 +3414,22 @@ impl Ui {
                                 st.users.insert(user.id.clone(), user);
                             }
                             st.apply_statuses(statuses);
-                            st.search_results = ChannelFeed::from_list(&posts).posts;
                             // Newest first reads better for a search than the
-                            // oldest-first order a channel wants.
-                            st.search_results.reverse();
+                            // oldest-first order a channel wants, and an
+                            // older page goes under the newer ones.
+                            let mut found = ChannelFeed::from_list(&posts).posts;
+                            found.reverse();
+                            st.search_more = found.len() >= SEARCH_PAGE as usize;
+                            st.search_pages = page + 1;
+                            found.retain(|post| {
+                                !st.search_results.iter().any(|known| known.id == post.id)
+                            });
+                            st.search_results.extend(found);
                         }
                         Err(e) => {
+                            st.search_more = false;
                             drop(st);
+                            tracing::warn!(error = %e, terms = %asked, page, "search failed");
                             ui.toast(&format!("Search failed: {e}"), cx);
                             ui.refresh_messages(cx);
                             return;
@@ -3291,12 +3441,66 @@ impl Ui {
         );
     }
 
+    /// Looks the name typed after `from:` up on the server. The people
+    /// already known here are listed at once; this adds whoever the client
+    /// has not met, when the answer comes — which, on a server of any size,
+    /// is most people. It asks the way the composer's `@` list does
+    /// (`users/autocomplete`, the team's members), an empty name included:
+    /// that is the route the official clients use for this list too.
+    fn search_people(self: &Rc<Self>) {
+        let Some(typed) = self.search_box.asking_for_person() else {
+            return;
+        };
+        let (client, team_id) = {
+            let st = self.state.borrow();
+            (st.client.clone(), st.current_team.clone().unwrap_or_default())
+        };
+        let ui = self.clone();
+        runtime::spawn(
+            {
+                let typed = typed.clone();
+                async move { client.autocomplete_users(&typed, &team_id, "").await }
+            },
+            move |result, cx| {
+                let found = match result {
+                    Ok(found) => found,
+                    Err(error) => {
+                        tracing::warn!(%error, "could not look up people for the search box");
+                        return;
+                    }
+                };
+                // Only for the name still being typed: an answer to "an"
+                // must not land in the list for "anna".
+                if ui.search_box.asking_for_person().as_deref() != Some(typed.as_str()) {
+                    return;
+                }
+                let rows = {
+                    let st = ui.state.borrow();
+                    let display = st.teammate_name_display();
+                    found
+                        .users
+                        .iter()
+                        .chain(found.out_of_channel.iter())
+                        .filter(|user| user.delete_at == 0)
+                        .map(|user| search::person(&user.username, &user.display_name(display)))
+                        .collect()
+                };
+                ui.search_box.add_people(rows, cx);
+            },
+        );
+    }
+
     /// Attachments matching a search, as a list of names to open.
     fn search_files(self: &Rc<Self>, terms: String, cx: &mut App) {
         let (client, team) = {
             let mut st = self.state.borrow_mut();
             st.searching = true;
             st.search_results.clear();
+            // One page is all a file search has, and a page of the search
+            // before it must not land among its hits.
+            st.search_terms = format!("file:{terms}");
+            st.search_pages = 0;
+            st.search_more = false;
             (st.client.clone(), st.current_team.clone())
         };
         let Some(team_id) = team else { return };
@@ -4775,6 +4979,8 @@ impl Ui {
             Action::OpenDirectMessage(user_id) => self.open_direct_message(user_id, cx),
             Action::Post(post_id, what) => self.post_action(post_id, what, cx),
             Action::Search(terms) => self.search(terms, cx),
+            Action::SearchMore => self.search_more(cx),
+            Action::SearchPeople => self.search_people(),
             Action::Complete(query) => self.complete(query, cx),
             Action::ScheduleMessage => self.schedule_message(cx),
             Action::ThreadDraftChanged => self.schedule_thread_draft_save(cx),
@@ -5240,7 +5446,7 @@ impl Ui {
                 // Mattermost's "Recent Mentions" is literally a search for your
                 // mention keys; @username is the one every account has.
                 let mentions = client
-                    .search_posts(&team_id, &format!("@{username}"), false)
+                    .search_posts(&team_id, &mattermost_api::rest::PostSearch::new(&format!("@{username}")))
                     .await
                     .ok();
                 let threads = if crt {

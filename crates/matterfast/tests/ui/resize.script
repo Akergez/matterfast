@@ -1,0 +1,21 @@
+# mode: demo
+# size: 1320x840
+#
+# The border between the channel list and the conversation is dragged to make
+# the list wider or thinner. It keeps what it was dragged to, within reason:
+# not thinner than a channel name, not so wide the conversation has no room.
+wait:2500
+expect:sidebar-width=auto
+# The list is 24% of 1320 wide, so its border is at 317.
+move:317,400
+wait:300
+drag:317,400,420,400
+wait:600
+expect:sidebar-width=420
+# The border is where it was put.
+move:420,400
+wait:300
+drag:420,400,260,400
+wait:600
+expect:sidebar-width=260
+quit

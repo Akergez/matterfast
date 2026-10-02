@@ -53,6 +53,25 @@ impl std::fmt::Debug for Client {
     }
 }
 
+/// What [`Client::search_posts`] asks for: one page of the hits for `terms`.
+#[derive(Debug, Clone, Serialize)]
+pub struct PostSearch<'a> {
+    pub terms: &'a str,
+    /// Any of the words rather than all of them.
+    pub is_or_search: bool,
+    /// Seconds east of UTC.
+    pub time_zone_offset: i32,
+    pub page: u32,
+    pub per_page: u32,
+}
+
+impl<'a> PostSearch<'a> {
+    /// The first page of the hits for all of `terms`, in UTC.
+    pub fn new(terms: &'a str) -> Self {
+        PostSearch { terms, is_or_search: false, time_zone_offset: 0, page: 0, per_page: 60 }
+    }
+}
+
 impl Client {
     /// Builds a client for `site_url` (e.g. `https://mm.example.com`).
     pub fn new(site_url: &str) -> Result<Self> {
@@ -1168,23 +1187,17 @@ impl Client {
         .await
     }
 
-    pub async fn search_posts(
-        &self,
-        team_id: &str,
-        terms: &str,
-        is_or_search: bool,
-    ) -> Result<PostSearchResults> {
-        #[derive(Serialize)]
-        struct Search<'a> {
-            terms: &'a str,
-            is_or_search: bool,
-        }
+    /// `POST /teams/{team}/posts/search`.
+    ///
+    /// `terms` is the server's own search grammar, modifiers and all (`from:`,
+    /// `in:`, `before:`, `after:`, `on:`, quotes, `-word`); nothing of it is
+    /// parsed here. The dates in it are days, and a day begins at a different
+    /// moment in every time zone, so the server is told the caller's offset
+    /// from UTC in seconds — without it `on:` is a day of UTC.
+    pub async fn search_posts(&self, team_id: &str, search: &PostSearch<'_>) -> Result<PostSearchResults> {
         self.post_json(
             &format!("/teams/{team_id}/posts/search"),
-            &Search {
-                terms,
-                is_or_search,
-            },
+            search,
             "search posts",
         )
         .await

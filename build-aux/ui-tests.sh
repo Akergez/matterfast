@@ -11,6 +11,7 @@
 #
 #   # mode: demo | server     sample data, or a fresh matterfast-testserver
 #   # size: 1320x840          the window it was written against
+#   # server: MM_HISTORY=150  what that server is started with, if anything
 #
 # It passes when the application reaches the script's `quit` and exits with
 # status 0: an `expect:` step that does not hold exits with 1, a crash exits
@@ -105,13 +106,18 @@ for file in "${files[@]}"; do
     server)
       # A fresh server for each scenario: it is stateful, and one scenario's
       # posts must not be another's surprise.
-      "$server" >"$home/server.log" 2>&1 &
+      # Unquoted on purpose: the header is a list of NAME=value words.
+      # shellcheck disable=SC2046
+      env $(header "$file" server) "$server" >"$home/server.log" 2>&1 &
       server_pid=$!
       for _ in $(seq 50); do
         (exec 3<>/dev/tcp/127.0.0.1/8065) 2>/dev/null && break
         sleep 0.1
       done
       env+=(MATTERFAST_SERVER=http://127.0.0.1:8065 MATTERFAST_USER=anton MATTERFAST_PASSWORD=test)
+      # The test server is also a fake of Zed's extension registry, so a
+      # scenario that installs a theme does not depend on somebody else's API.
+      env+=(MATTERFAST_THEMES_API=http://127.0.0.1:8065/zed)
       ;;
     *) echo "$name: header must say '# mode: demo' or '# mode: server'" >&2; exit 2 ;;
   esac

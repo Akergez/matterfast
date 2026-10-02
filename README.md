@@ -88,6 +88,12 @@ for a bot, a CLI, or a different front end.
 - **Search** across a team, with results in the right panel — `file:` in front
   of the terms searches attachments instead, rather than adding a second box to
   find
+- **Themes**: light, dark or whatever the desktop is, with a theme of your
+  choice for each. Besides the built-in pair, themes are the Zed editor's:
+  none is shipped, the settings browse and install them from Zed's extension
+  registry, and a Zed theme file dropped into
+  `~/.local/share/io.gitlab.akergez.Matterfast/themes/` is picked up at the
+  next start
 - **Ctrl+K** jumps to a channel or a person, opening the DM if there is not one
   yet
 - **Desktop notifications** following the server's own rules, and a snapshot
@@ -135,6 +141,13 @@ update-desktop-database ~/.local/share/applications
 xdg-mime default io.gitlab.akergez.Matterfast.desktop x-scheme-handler/mattermost-dev
 ```
 
+On Windows there is no installer and nothing to install: the application
+registers the scheme for the signed-in user every time it starts
+(`HKEY_CURRENT_USER\Software\Classes\mattermost-dev`, `url_scheme.rs`), so
+the entry follows the executable when the folder is moved. The second launch
+the browser causes reaches the running copy through a named pipe
+(`ipc_windows.rs`), the counterpart of the socket used on Linux.
+
 The scheme is `mattermost-dev`, not `mattermost`, so nothing collides with the
 official desktop app; the server picks it because the token starts with `dev-`.
 The app must already be running when the callback arrives — the browser hands
@@ -147,19 +160,19 @@ on the ref file adds the remote and installs the app; everything after that is
 an ordinary `flatpak update`:
 
 ```sh
-flatpak install https://akergez.gitlab.io/matterfast/io.gitlab.akergez.Matterfast.flatpakref
+flatpak install https://matterfast-63d8e7.gitlab.io/io.gitlab.akergez.Matterfast.flatpakref
 ```
 
 The runtime comes from Flathub, so that remote has to exist — the ref file
 points at it and flatpak will offer to add it.
 
-Without flatpak, each [release](https://gitlab.com/akergez/matterfast/-/releases)
+Without flatpak, each [release](https://gitlab.com/ragusseven/matterfast/-/releases)
 carries a tarball for x86_64 and for aarch64, and a Windows zip for x86_64. It is laid out like an install
 prefix, so unpacking it is the installation; the libraries listed under
 "Building" have to come from the distribution:
 
 ```sh
-tar -xzf matterfast-0.1.0-linux-x86_64.tar.gz --strip-components=1 -C ~/.local
+tar -xzf matterfast-0.2.0-linux-x86_64.tar.gz --strip-components=1 -C ~/.local
 ```
 
 ## Building

@@ -1,0 +1,45 @@
+# mode: server
+# size: 1320x840
+#
+# The modifiers that say where and when: `in:` lists the channels and the
+# direct messages, the date modifiers list the days people mean, and the
+# server honours both.
+wait:5000
+key:ctrl-f
+wait:800
+type:in:
+wait:800
+expect:search-hints=Development|General|Lena Petrova
+type:gen
+wait:500
+expect:search-hints=General
+key:down
+key:enter
+wait:600
+type:on:
+wait:600
+expect:search-hints=Today|Yesterday|A week ago|A month ago
+key:down
+key:enter
+wait:600
+type:standup
+wait:400
+key:enter
+wait:2500
+# The standup was moved today, in General.
+expect:search-hits=1
+# And not before today.
+key:ctrl-a
+key:backspace
+wait:400
+expect:search=
+type:standup before:
+wait:600
+expect:search-hints=Today|Yesterday|A week ago|A month ago
+key:down
+key:enter
+wait:600
+key:enter
+wait:2500
+expect:search-hits=0
+quit

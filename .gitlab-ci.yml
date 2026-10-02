@@ -257,27 +257,24 @@ release:
   release:
     tag_name: $CI_COMMIT_TAG
     name: Matterfast $VERSION
+    # Plain words only. The runner pastes this text into a shell command, and
+    # a backtick, a quote or an angle bracket in it is read by that shell: the
+    # first release job died of a syntax error that way. Code is set off by
+    # indenting it four spaces, which Markdown also takes for a code block.
     description: |
       ## Install
 
-      **Linux, flatpak** — x86_64 and aarch64, kept up to date by `flatpak update`:
+      **Linux, flatpak**, x86_64 and aarch64, kept up to date by flatpak update:
 
-      ```sh
-      flatpak install $CI_PAGES_URL/io.gitlab.akergez.Matterfast.flatpakref
-      ```
+          flatpak install $CI_PAGES_URL/io.gitlab.akergez.Matterfast.flatpakref
 
-      The `.flatpak` files below are the same build as a single file, for a
-      machine that cannot reach the repository: `flatpak install <file>`.
+      The .flatpak files below are the same build as a single file, for a machine that cannot reach the repository.
 
-      **Linux, tarball** — laid out like an install prefix; the libraries
-      listed in the README under "Building" come from the distribution:
+      **Linux, tarball**, laid out like an install prefix. The libraries listed under Building in the README come from the distribution:
 
-      ```sh
-      tar -xzf matterfast-$VERSION-linux-x86_64.tar.gz --strip-components=1 -C ~/.local
-      ```
+          tar -xzf matterfast-$VERSION-linux-x86_64.tar.gz --strip-components=1 -C ~/.local
 
-      **Windows, x86_64** — unpack the zip and run `matterfast.exe`. This build has
-      no video: attachments do not play and calls are sound only.
+      **Windows, x86_64**: unpack the zip and run matterfast.exe. This build has no video: attachments do not play and calls are sound only.
     assets:
       links:
         - name: matterfast-$VERSION-x86_64.flatpak

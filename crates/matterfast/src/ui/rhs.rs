@@ -15,8 +15,8 @@ use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Sizable};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    div, list, px, AnyElement, App, Entity, FollowMode, FontWeight, ListAlignment, ListState,
-    SharedString, Window,
+    div, list, point, px, AnyElement, App, Entity, FollowMode, FontWeight, ListAlignment,
+    ListState, ScrollHandle, SharedString, Window,
 };
 use mattermost_api::models::{Millis, Post};
 
@@ -122,6 +122,14 @@ pub struct RightPanel {
     inbox: RefCell<Inbox>,
     search: RefCell<Vec<SearchRow>>,
     searching: Cell<bool>,
+    /// Whether the server may have hits past the ones listed.
+    search_more: Cell<bool>,
+    /// Where the list of hits is scrolled to: reaching its end is what asks
+    /// for the next page.
+    search_scroll: ScrollHandle,
+    /// How many hits the last frame drew, which is what the scroll position
+    /// was measured against.
+    search_drawn: Cell<usize>,
     /// The reply box, while there is a window to put it in.
     composer: RefCell<Option<Entity<TextareaState>>>,
     /// Set while a draft is being restored, so it is not mistaken for typing.
@@ -144,6 +152,9 @@ impl RightPanel {
             inbox: RefCell::new(Inbox::default()),
             search: RefCell::new(Vec::new()),
             searching: Cell::new(false),
+            search_more: Cell::new(false),
+            search_scroll: ScrollHandle::new(),
+            search_drawn: Cell::new(0),
             composer: RefCell::new(None),
             restoring: Cell::new(false),
         }
@@ -226,6 +237,11 @@ impl RightPanel {
         cx.refresh_windows();
     }
 
+    /// A new search starts at its newest hit, wherever the last one was left.
+    pub(super) fn search_from_the_top(&self) {
+        self.search_scroll.set_offset(point(px(0.), px(0.)));
+    }
+
     /// Rebuilds whatever the panel is currently showing from the state.
     pub fn refresh(&self, state: &SharedState, cx: &mut App) {
         let st = state.borrow();
@@ -235,6 +251,7 @@ impl RightPanel {
             PanelMode::Inbox => *self.inbox.borrow_mut() = build_inbox(&st),
             PanelMode::Search(_) => {
                 self.searching.set(st.searching);
+                self.search_more.set(st.search_more);
                 *self.search.borrow_mut() = st
                     .search_results
                     .iter()
@@ -590,7 +607,9 @@ fn inbox(ui: &Rc<Ui>, cx: &App) -> AnyElement {
 /// Search results, newest first, each one a jump into its channel.
 fn search(ui: &Rc<Ui>, cx: &mut App) -> AnyElement {
     let panel = &ui.right;
-    if panel.searching.get() {
+    let rows = panel.search.borrow().clone();
+    let searching = panel.searching.get();
+    if searching && rows.is_empty() {
         return div()
             .flex_1()
             .flex()
@@ -599,7 +618,6 @@ fn search(ui: &Rc<Ui>, cx: &mut App) -> AnyElement {
             .child(Spinner::new())
             .into_any_element();
     }
-    let rows = panel.search.borrow().clone();
     if rows.is_empty() {
         return div()
             .flex_1()
@@ -613,7 +631,24 @@ fn search(ui: &Rc<Ui>, cx: &mut App) -> AnyElement {
             .into_any_element();
     }
 
-    let mut column = v_flex().id("search-rows").flex_1().min_h_0().py_1p5();
+    // The hits come a page at a time. Being within a screenful of the end of
+    // what is here is what asks for the next one. How far the end is comes
+    // from the frame before, so it is only believed when that frame drew
+    // these same rows: on the frame a page arrives it still describes the
+    // shorter list, and would ask for the page after as well.
+    let scroll = &panel.search_scroll;
+    let measured = panel.search_drawn.replace(rows.len()) == rows.len();
+    let left = scroll.max_offset().y + scroll.offset().y;
+    if panel.search_more.get() && !searching && measured && left < px(400.) {
+        ui.dispatch(Action::SearchMore, cx);
+    }
+
+    let mut column = v_flex()
+        .id("search-rows")
+        .flex_1()
+        .min_h_0()
+        .py_1p5()
+        .track_scroll(scroll);
     for (index, row) in rows.iter().enumerate() {
         let channel_id = row.post.channel_id.clone();
         let post_id = row.post.id.clone();
@@ -652,6 +687,15 @@ fn search(ui: &Rc<Ui>, cx: &mut App) -> AnyElement {
                     },
                     cx,
                 )),
+        );
+    }
+    if searching {
+        column = column.child(
+            div()
+                .flex()
+                .justify_center()
+                .py_3()
+                .child(Spinner::new().small()),
         );
     }
     column.overflow_y_scroll().into_any_element()
@@ -714,17 +758,16 @@ fn thread(ui: &Rc<Ui>, cx: &App) -> AnyElement {
         pane = pane.child(
             h_flex()
                 .flex_none()
-                .gap_1()
+                .gap_2()
                 .px_3()
                 .pt_1()
                 .pb_3()
-                .items_end()
+                .items_center()
                 .child(div().flex_1().min_w_0().child(Textarea::new(&composer)))
                 .child(
                     Button::new("reply")
                         .icon(Lucide::SendHorizontal)
                         .primary()
-                        .small()
                         .tooltip("Reply  (Enter)")
                         .on_click(ui.click(|ui, cx| ui.right.submit(ui, cx))),
                 ),

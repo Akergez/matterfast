@@ -9,8 +9,11 @@ repository.workspace = true
 
 [dependencies]
 axum = { version = "0.8.9", features = ["ws", "json", "macros"] }
+# The fake theme registry answers with a gzipped tarball, as the real one does.
+flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
 futures-util.workspace = true
 image = "0.25.9"
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+tar = { version = "0.4", default-features = false }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }

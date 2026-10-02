@@ -82,9 +82,9 @@ pub struct FileUploadResponse {
 /// is newest-first and `file_infos` is keyed by id.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct FileInfoList {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::null_as_empty")]
     pub order: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::null_as_default")]
     pub file_infos: std::collections::HashMap<String, FileInfo>,
     #[serde(default)]
     pub next_file_id: String,

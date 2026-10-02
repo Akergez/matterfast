@@ -162,8 +162,9 @@ impl Status {
 /// `GET /users/autocomplete`
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct UserAutocomplete {
-    #[serde(default)]
+    // `null` when nobody matched: a nil slice on the server's side.
+    #[serde(default, deserialize_with = "super::null_as_empty")]
     pub users: Vec<User>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::null_as_empty")]
     pub out_of_channel: Vec<User>,
 }
