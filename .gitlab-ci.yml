@@ -142,7 +142,7 @@ variables:
     - rustup toolchain install "$RUST_VERSION" --profile minimal --target "$ARCH-pc-windows-msvc"
     - rustup default "$RUST_VERSION"
     - apt-get update -q
-    - apt-get install -y -q --no-install-recommends wine nasm curl unzip zip
+    - apt-get install -y -q --no-install-recommends wine nasm git curl unzip zip
   script:
     - build-aux/build-windows.sh "$ARCH" "$VERSION"
     - *upload

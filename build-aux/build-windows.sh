@@ -13,13 +13,15 @@
 # * cargo-xwin, which downloads the MSVC runtime and the Windows SDK's
 #   headers and libraries and points clang-cl and lld-link at them;
 # * `fxc.exe`, Microsoft's shader compiler, run through wine. GPUI ships its
-#   Direct3D shaders precompiled, and nothing else produces the same bytecode
-#   (see vendor/README.md for the patch that lets its build script do this
-#   off Windows). It is taken from Microsoft's own NuGet package at build
-#   time and is not redistributed.
+#   Direct3D shaders precompiled, and nothing else produces the same bytecode.
+#   It is taken from Microsoft's own NuGet package at build time and is not
+#   redistributed. GPUI's build script only does this on a Windows host, so
+#   build-aux/patches/ holds a patch that is applied to cargo's unpacked copy
+#   of the crate before building — in place, in $CARGO_HOME, which keeps
+#   Cargo.toml and Cargo.lock exactly as the Linux build has them.
 #
 # Needs on PATH: cargo with the target installed, cargo-xwin, clang, lld,
-# llvm, cmake, ninja, nasm, wine, curl, unzip, zip. CI uses the
+# llvm, cmake, ninja, nasm, wine, git, curl, unzip, zip. CI uses the
 # `messense/cargo-xwin` image and installs the rest.
 #
 # The result has no video: GStreamer is not bundled, so attachments do not
@@ -95,6 +97,16 @@ fi
 # the Visual C++ redistributable.
 rustflags=CARGO_TARGET_$(tr 'a-z-' 'A-Z_' <<<"$target")_RUSTFLAGS
 export "$rustflags=${!rustflags:-} -C target-feature=+crt-static"
+
+# GPUI's Windows backend, as cargo unpacked it, with the shader patch on top.
+cargo fetch --locked --target "$target"
+gpui_patch=$root/build-aux/patches/gpui-pre-windows-0.3.7-cross-shaders.patch
+gpui_src=$(find "${CARGO_HOME:-$HOME/.cargo}/registry/src" -maxdepth 2 -type d \
+  -name gpui-pre-windows-0.3.7 -print -quit)
+[[ -n $gpui_src ]] || { echo 'gpui-pre-windows 0.3.7 is not in the cargo registry: was GPUI updated?' >&2; exit 1; }
+if ! grep -q GPUI_FXC_RUNNER "$gpui_src/build.rs"; then
+  (cd -- "$gpui_src" && git apply "$gpui_patch")
+fi
 
 cargo build --profile "$profile" --locked -p matterfast --target "$target"
 
