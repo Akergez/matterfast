@@ -154,12 +154,12 @@ The runtime comes from Flathub, so that remote has to exist — the ref file
 points at it and flatpak will offer to add it.
 
 Without flatpak, each [release](https://gitlab.com/akergez/matterfast/-/releases)
-carries a tarball for x86_64 and for aarch64. It is laid out like an install
+carries a tarball for x86_64 and for aarch64, and a Windows zip for x86_64. It is laid out like an install
 prefix, so unpacking it is the installation; the libraries listed under
 "Building" have to come from the distribution:
 
 ```sh
-tar -xzf matterfast-v0.1.0-linux-x86_64.tar.gz --strip-components=1 -C ~/.local
+tar -xzf matterfast-0.1.0-linux-x86_64.tar.gz --strip-components=1 -C ~/.local
 ```
 
 ## Building
@@ -287,32 +287,61 @@ including several behaviours that fail *silently* if you get them wrong.
 
 ## Continuous integration
 
-`.gitlab-ci.yml` runs on GitLab CI, on Linux runners only, one per
-architecture — the builds are native, not cross-compiled.
+`.gitlab-ci.yml` runs on GitLab CI, on Linux runners only.
 
 | When | What |
 |---|---|
-| every merge request, the default branch, tags | `cargo test --workspace`, then the UI scenarios under a headless compositor |
-| the default branch | the flatpak for x86_64 and aarch64, signed and published to GitLab Pages; a tarball per architecture as a job artifact |
-| a `v*` tag | the tarballs again, kept in the package registry and linked from a release |
+| every merge request, the default branch | `cargo test --workspace`, then the UI scenarios under a headless compositor |
+| a version tag, `v1.2.3` | the same tests, then every package, the flatpak repository on GitLab Pages, and a release |
+
+Nothing is built for distribution from a branch. A tag pipeline builds:
+
+- the flatpak for x86_64 and aarch64, natively on a runner of each
+  architecture;
+- a Linux tarball for each of the two, likewise;
+- a Windows zip for x86_64, cross-compiled on Linux
+  (`build-aux/build-windows.sh`). It has no video yet, and there is no
+  aarch64 one: a dependency does not cross-compile for it.
+
+Each file goes into the project's package registry under the version, and
+the release links to them and carries the flatpak install command.
 
 The runners are named by two CI/CD variables, `RUNNER_AMD64` and
 `RUNNER_ARM64`, which default to GitLab.com's hosted `saas-linux-medium-*`
 machines. The flatpak jobs need a privileged container, because
 flatpak-builder sandboxes the build with bwrap.
 
+### Making a release
+
+The tag is the version, and `build-aux/check-version.sh` fails the pipeline
+before anything is built if the crates say something else.
+
+```sh
+# 1. one version for every crate
+sed -i 's/^version = ".*"/version = "1.2.3"/' Cargo.toml   # under [workspace.package]
+cargo update --workspace                                   # the same in Cargo.lock
+build-aux/check-version.sh v1.2.3                          # prints 1.2.3 when they agree
+
+# 2. commit, tag that commit, push both
+git commit -am 'Release 1.2.3'
+git tag v1.2.3
+git push origin master v1.2.3
+```
+
 ### Publishing the flatpak
 
 The two flatpak jobs run one after the other and build into the same ostree
 repository, which travels between them as a job artifact. The `pages` job then
-signs it and lays it out as the Pages site: the repository under `/repo`, and
+signs it, packs each architecture as a single `.flatpak` file for the package
+registry, and lays the repository out as the Pages site: the repository under `/repo`, and
 `io.gitlab.akergez.Matterfast.flatpakref` beside it with the public key
 embedded, so the install link above always carries the key that signed what
 it points at. There is no other host and no deploy key: Pages is served from
 the pipeline's own artifact.
 
-Three CI/CD variables drive it. Make them protected and masked, so that only
-the default branch can sign:
+Three CI/CD variables drive it. Mask them. If you also protect them, protect
+the `v*` tags too (Settings → Repository → Protected tags), or the tag
+pipeline will not be given them:
 
 | Variable | Value |
 |---|---|

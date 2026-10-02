@@ -18,8 +18,7 @@ cd -- "$root"
 app_id=io.gitlab.akergez.Matterfast
 binary=${MATTERFAST_BINARY:-target/dist/matterfast}
 arch=$(uname -m)
-# The workspace version, unless the caller knows better. CI passes the tag as
-# it is, `v` and all, because the release links are spelled from the tag.
+# The workspace version, unless the caller says otherwise.
 version=${1:-$(sed -n '/^\[workspace\.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)}
 
 [[ -x $binary ]] || { echo "$binary is not built" >&2; exit 1; }

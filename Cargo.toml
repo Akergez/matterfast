@@ -1,5 +1,6 @@
 [workspace]
 resolver = "2"
+exclude = ["vendor"]
 members = ["crates/mattermost-api", "crates/mattermost-calls", "crates/matterfast", "crates/matterfast-testserver"]
 
 [workspace.package]
@@ -9,6 +10,10 @@ rust-version = "1.85"
 license = "GPL-3.0-only"
 authors = ["Akergez"]
 repository = "https://gitlab.com/akergez/matterfast"
+
+# Crates that had to be changed to build at all; vendor/README.md says why.
+[patch.crates-io]
+gpui-pre-windows = { path = "vendor/gpui-pre-windows" }
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

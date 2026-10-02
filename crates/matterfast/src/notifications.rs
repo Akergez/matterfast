@@ -10,19 +10,29 @@
 //! replace, and `CloseNotification` exists — so this keeps the map from our
 //! own tags to the ids the service hands back, and uses it.
 //!
+//! That is Linux. On macOS and Windows a notification is raised through the
+//! system's own service and that is all: it cannot be replaced or taken back
+//! down from here, and a click on it is not reported.
+//!
 //! Nothing here touches the window: it runs on Tokio, takes commands down one
 //! channel and reports what the person pressed up another.
 
+#[cfg(target_os = "linux")]
 use std::collections::HashMap;
 
+#[cfg(target_os = "linux")]
 use futures_util::StreamExt;
+#[cfg(target_os = "linux")]
 use zbus::zvariant::Value;
 
+#[cfg(target_os = "linux")]
 const SERVICE: &str = "org.freedesktop.Notifications";
+#[cfg(target_os = "linux")]
 const PATH: &str = "/org/freedesktop/Notifications";
 
 /// The action key the service reports when the notification's body is
 /// activated rather than one of its buttons.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 const DEFAULT_ACTION: &str = "default";
 
 /// One notification to raise.
@@ -49,6 +59,7 @@ pub struct Response {
 
 enum Command {
     Show(Notice),
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     Withdraw(String),
 }
 
@@ -81,6 +92,7 @@ impl Notifier {
 /// The flat `[key, label, key, label, …]` list the service takes. The body
 /// itself is offered as an action too, which is what makes clicking it report
 /// anything at all.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn action_list(notice: &Notice) -> Vec<&str> {
     let mut list = vec![DEFAULT_ACTION, "Open"];
     for (id, label) in &notice.actions {
@@ -93,6 +105,7 @@ fn action_list(notice: &Notice) -> Vec<&str> {
 /// A body may be read as markup by the service, and a message is arbitrary
 /// text from another person: `<b>` in it must arrive as those three
 /// characters.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn escape_body(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for ch in text.chars() {
@@ -107,10 +120,34 @@ fn escape_body(text: &str) -> String {
 }
 
 /// What a reported action key means: the body, or one of our buttons.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn action_from_key(key: &str) -> Option<String> {
     (key != DEFAULT_ACTION).then(|| key.to_string())
 }
 
+#[cfg(not(target_os = "linux"))]
+async fn run(
+    mut commands: tokio::sync::mpsc::UnboundedReceiver<Command>,
+    // Kept open for as long as the task runs, so the receiving end waits
+    // instead of seeing a closed channel; nothing is ever sent on it.
+    _responses: async_channel::Sender<Response>,
+) {
+    while let Some(command) = commands.recv().await {
+        let Command::Show(notice) = command else {
+            continue;
+        };
+        let shown = notify_rust::Notification::new()
+            .appname("Matterfast")
+            .summary(&notice.title)
+            .body(&notice.body)
+            .show();
+        if let Err(error) = shown {
+            tracing::warn!(%error, "could not raise a notification");
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
 async fn run(
     mut commands: tokio::sync::mpsc::UnboundedReceiver<Command>,
     responses: async_channel::Sender<Response>,
@@ -205,6 +242,7 @@ async fn run(
     }
 }
 
+#[cfg(target_os = "linux")]
 async fn connect() -> zbus::Result<zbus::Proxy<'static>> {
     let connection = zbus::Connection::session().await?;
     zbus::Proxy::new(&connection, SERVICE, PATH, SERVICE).await

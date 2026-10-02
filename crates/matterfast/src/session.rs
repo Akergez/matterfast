@@ -4,9 +4,11 @@
 //! The token is what Mattermost itself hands out and can be revoked from
 //! Security settings, so losing it is recoverable in a way a password is not.
 //!
-//! It lives in the Secret Service (GNOME Keyring, KWallet, anything else
-//! speaking the D-Bus interface), which means it is encrypted at rest and
-//! another process running as this user cannot simply read it. That is a real
+//! It lives in the system's own secret store — the Secret Service on Linux
+//! (GNOME Keyring, KWallet, anything else speaking the D-Bus interface), the
+//! Keychain on macOS, the Credential Manager on Windows — which means it is
+//! encrypted at rest and another process running as this user cannot simply
+//! read it. That is a real
 //! difference for a chat token: it grants your whole account for as long as
 //! nobody revokes it.
 //!
@@ -19,6 +21,7 @@
 
 use std::fs;
 use std::io::Write;
+#[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::PathBuf;
 
@@ -30,36 +33,113 @@ fn path() -> PathBuf {
         .join("session.json")
 }
 
-/// What the keyring item is labelled and keyed by. The attributes are the
-/// lookup key, so they have to be stable across versions.
-const LABEL: &str = "Matterfast session token";
+/// The Secret Service: one item per server, found by its attributes.
+#[cfg(target_os = "linux")]
+mod vault {
+    use std::collections::HashMap;
 
-fn attributes() -> std::collections::HashMap<&'static str, &'static str> {
-    std::collections::HashMap::from([("application", crate::APP_ID), ("type", "session")])
+    pub type Error = oo7::Error;
+
+    /// What the keyring item is labelled and keyed by. The attributes are the
+    /// lookup key, so they have to be stable across versions.
+    const LABEL: &str = "Matterfast session token";
+
+    /// Every session, or — narrowed by the server — one. The server is part
+    /// of the key so several accounts can be stored side by side rather than
+    /// overwriting each other.
+    fn attributes(server: Option<&str>) -> HashMap<&str, &str> {
+        let mut attributes =
+            HashMap::from([("application", crate::APP_ID), ("type", "session")]);
+        if let Some(server) = server {
+            attributes.insert("server", server);
+        }
+        attributes
+    }
+
+    pub async fn all() -> Result<Vec<Vec<u8>>, Error> {
+        let keyring = oo7::Keyring::new().await?;
+        let mut secrets = Vec::new();
+        for item in keyring.search_items(&attributes(None)).await? {
+            if let Ok(secret) = item.secret().await {
+                secrets.push(secret.to_vec());
+            }
+        }
+        Ok(secrets)
+    }
+
+    pub async fn put(server: &str, secret: &[u8]) -> Result<(), Error> {
+        let keyring = oo7::Keyring::new().await?;
+        keyring
+            .create_item(LABEL, &attributes(Some(server)), secret, true)
+            .await
+    }
+
+    /// Removes one server's item, or with `None` all of them.
+    pub async fn remove(server: Option<&str>) -> Result<(), Error> {
+        let keyring = oo7::Keyring::new().await?;
+        keyring.delete(&attributes(server)).await
+    }
 }
 
-/// The same attributes, narrowed to one server. The server is part of the key
-/// so several accounts can be stored side by side rather than overwriting each
-/// other.
-fn attributes_for(server: &str) -> std::collections::HashMap<&str, &str> {
-    std::collections::HashMap::from([
-        ("application", crate::APP_ID),
-        ("type", "session"),
-        ("server", server),
-    ])
+/// The Keychain and the Credential Manager, which cannot be searched the way
+/// the Secret Service can: an entry is found by its exact name or not at all.
+/// So every session is kept in one entry, as a list.
+#[cfg(not(target_os = "linux"))]
+mod vault {
+    pub type Error = keyring::Error;
+
+    fn entry() -> Result<keyring::Entry, Error> {
+        keyring::Entry::new(crate::APP_ID, "sessions")
+    }
+
+    /// (server, secret) pairs, oldest first.
+    fn read() -> Result<Vec<(String, String)>, Error> {
+        match entry()?.get_password() {
+            Ok(raw) => Ok(serde_json::from_str(&raw).unwrap_or_default()),
+            Err(keyring::Error::NoEntry) => Ok(Vec::new()),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn write(sessions: &[(String, String)]) -> Result<(), Error> {
+        if sessions.is_empty() {
+            return match entry()?.delete_credential() {
+                Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+                Err(error) => Err(error),
+            };
+        }
+        let raw = serde_json::to_string(sessions).expect("strings always serialise");
+        entry()?.set_password(&raw)
+    }
+
+    pub async fn all() -> Result<Vec<Vec<u8>>, Error> {
+        Ok(read()?.into_iter().map(|(_, secret)| secret.into_bytes()).collect())
+    }
+
+    pub async fn put(server: &str, secret: &[u8]) -> Result<(), Error> {
+        let mut sessions = read()?;
+        sessions.retain(|(stored, _)| stored != server);
+        sessions.push((server.to_string(), String::from_utf8_lossy(secret).into_owned()));
+        write(&sessions)
+    }
+
+    /// Removes one server's session, or with `None` all of them.
+    pub async fn remove(server: Option<&str>) -> Result<(), Error> {
+        let mut sessions = read()?;
+        match server {
+            Some(server) => sessions.retain(|(stored, _)| stored != server),
+            None => sessions.clear(),
+        }
+        write(&sessions)
+    }
 }
 
 /// Every stored session, newest last. Used to offer a choice when more than
 /// one server is signed in.
 pub async fn load_all_async() -> Vec<(String, String)> {
-    let found = async {
-        let keyring = oo7::Keyring::new().await?;
-        let items = keyring.search_items(&attributes()).await?;
+    let found = vault::all().await.map(|secrets| {
         let mut sessions = Vec::new();
-        for item in items {
-            let Ok(secret) = item.secret().await else {
-                continue;
-            };
+        for secret in secrets {
             if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&secret) {
                 let read = |key: &str| {
                     value
@@ -73,9 +153,8 @@ pub async fn load_all_async() -> Vec<(String, String)> {
                 }
             }
         }
-        Ok::<_, oo7::Error>(sessions)
-    }
-    .await;
+        sessions
+    });
 
     match found {
         Ok(sessions) if !sessions.is_empty() => sessions,
@@ -99,12 +178,7 @@ pub async fn load_all_async() -> Vec<(String, String)> {
 
 /// Forgets one server's session, leaving any others alone.
 pub async fn forget_async(server: &str) {
-    let result = async {
-        let keyring = oo7::Keyring::new().await?;
-        keyring.delete(&attributes_for(server)).await
-    }
-    .await;
-    if let Err(e) = result {
+    if let Err(e) = vault::remove(Some(server)).await {
         tracing::debug!("could not forget {server}: {e}");
     }
 }
@@ -112,14 +186,7 @@ pub async fn forget_async(server: &str) {
 /// Stores the session in the keyring, replacing whatever was there.
 pub async fn save_async(server: &str, token: &str) {
     let secret = json!({ "server": server, "token": token }).to_string();
-    let result = async {
-        let keyring = oo7::Keyring::new().await?;
-        keyring
-            .create_item(LABEL, &attributes_for(server), secret.as_bytes(), true)
-            .await
-    }
-    .await;
-    if let Err(e) = result {
+    if let Err(e) = vault::put(server, secret.as_bytes()).await {
         tracing::warn!("could not reach the keyring, falling back to a file: {e}");
         save(server, token);
     }
@@ -128,12 +195,7 @@ pub async fn save_async(server: &str, token: &str) {
 /// Forgets the session in both places. Signing out has to clear the fallback
 /// too, or the next launch signs straight back in with it.
 pub async fn clear_async() {
-    let result = async {
-        let keyring = oo7::Keyring::new().await?;
-        keyring.delete(&attributes()).await
-    }
-    .await;
-    if let Err(e) = result {
+    if let Err(e) = vault::remove(None).await {
         tracing::debug!("could not clear the keyring item: {e}");
     }
     clear_file();
@@ -165,16 +227,16 @@ fn write(server: &str, token: &str) -> std::io::Result<()> {
     let dir = file.parent().expect("session path always has a parent");
     fs::create_dir_all(dir)?;
     // The token would otherwise sit in a directory anyone can list.
+    #[cfg(unix)]
     fs::set_permissions(dir, fs::Permissions::from_mode(0o700))?;
 
     // Created 0600 up front rather than chmod-ed afterwards: the gap between
     // the two is long enough for another process to open the file.
-    let mut f = fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(&file)?;
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut f = options.open(&file)?;
     f.write_all(
         json!({ "server": server, "token": token })
             .to_string()

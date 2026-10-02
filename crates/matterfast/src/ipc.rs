@@ -10,10 +10,17 @@
 //! oldest tool there is: a socket in the runtime directory. A launch that
 //! finds a live socket says what it was started for and exits; a launch that
 //! does not becomes the one listening.
+//!
+//! Windows has no such socket in the standard library, and this is not yet
+//! done another way there: every launch is its own copy.
 
+#[cfg(unix)]
 use std::io::{BufRead, BufReader, Write};
+#[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
+#[cfg(unix)]
 use std::path::PathBuf;
+#[cfg(unix)]
 use std::time::Duration;
 
 /// What a second launch asks the running one to do.
@@ -25,6 +32,8 @@ pub enum Request {
     Open(String),
 }
 
+// Only the socket speaks this, and Windows has no socket yet.
+#[cfg_attr(not(unix), allow(dead_code))]
 impl Request {
     fn encode(&self) -> String {
         match self {
@@ -65,6 +74,7 @@ pub fn requests_from_args(args: impl Iterator<Item = String>) -> Vec<Request> {
 /// Inside a Flatpak the runtime directory is private to each sandbox, and
 /// only `app/<id>` under it is shared between two launches of the same app —
 /// so that is where it has to go, or the second launch never finds the first.
+#[cfg(unix)]
 fn socket_path() -> PathBuf {
     let runtime = std::env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
@@ -79,9 +89,16 @@ fn socket_path() -> PathBuf {
 /// Hands this launch's requests to a copy that is already running. `true`
 /// means one took them and this process has nothing left to do.
 pub fn forward(requests: &[Request]) -> bool {
-    forward_to(&socket_path(), requests)
+    #[cfg(unix)]
+    return forward_to(&socket_path(), requests);
+    #[cfg(not(unix))]
+    {
+        let _ = requests;
+        false
+    }
 }
 
+#[cfg(unix)]
 fn forward_to(path: &std::path::Path, requests: &[Request]) -> bool {
     let Ok(mut stream) = UnixStream::connect(path) else {
         return false;
@@ -99,9 +116,13 @@ fn forward_to(path: &std::path::Path, requests: &[Request]) -> bool {
 /// ask for. `None` when the socket cannot be made, in which case the
 /// application still works — it just cannot be reached by a second launch.
 pub fn listen() -> Option<async_channel::Receiver<Request>> {
-    listen_at(socket_path())
+    #[cfg(unix)]
+    return listen_at(socket_path());
+    #[cfg(not(unix))]
+    None
 }
 
+#[cfg(unix)]
 fn listen_at(path: PathBuf) -> Option<async_channel::Receiver<Request>> {
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);

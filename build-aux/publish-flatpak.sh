@@ -22,6 +22,9 @@
 #                        for CI; omit it to sign with the local keyring
 #   FLATPAK_GPG_PASSPHRASE  that key's passphrase, required alongside it
 #   FLATPAK_HOMEPAGE     the project page named in the ref file
+#   FLATPAK_BUNDLE_DIR   also pack each architecture as a single-file
+#                        matterfast-<version>-<arch>.flatpak into this directory
+#   FLATPAK_BUNDLE_VERSION  the version in that name, required alongside it
 set -Eeuo pipefail
 
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
@@ -104,7 +107,11 @@ PINENTRY
       "$GNUPGHOME" > "$GNUPGHOME/gpg-agent.conf"
     key=$FLATPAK_GPG_KEY_B64
     unset FLATPAK_GPG_KEY_B64
-    printf '%s' "$key" | base64 -d | "$gpg_bin" --batch --quiet \
+    # --ignore-garbage: a value pasted into a CI variable from a terminal
+    # arrives with whatever the terminal added — wrapped lines, spaces, the
+    # shell's end-of-output mark. A key that is really damaged still fails,
+    # one step later, at the import.
+    printf '%s' "$key" | base64 -d --ignore-garbage | "$gpg_bin" --batch --quiet \
       --pinentry-mode loopback --passphrase-file "$GNUPGHOME/passphrase" --import
     unset key
     sign=(--gpg-sign="$FLATPAK_GPG_ID" --gpg-homedir="$GNUPGHOME")
@@ -148,6 +155,20 @@ key_b64=$("$gpg_bin" --export "$FLATPAK_GPG_ID" | base64 -w0)
   printf '%s\n' 'RuntimeRepo=https://flathub.org/repo/flathub.flatpakrepo' \
     'IsRuntime=false' "GPGKey=$key_b64"
 } > "$site/$app_id.flatpakref"
+
+if [[ -n ${FLATPAK_BUNDLE_DIR:-} ]]; then
+  bundle_version=${FLATPAK_BUNDLE_VERSION:?FLATPAK_BUNDLE_DIR needs FLATPAK_BUNDLE_VERSION}
+  mkdir -p -- "$FLATPAK_BUNDLE_DIR"
+  # One bundle per architecture the repository holds.
+  for ref in "$repo_dir/refs/heads/app/$app_id"/*/; do
+    bundle_arch=$(basename -- "$ref")
+    bundle=$FLATPAK_BUNDLE_DIR/matterfast-$bundle_version-$bundle_arch.flatpak
+    flatpak build-bundle --arch="$bundle_arch" \
+      --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo \
+      "$repo_dir" "$bundle" "$app_id" "$app_branch"
+    (cd -- "$FLATPAK_BUNDLE_DIR" && sha256sum "${bundle##*/}" > "${bundle##*/}.sha256")
+  done
+fi
 
 echo "site written to $site"
 echo "install with: ${FLATPAK_REPO_URL%/repo}/$app_id.flatpakref"

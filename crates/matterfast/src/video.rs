@@ -10,6 +10,10 @@
 //! depacketiser here: reassembly, reordering and frame boundaries are all
 //! things `rtpjitterbuffer` already does correctly.
 //!
+//! That is Linux, the only place this is built with GStreamer so far.
+//! Elsewhere [`pipe`] is `video_stub.rs`, which answers every request with an
+//! error: a call still works, with sound and without pictures.
+//!
 //! Nothing GStreamer-shaped leaves the [`pipe`] module: it owns every
 //! GStreamer type and hands out plain [`Frame`]s, and only this outer module
 //! knows there is a window to draw them in.
@@ -141,6 +145,7 @@ pub fn show_remote(
 }
 
 /// Starts GStreamer, once. Everything that builds a pipeline asks first.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn init_gstreamer() -> Result<(), String> {
     pipe::init()
 }
@@ -151,7 +156,12 @@ pub fn frame_image(frame: Frame) -> Option<RenderImage> {
     render_image(frame)
 }
 
+#[cfg(not(target_os = "linux"))]
+#[path = "video_stub.rs"]
+mod pipe;
+
 /// Everything that speaks GStreamer.
+#[cfg(target_os = "linux")]
 mod pipe {
     use std::sync::Arc;
     use std::time::Duration;

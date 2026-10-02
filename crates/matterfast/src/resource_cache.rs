@@ -7,6 +7,7 @@
 
 use std::fs;
 use std::io::{Read, Write};
+#[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -43,7 +44,11 @@ impl ResourceCache {
     fn open_paths(root: PathBuf, dir: PathBuf, limit: u64) -> Self {
         if let Err(error) = fs::create_dir_all(&dir) {
             tracing::warn!(%error, "could not create the HTTP cache");
-        } else if let Err(error) = fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)) {
+        }
+        #[cfg(unix)]
+        if dir.is_dir()
+            && let Err(error) = fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))
+        {
             tracing::warn!(%error, "could not protect the HTTP cache directory");
         }
         ResourceCache {
@@ -158,12 +163,11 @@ impl ResourceCache {
         }
         let path = self.path(key);
         let temp = path.with_extension(format!("tmp-{}", std::process::id()));
-        let file = fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&temp);
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let file = options.open(&temp);
         let Ok(mut file) = file else { return };
         let expires = now().saturating_add(ttl.as_secs().max(1));
         let result = file

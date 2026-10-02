@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
+#[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::PathBuf;
 
@@ -51,12 +52,11 @@ pub fn save(snapshot: &Snapshot) {
     }
     // 0600 from the start: this holds messages, and a file created world
     // readable is readable for however long it takes to chmod it.
-    let file = fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(&path);
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let file = options.open(&path);
     let mut file = match file {
         Ok(f) => f,
         Err(e) => {
@@ -64,6 +64,7 @@ pub fn save(snapshot: &Snapshot) {
             return;
         }
     };
+    #[cfg(unix)]
     let _ = file.set_permissions(fs::Permissions::from_mode(0o600));
     match serde_json::to_vec(snapshot) {
         Ok(bytes) => {

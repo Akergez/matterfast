@@ -13,6 +13,7 @@
 //! deleting it (see [`ensure_schema`]).
 
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -130,12 +131,11 @@ impl Store {
         // file 0666-minus-umask; creating it ourselves first is the only way it
         // is never, even briefly, world readable. SQLite copies this mode onto
         // its journal files.
-        let _created = fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .mode(0o600)
-            .open(&path)?;
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let _created = options.open(&path)?;
         let conn = Connection::open(&path)?;
         ensure_schema(&conn)?;
         // Earlier builds filed the optimistic copy of a message being sent.

@@ -8,10 +8,6 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
-# Not the `tokio` flavour of either of these: the toolkit talks D-Bus through the
-# same `zbus`, on its own executor, and `zbus/tokio` would make every one of its
-# calls need a Tokio reactor it does not have.
-ashpd = { version = "0.13", default-features = false, features = ["async-io", "screencast"] }
 async-channel = "2.5.0"
 chrono = "0.4"
 chrono-tz = "0.10"
@@ -19,14 +15,10 @@ cpal = "0.18.2"
 dirs = "6"
 emojis = "0.9.0"
 futures-util.workspace = true
-gstreamer = "0.24.5"
-gstreamer-app = "0.24.5"
-gstreamer-video = "0.24.5"
 gpui-kit = "0.7.0"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
-mattermost-api = { version = "0.1.0", path = "../mattermost-api" }
-mattermost-calls = { version = "0.1.0", path = "../mattermost-calls" }
-oo7 = { version = "0.6", default-features = false, features = ["async-std", "native_crypto"] }
+mattermost-api = { path = "../mattermost-api" }
+mattermost-calls = { path = "../mattermost-calls" }
 opus = "0.3.1"
 rand = "0.9"
 pulldown-cmark = { version = "0.13.4", default-features = false }
@@ -37,4 +29,22 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "fs"] }
 tracing.workspace = true
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+# What only the Linux desktop has: D-Bus for the keyring, notifications and
+# the screen-sharing portal, and GStreamer, which the distribution provides.
+[target.'cfg(target_os = "linux")'.dependencies]
+# Not the `tokio` flavour of either of these: the toolkit talks D-Bus through the
+# same `zbus`, on its own executor, and `zbus/tokio` would make every one of its
+# calls need a Tokio reactor it does not have.
+ashpd = { version = "0.13", default-features = false, features = ["async-io", "screencast"] }
 zbus = { version = "5", default-features = false, features = ["async-io"] }
+oo7 = { version = "0.6", default-features = false, features = ["async-std", "native_crypto"] }
+gstreamer = "0.24.5"
+gstreamer-app = "0.24.5"
+gstreamer-video = "0.24.5"
+
+# The Keychain and the Credential Manager in place of the Secret Service, and
+# the system's notification service in place of the D-Bus one.
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+keyring = { version = "3", features = ["apple-native", "windows-native"] }
+notify-rust = "4"

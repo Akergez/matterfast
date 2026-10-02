@@ -4,6 +4,10 @@
 //! thread/inbox panel — drawn with GPUI. See [`ui`] for the session and the
 //! panes, and [`ipc`] for how a second launch finds the first.
 
+// Without this a release build on Windows opens a console window behind the
+// real one. Debug builds keep the console: it is where the log goes.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod agents;
 mod appearance;
 mod audio;
@@ -17,6 +21,7 @@ mod ipc;
 mod markdown;
 mod notifications;
 mod paths;
+#[cfg_attr(not(target_os = "linux"), path = "playback_stub.rs")]
 mod playback;
 mod resource_cache;
 mod runtime;

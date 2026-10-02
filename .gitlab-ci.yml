@@ -1,18 +1,26 @@
-# Unit and UI tests on every push; on the default branch, a flatpak repository on GitLab
-# Pages and a tarball per architecture; on a `v*` tag, a release carrying the
-# tarballs.
+# Tests on every merge request and on the default branch. Everything that is
+# built to be handed to someone is built from a version tag, and only from
+# one: `v1.2.3`, on a commit whose crates all say 1.2.3.
 #
-# Every job runs on Linux. The two architectures are built natively, each on
-# its own runner, not cross-compiled: the build links GStreamer, ALSA and the
-# Wayland/X11 stack, and a foreign-architecture sysroot for those is more to
-# keep working than a second runner.
+# A tag pipeline:
+#   test     the unit and UI tests, and the check that tag and crates agree
+#   build    flatpak (x86_64, aarch64), Linux tarballs (x86_64, aarch64),
+#            a Windows zip (x86_64)
+#   publish  the flatpak repository to GitLab Pages; every package to the
+#            package registry; a release that links to them
+#
+# Every job runs on Linux. The Linux builds are native, each architecture on
+# its own runner: they link GStreamer, ALSA and the Wayland/X11 stack, and a
+# foreign-architecture sysroot for those is more to keep working than a
+# second runner. The Windows builds are cross-compiled; see
+# build-aux/build-windows.sh for what stands in for a Windows machine.
 
 stages: [test, build, publish]
 
 workflow:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-    - if: $CI_COMMIT_TAG
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
 
 variables:
@@ -22,6 +30,7 @@ variables:
   RUNNER_ARM64: saas-linux-medium-arm64
   # The toolchain the application is developed with; multi-arch, so the same
   # tag serves both runners.
+  RUST_VERSION: "1.95"
   RUST_IMAGE: rust:1.95-bookworm
   # Flathub's build image, pinned by digest, for flatpak-builder. The digest
   # is a multi-arch index, so it resolves to the arm64 image on that runner.
@@ -29,6 +38,8 @@ variables:
   # runtime is installed in the job.
   #   skopeo inspect docker://ghcr.io/flathub-infra/flatpak-github-actions:gnome-50
   FLATPAK_IMAGE: ghcr.io/flathub-infra/flatpak-github-actions@sha256:bdbeb241813021cf96f3001ccceea46b8e0c3c46a316172992fd60ad9dfc50e2
+  # Rust, clang, lld and cargo-xwin in one image, for the Windows builds.
+  XWIN_IMAGE: messense/cargo-xwin:latest
   CARGO_HOME: $CI_PROJECT_DIR/.cargo-home
   CARGO_TERM_COLOR: always
 
@@ -40,9 +51,23 @@ variables:
 .arm64:
   tags: [$RUNNER_ARM64]
 
-.on-default-branch:
+# A build for release. `version` hands over $VERSION, the tag without its
+# `v`, and $PACKAGES, where this version's files go in the package registry;
+# `test` is named so that nothing is built from a commit that fails it —
+# with `needs`, stage order alone would not hold a job back.
+.release:
   rules:
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_TAG
+  needs: [version, test]
+
+# Puts everything in dist/ into the package registry.
+.upload: &upload
+  - |
+    for file in dist/*; do
+      curl --fail --silent --show-error \
+        --header "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file "$file" \
+        "$PACKAGES/${file##*/}"
+    done
 
 .rust:
   image: $RUST_IMAGE
@@ -66,7 +91,7 @@ variables:
 .flatpak:
   stage: build
   image: $FLATPAK_IMAGE
-  extends: .on-default-branch
+  extends: .release
   # flatpak-builder sandboxes the build with bwrap, which has to create its
   # own namespaces: the runner must run this container privileged. GitLab.com's
   # hosted runners do; on your own runner set `privileged = true`.
@@ -96,29 +121,44 @@ variables:
 
 .tarball:
   stage: build
-  extends: .rust
+  extends: [.rust, .release]
   timeout: 3h
-  rules:
-    - if: $CI_COMMIT_TAG =~ /^v/
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
   script:
     - cargo build --profile dist --locked -p matterfast
-    - build-aux/package-tarball.sh "${CI_COMMIT_TAG:-}"
-    # A tagged build is also kept in the package registry, which is where the
-    # release links point: job artifacts expire, packages do not.
-    - |
-      if [ -n "${CI_COMMIT_TAG:-}" ]; then
-        for file in dist/*; do
-          curl --fail --silent --show-error \
-            --header "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file "$file" \
-            "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/matterfast/$CI_COMMIT_TAG/${file##*/}"
-        done
-      fi
+    - build-aux/package-tarball.sh "$VERSION"
+    - *upload
   artifacts:
     paths: [dist]
     expire_in: 30 days
 
-# --------------------------------------------------------------------- jobs
+.windows:
+  stage: build
+  image: $XWIN_IMAGE
+  # Always the x86-64 runner, whichever Windows it builds for: the shader
+  # compiler is run through wine, and the build is a cross-compile anyway.
+  extends: [.release, .amd64]
+  timeout: 3h
+  before_script:
+    - rustup toolchain install "$RUST_VERSION" --profile minimal --target "$ARCH-pc-windows-msvc"
+    - rustup default "$RUST_VERSION"
+    - apt-get update -q
+    - apt-get install -y -q --no-install-recommends wine nasm curl unzip zip
+  script:
+    - build-aux/build-windows.sh "$ARCH" "$VERSION"
+    - *upload
+  cache:
+    # The MSVC runtime and Windows SDK cargo-xwin downloads, and fxc.exe.
+    key: windows-sdk
+    paths:
+      - .xwin-cache
+      - target/windows-tools/fxc-*
+  variables:
+    XWIN_CACHE_DIR: $CI_PROJECT_DIR/.xwin-cache
+  artifacts:
+    paths: [dist]
+    expire_in: 30 days
+
+# --------------------------------------------------------------------- test
 
 test:
   stage: test
@@ -140,6 +180,24 @@ test:
     - useradd --create-home ui
     - runuser -u ui -- build-aux/ui-tests.sh --headless
 
+# The tag has to be a version, and the version the crates carry. Everything
+# built for release waits for this.
+version:
+  stage: test
+  image: $RUST_IMAGE
+  extends: .amd64
+  rules:
+    - if: $CI_COMMIT_TAG
+  script:
+    - VERSION=$(build-aux/check-version.sh "$CI_COMMIT_TAG")
+    - echo "VERSION=$VERSION" > version.env
+    - echo "PACKAGES=$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/matterfast/$VERSION" >> version.env
+  artifacts:
+    reports:
+      dotenv: version.env
+
+# -------------------------------------------------------------------- build
+
 flatpak:x86_64:
   extends: [.flatpak, .amd64]
 
@@ -147,7 +205,7 @@ flatpak:aarch64:
   extends: [.flatpak, .arm64]
   # Not parallel with x86_64: it builds into the repository that job produced,
   # so one ostree repository ends up holding both architectures.
-  needs: ["flatpak:x86_64"]
+  needs: [version, test, "flatpak:x86_64"]
 
 tarball:x86_64:
   extends: [.tarball, .amd64]
@@ -155,20 +213,30 @@ tarball:x86_64:
 tarball:aarch64:
   extends: [.tarball, .arm64]
 
+windows:x86_64:
+  extends: .windows
+  variables:
+    ARCH: x86_64
+
+# ------------------------------------------------------------------ publish
+
 # GitLab Pages serves what this job leaves in `public`: the signed ostree
-# repository under /repo and the .flatpakref beside it. The signing key is
-# needed here and nowhere else; keep its variables protected and masked.
+# repository under /repo and the .flatpakref beside it. It also packs each
+# architecture as a single-file bundle for the package registry. The signing
+# key is needed here and nowhere else; keep its variables masked.
 pages:
   stage: publish
   image: $FLATPAK_IMAGE
-  extends: [.on-default-branch, .amd64]
-  needs: ["flatpak:aarch64"]
+  extends: [.release, .amd64]
+  needs: [version, "flatpak:aarch64"]
   resource_group: flatpak
   variables:
     FLATPAK_REPO_URL: $CI_PAGES_URL/repo
     FLATPAK_HOMEPAGE: $CI_PROJECT_URL
+    FLATPAK_BUNDLE_DIR: dist
   script:
-    - build-aux/publish-flatpak.sh --site public
+    - FLATPAK_BUNDLE_VERSION=$VERSION build-aux/publish-flatpak.sh --site public
+    - *upload
   artifacts:
     paths: [public]
 
@@ -176,29 +244,54 @@ release:
   stage: publish
   # The image the `release` keyword needs: the runner calls glab from it.
   image: registry.gitlab.com/gitlab-org/cli:latest
-  extends: .amd64
-  rules:
-    - if: $CI_COMMIT_TAG =~ /^v/
-  needs: ["tarball:x86_64", "tarball:aarch64"]
-  variables:
-    PACKAGES: $CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/matterfast/$CI_COMMIT_TAG
+  extends: [.release, .amd64]
+  # Every package has to be in the registry before the release links to it.
+  needs:
+    - version
+    - pages
+    - "tarball:x86_64"
+    - "tarball:aarch64"
+    - "windows:x86_64"
   script:
-    - echo "Releasing $CI_COMMIT_TAG"
+    - echo "Releasing Matterfast $VERSION"
   release:
     tag_name: $CI_COMMIT_TAG
-    name: Matterfast $CI_COMMIT_TAG
-    description: Matterfast $CI_COMMIT_TAG
+    name: Matterfast $VERSION
+    description: |
+      ## Install
+
+      **Linux, flatpak** — x86_64 and aarch64, kept up to date by `flatpak update`:
+
+      ```sh
+      flatpak install $CI_PAGES_URL/io.gitlab.akergez.Matterfast.flatpakref
+      ```
+
+      The `.flatpak` files below are the same build as a single file, for a
+      machine that cannot reach the repository: `flatpak install <file>`.
+
+      **Linux, tarball** — laid out like an install prefix; the libraries
+      listed in the README under "Building" come from the distribution:
+
+      ```sh
+      tar -xzf matterfast-$VERSION-linux-x86_64.tar.gz --strip-components=1 -C ~/.local
+      ```
+
+      **Windows, x86_64** — unpack the zip and run `matterfast.exe`. This build has
+      no video: attachments do not play and calls are sound only.
     assets:
       links:
-        - name: matterfast-$CI_COMMIT_TAG-linux-x86_64.tar.gz
-          url: $PACKAGES/matterfast-$CI_COMMIT_TAG-linux-x86_64.tar.gz
+        - name: matterfast-$VERSION-x86_64.flatpak
+          url: $PACKAGES/matterfast-$VERSION-x86_64.flatpak
           link_type: package
-        - name: matterfast-$CI_COMMIT_TAG-linux-x86_64.tar.gz.sha256
-          url: $PACKAGES/matterfast-$CI_COMMIT_TAG-linux-x86_64.tar.gz.sha256
-          link_type: other
-        - name: matterfast-$CI_COMMIT_TAG-linux-aarch64.tar.gz
-          url: $PACKAGES/matterfast-$CI_COMMIT_TAG-linux-aarch64.tar.gz
+        - name: matterfast-$VERSION-aarch64.flatpak
+          url: $PACKAGES/matterfast-$VERSION-aarch64.flatpak
           link_type: package
-        - name: matterfast-$CI_COMMIT_TAG-linux-aarch64.tar.gz.sha256
-          url: $PACKAGES/matterfast-$CI_COMMIT_TAG-linux-aarch64.tar.gz.sha256
-          link_type: other
+        - name: matterfast-$VERSION-linux-x86_64.tar.gz
+          url: $PACKAGES/matterfast-$VERSION-linux-x86_64.tar.gz
+          link_type: package
+        - name: matterfast-$VERSION-linux-aarch64.tar.gz
+          url: $PACKAGES/matterfast-$VERSION-linux-aarch64.tar.gz
+          link_type: package
+        - name: matterfast-$VERSION-windows-x86_64.zip
+          url: $PACKAGES/matterfast-$VERSION-windows-x86_64.zip
+          link_type: package
