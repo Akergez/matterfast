@@ -1,0 +1,22 @@
+# mode: demo
+# size: 1320x840
+#
+# The theme switch in the settings dialog takes effect at once, both ways.
+wait:2500
+key:ctrl-,
+wait:1200
+expect:dialog=open
+move:870,152
+wait:300
+click:877,152
+wait:800
+expect:theme=dark
+move:820,152
+wait:300
+click:828,152
+wait:800
+expect:theme=light
+key:escape
+wait:600
+expect:dialog=closed
+quit

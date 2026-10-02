@@ -1,0 +1,199 @@
+# Unit and UI tests on every push; on the default branch, a flatpak repository on GitLab
+# Pages and a tarball per architecture; on a `v*` tag, a release carrying the
+# tarballs.
+#
+# Every job runs on Linux. The two architectures are built natively, each on
+# its own runner, not cross-compiled: the build links GStreamer, ALSA and the
+# Wayland/X11 stack, and a foreign-architecture sysroot for those is more to
+# keep working than a second runner.
+
+stages: [test, build, publish]
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_TAG
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+variables:
+  # GitLab.com's hosted runners. On a self-managed instance, or with your own
+  # machines, override these two in Settings → CI/CD → Variables.
+  RUNNER_AMD64: saas-linux-medium-amd64
+  RUNNER_ARM64: saas-linux-medium-arm64
+  # The toolchain the application is developed with; multi-arch, so the same
+  # tag serves both runners.
+  RUST_IMAGE: rust:1.95-bookworm
+  # Flathub's build image, pinned by digest, for flatpak-builder. The digest
+  # is a multi-arch index, so it resolves to the arm64 image on that runner.
+  # It is the GNOME 50 flavour, which is more than this needs; the freedesktop
+  # runtime is installed in the job.
+  #   skopeo inspect docker://ghcr.io/flathub-infra/flatpak-github-actions:gnome-50
+  FLATPAK_IMAGE: ghcr.io/flathub-infra/flatpak-github-actions@sha256:bdbeb241813021cf96f3001ccceea46b8e0c3c46a316172992fd60ad9dfc50e2
+  CARGO_HOME: $CI_PROJECT_DIR/.cargo-home
+  CARGO_TERM_COLOR: always
+
+# ---------------------------------------------------------------- templates
+
+.amd64:
+  tags: [$RUNNER_AMD64]
+
+.arm64:
+  tags: [$RUNNER_ARM64]
+
+.on-default-branch:
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+.rust:
+  image: $RUST_IMAGE
+  before_script:
+    # The list in README.md under "Building".
+    - apt-get update -q
+    - apt-get install -y -q --no-install-recommends
+        pkg-config cmake libssl-dev
+        libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev libvulkan-dev
+        libfontconfig-dev libfreetype-dev libasound2-dev
+        libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libopus-dev
+  cache:
+    # Downloaded crates only. `target` is not cached: a dist build is one
+    # codegen unit with LTO, so nothing in it survives a source change, and
+    # it is several gigabytes to upload after every job.
+    key: cargo-registry
+    paths:
+      - .cargo-home/registry/index
+      - .cargo-home/registry/cache
+
+.flatpak:
+  stage: build
+  image: $FLATPAK_IMAGE
+  extends: .on-default-branch
+  # flatpak-builder sandboxes the build with bwrap, which has to create its
+  # own namespaces: the runner must run this container privileged. GitLab.com's
+  # hosted runners do; on your own runner set `privileged = true`.
+  #
+  # A dist build is slow, and the project default of one hour is not enough
+  # on a small runner.
+  timeout: 3h
+  # Never let a stale build finish last and publish over a newer one.
+  resource_group: flatpak
+  before_script:
+    # Without a machine id, dbus-run-session refuses to start and
+    # flatpak-builder cannot spawn a build sandbox.
+    - dbus-uuidgen > /etc/machine-id
+    # The image carries the GNOME runtime and SDK; the application builds
+    # against the freedesktop ones.
+    - flatpak install -y --noninteractive flathub
+        org.freedesktop.Platform//25.08
+        org.freedesktop.Sdk//25.08
+        org.freedesktop.Sdk.Extension.rust-stable//25.08
+  script:
+    - build-aux/publish-flatpak.sh
+  artifacts:
+    # The unsigned ostree repository, handed to the next job. It only has to
+    # outlive the pipeline.
+    paths: [.flatpak-repo]
+    expire_in: 1 day
+
+.tarball:
+  stage: build
+  extends: .rust
+  timeout: 3h
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v/
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  script:
+    - cargo build --profile dist --locked -p matterfast
+    - build-aux/package-tarball.sh "${CI_COMMIT_TAG:-}"
+    # A tagged build is also kept in the package registry, which is where the
+    # release links point: job artifacts expire, packages do not.
+    - |
+      if [ -n "${CI_COMMIT_TAG:-}" ]; then
+        for file in dist/*; do
+          curl --fail --silent --show-error \
+            --header "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file "$file" \
+            "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/matterfast/$CI_COMMIT_TAG/${file##*/}"
+        done
+      fi
+  artifacts:
+    paths: [dist]
+    expire_in: 30 days
+
+# --------------------------------------------------------------------- jobs
+
+test:
+  stage: test
+  extends: [.rust, .amd64]
+  script:
+    - cargo test --workspace --locked
+    # The scenarios in crates/matterfast/tests/ui, played into the real
+    # application under a headless compositor, drawn by Mesa's software
+    # Vulkan. In the same job as the unit tests so the dependencies are
+    # compiled once.
+    - apt-get install -y -q --no-install-recommends sway mesa-vulkan-drivers
+    - cargo build --locked -p matterfast -p matterfast-testserver
+    # sway refuses to start as root.
+    - useradd --create-home ui
+    - runuser -u ui -- build-aux/ui-tests.sh --headless
+
+flatpak:x86_64:
+  extends: [.flatpak, .amd64]
+
+flatpak:aarch64:
+  extends: [.flatpak, .arm64]
+  # Not parallel with x86_64: it builds into the repository that job produced,
+  # so one ostree repository ends up holding both architectures.
+  needs: ["flatpak:x86_64"]
+
+tarball:x86_64:
+  extends: [.tarball, .amd64]
+
+tarball:aarch64:
+  extends: [.tarball, .arm64]
+
+# GitLab Pages serves what this job leaves in `public`: the signed ostree
+# repository under /repo and the .flatpakref beside it. The signing key is
+# needed here and nowhere else; keep its variables protected and masked.
+pages:
+  stage: publish
+  image: $FLATPAK_IMAGE
+  extends: [.on-default-branch, .amd64]
+  needs: ["flatpak:aarch64"]
+  resource_group: flatpak
+  variables:
+    FLATPAK_REPO_URL: $CI_PAGES_URL/repo
+    FLATPAK_HOMEPAGE: $CI_PROJECT_URL
+  script:
+    - build-aux/publish-flatpak.sh --site public
+  artifacts:
+    paths: [public]
+
+release:
+  stage: publish
+  # The image the `release` keyword needs: the runner calls glab from it.
+  image: registry.gitlab.com/gitlab-org/cli:latest
+  extends: .amd64
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v/
+  needs: ["tarball:x86_64", "tarball:aarch64"]
+  variables:
+    PACKAGES: $CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/matterfast/$CI_COMMIT_TAG
+  script:
+    - echo "Releasing $CI_COMMIT_TAG"
+  release:
+    tag_name: $CI_COMMIT_TAG
+    name: Matterfast $CI_COMMIT_TAG
+    description: Matterfast $CI_COMMIT_TAG
+    assets:
+      links:
+        - name: matterfast-$CI_COMMIT_TAG-linux-x86_64.tar.gz
+          url: $PACKAGES/matterfast-$CI_COMMIT_TAG-linux-x86_64.tar.gz
+          link_type: package
+        - name: matterfast-$CI_COMMIT_TAG-linux-x86_64.tar.gz.sha256
+          url: $PACKAGES/matterfast-$CI_COMMIT_TAG-linux-x86_64.tar.gz.sha256
+          link_type: other
+        - name: matterfast-$CI_COMMIT_TAG-linux-aarch64.tar.gz
+          url: $PACKAGES/matterfast-$CI_COMMIT_TAG-linux-aarch64.tar.gz
+          link_type: package
+        - name: matterfast-$CI_COMMIT_TAG-linux-aarch64.tar.gz.sha256
+          url: $PACKAGES/matterfast-$CI_COMMIT_TAG-linux-aarch64.tar.gz.sha256
+          link_type: other

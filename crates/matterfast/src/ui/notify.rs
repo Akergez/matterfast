@@ -1,0 +1,277 @@
+//! Desktop notifications.
+//!
+//! The websocket does not say "raise a toast" — it says what happened and who
+//! was mentioned, and the client decides. [`should_notify`] is that decision,
+//! kept as a pure function of the event and the user's settings so it can be
+//! tested without a server or a desktop.
+//!
+//! The rules mirror the server's own (`app/notification.go`): a channel-level
+//! setting beats the global one, a DM is always worth a mention-level toast,
+//! and nothing is worth interrupting yourself over.
+
+use mattermost_api::models::{ChannelMember, User};
+use mattermost_api::ws::Posted;
+
+/// How much a person wants to be told, in the order the server writes it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Level {
+    All,
+    Mention,
+    None,
+}
+
+impl Level {
+    fn parse(value: Option<&str>) -> Option<Level> {
+        match value {
+            Some("all") => Some(Level::All),
+            Some("mention") => Some(Level::Mention),
+            Some("none") => Some(Level::None),
+            // "default" on a channel means "whatever the account says", which
+            // is the same as having no channel setting at all.
+            _ => None,
+        }
+    }
+}
+
+/// Whether this post should raise a desktop notification.
+///
+/// `focused_channel` is the channel the window is showing *while it has focus*
+/// — reading a message as it arrives is not something to be told about.
+pub fn should_notify(
+    posted: &Posted,
+    me: &User,
+    membership: Option<&ChannelMember>,
+    focused_channel: Option<&str>,
+) -> bool {
+    if posted.post.user_id == me.id {
+        return false;
+    }
+    // Joins, leaves and the rest are noise; the server does not notify for
+    // them either. Only *system* types, though — a bot's answer carries a type
+    // of its own and is still worth being told about.
+    if posted.post.is_system() {
+        return false;
+    }
+    if focused_channel == Some(posted.post.channel_id.as_str()) {
+        return false;
+    }
+
+    // A muted channel is muted: the server stores that as
+    // mark_unread == "mention" and stops sending push for anything else, so a
+    // desktop toast for ordinary activity there would be the one client
+    // ignoring the setting.
+    let muted = membership.is_some_and(|m| m.is_muted());
+
+    let level = membership
+        .and_then(|m| Level::parse(m.notify_props.get("desktop").map(String::as_str)))
+        .or_else(|| Level::parse(me.notify_props.get("desktop").map(String::as_str)))
+        // The server's default is to notify on mentions.
+        .unwrap_or(Level::Mention);
+    let level = if muted && level == Level::All {
+        Level::Mention
+    } else {
+        level
+    };
+
+    match level {
+        Level::None => false,
+        Level::All => true,
+        // A direct message is addressed to you whether or not it says your
+        // name, so it counts as a mention.
+        // "D" and "G" are the wire values for a direct and a group message.
+        Level::Mention => {
+            posted.mentions_user(&me.id) || matches!(posted.channel_type.as_str(), "D" | "G")
+        }
+    }
+}
+
+/// The tag a channel's message notification goes out under.
+///
+/// The tag is the channel, so a second message in the same conversation
+/// replaces the first rather than stacking — a busy channel should not bury
+/// the rest of the desktop.
+pub fn message_tag(channel_id: &str) -> String {
+    format!("channel-{channel_id}")
+}
+
+/// The tag an incoming call in a channel rings under. Keyed by channel too, so
+/// a second call in the same DM replaces the first rather than stacking two
+/// doorbells.
+pub fn call_tag(channel_id: &str) -> String {
+    format!("call-{channel_id}")
+}
+
+/// The buttons on an incoming-call notification.
+pub const JOIN_CALL: &str = "join-call";
+pub const DISMISS_CALL: &str = "dismiss-call";
+
+/// What a pressed notification was about.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Pressed<'a> {
+    /// A message: go to this channel.
+    Message(&'a str),
+    /// An incoming call in this channel.
+    Call(&'a str),
+}
+
+/// Reads a tag back into what it stood for.
+pub fn pressed(tag: &str) -> Option<Pressed<'_>> {
+    if let Some(channel_id) = tag.strip_prefix("channel-") {
+        return Some(Pressed::Message(channel_id));
+    }
+    tag.strip_prefix("call-").map(Pressed::Call)
+}
+
+/// The line under the title: who said it, or what they said.
+pub fn body(posted: &Posted) -> String {
+    let text = posted.post.message.trim();
+    if text.is_empty() {
+        return if posted.post.file_ids.is_empty() {
+            "Sent a message".to_string()
+        } else {
+            "Sent an attachment".to_string()
+        };
+    }
+    // A notification is a glance, not a read.
+    let mut line = text.lines().next().unwrap_or(text).to_string();
+    if line.chars().count() > 140 {
+        line = line.chars().take(140).collect::<String>() + "…";
+    }
+    line
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn posted(sender: &str, channel_type: &str, mentions: &[&str]) -> Posted {
+        let post = mattermost_api::models::Post {
+            user_id: sender.to_string(),
+            channel_id: "c1".into(),
+            message: "hello".into(),
+            ..Default::default()
+        };
+        Posted {
+            post,
+            channel_type: channel_type.to_string(),
+            channel_display_name: String::new(),
+            channel_name: String::new(),
+            sender_name: String::new(),
+            team_id: String::new(),
+            mentions: mentions.iter().map(|m| m.to_string()).collect(),
+            followers: Vec::new(),
+            should_ack: false,
+        }
+    }
+
+    fn me() -> User {
+        User {
+            id: "me".into(),
+            ..Default::default()
+        }
+    }
+
+    fn member(desktop: &str) -> ChannelMember {
+        let mut notify_props = mattermost_api::models::StringMap::new();
+        notify_props.insert("desktop".into(), desktop.to_string());
+        ChannelMember {
+            notify_props,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn the_default_is_mentions_only() {
+        let quiet = posted("them", "O", &[]);
+        let named = posted("them", "O", &["me"]);
+        assert!(!should_notify(&quiet, &me(), None, None));
+        assert!(should_notify(&named, &me(), None, None));
+    }
+
+    #[test]
+    fn a_direct_message_counts_as_a_mention() {
+        assert!(should_notify(&posted("them", "D", &[]), &me(), None, None));
+    }
+
+    #[test]
+    fn never_for_your_own_post_or_the_channel_you_are_reading() {
+        assert!(!should_notify(&posted("me", "D", &[]), &me(), None, None));
+        assert!(!should_notify(
+            &posted("them", "D", &[]),
+            &me(),
+            None,
+            Some("c1")
+        ));
+    }
+
+    #[test]
+    fn the_channel_setting_beats_the_account_setting() {
+        let mut loud = me();
+        loud.notify_props.insert("desktop".into(), "none".into());
+        // The account says nothing, the channel says everything.
+        assert!(should_notify(
+            &posted("them", "O", &[]),
+            &loud,
+            Some(&member("all")),
+            None
+        ));
+
+        let mut quiet = me();
+        quiet.notify_props.insert("desktop".into(), "all".into());
+        assert!(!should_notify(
+            &posted("them", "O", &[]),
+            &quiet,
+            Some(&member("none")),
+            None
+        ));
+    }
+
+    #[test]
+    fn a_channel_set_to_default_defers_to_the_account() {
+        let mut loud = me();
+        loud.notify_props.insert("desktop".into(), "all".into());
+        assert!(should_notify(
+            &posted("them", "O", &[]),
+            &loud,
+            Some(&member("default")),
+            None
+        ));
+    }
+
+    #[test]
+    fn a_muted_channel_only_notifies_for_mentions() {
+        let mut muted = ChannelMember::default();
+        muted
+            .notify_props
+            .insert("mark_unread".into(), "mention".into());
+        muted.notify_props.insert("desktop".into(), "all".into());
+
+        // "Everything" in a muted channel still means "only me".
+        assert!(!should_notify(
+            &posted("them", "O", &[]),
+            &me(),
+            Some(&muted),
+            None
+        ));
+        assert!(should_notify(
+            &posted("them", "O", &["me"]),
+            &me(),
+            Some(&muted),
+            None
+        ));
+    }
+
+    #[test]
+    fn a_tag_reads_back_as_what_it_was_raised_for() {
+        assert_eq!(pressed(&message_tag("c1")), Some(Pressed::Message("c1")));
+        assert_eq!(pressed(&call_tag("c1")), Some(Pressed::Call("c1")));
+        assert_eq!(pressed("something-else"), None);
+    }
+
+    #[test]
+    fn system_messages_never_notify() {
+        let mut join = posted("them", "D", &["me"]);
+        join.post.r#type = "system_join_channel".into();
+        assert!(!should_notify(&join, &me(), None, None));
+    }
+}

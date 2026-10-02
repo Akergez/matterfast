@@ -1,0 +1,15 @@
+# mode: server
+# size: 1320x840
+#
+# Signing in to a server with the env-credential shortcut, then opening a
+# channel through the switcher: the same path as the demo, over the network.
+wait:5000
+expect:session=yes
+key:ctrl-k
+wait:600
+type:Devel
+wait:800
+key:enter
+wait:2500
+expect:channel=Development
+quit

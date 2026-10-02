@@ -1,0 +1,14 @@
+# mode: demo
+# size: 1320x840
+#
+# Ctrl+K opens the quick switcher; typing narrows it and Enter goes there.
+wait:2500
+expect:channel=Development
+key:ctrl-k
+wait:600
+type:gene
+wait:600
+key:enter
+wait:1200
+expect:channel=General
+quit

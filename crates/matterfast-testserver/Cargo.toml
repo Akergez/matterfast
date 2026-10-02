@@ -1,0 +1,16 @@
+[package]
+name = "matterfast-testserver"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+axum = { version = "0.8.9", features = ["ws", "json", "macros"] }
+futures-util.workspace = true
+image = "0.25.9"
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }

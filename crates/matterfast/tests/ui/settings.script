@@ -1,0 +1,13 @@
+# mode: demo
+# size: 1320x840
+#
+# Ctrl+, opens the settings dialog and Escape closes it again.
+wait:2500
+expect:dialog=closed
+key:ctrl-,
+wait:1000
+expect:dialog=open
+key:escape
+wait:800
+expect:dialog=closed
+quit

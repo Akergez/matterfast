@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::{file::FileInfo, Millis};
+use super::{dialog::PostActionOptions, file::FileInfo, Millis};
 
 /// Free-form `props` bag.
 pub type Props = HashMap<String, serde_json::Value>;
@@ -191,6 +191,62 @@ pub struct MessageAttachment {
     pub footer: String,
     #[serde(default)]
     pub image_url: String,
+    /// Buttons and menus under the card. Go marshals a nil slice as `null`,
+    /// which is what a card without any arrives with.
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub actions: Vec<AttachmentAction>,
+}
+
+/// Something to press on a card (`model.PostAction`): a button, or a menu to
+/// pick one value from.
+///
+/// The integration's own URL and context are not here. The server strips them
+/// before a client sees the post and keeps them to itself; pressing the thing
+/// is `POST /posts/{id}/actions/{action_id}`, and the server does the calling.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct AttachmentAction {
+    #[serde(default)]
+    pub id: String,
+    /// `"button"` or `"select"`. Empty means a button, which is what the
+    /// oldest integrations send.
+    #[serde(default)]
+    pub r#type: String,
+    /// What it says on it.
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub disabled: bool,
+    /// `default`, `primary`, `success`, `good`, `warning`, `danger`, or a hex
+    /// colour.
+    #[serde(default)]
+    pub style: String,
+    /// For a menu: `"users"` or `"channels"` when the choices are the
+    /// server's own directory rather than `options`.
+    #[serde(default)]
+    pub data_source: String,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub options: Vec<PostActionOptions>,
+    /// The `value` of the option a menu starts on.
+    #[serde(default)]
+    pub default_option: String,
+    /// Opaque, and only set on ephemeral posts, which the server does not
+    /// store: it is the action's own definition, sealed, to be handed back.
+    #[serde(default)]
+    pub cookie: String,
+}
+
+impl AttachmentAction {
+    pub fn is_select(&self) -> bool {
+        self.r#type == "select"
+    }
+}
+
+fn null_as_empty<'de, D, T>(d: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Ok(Option::deserialize(d)?.unwrap_or_default())
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -512,6 +568,31 @@ impl TeamScheduledPosts {
 #[cfg(test)]
 mod null_tests {
     use super::Post;
+
+    #[test]
+    fn a_card_keeps_its_buttons_and_menus() {
+        // As the server sends them: the integration's URL already stripped,
+        // `options` null on a button, and no `type` at all on an old one.
+        let post: Post = serde_json::from_str(
+            r#"{"id":"p1","props":{"attachments":[{"text":"Deploy?","actions":[
+                {"id":"ok","type":"button","name":"Approve","style":"success","options":null},
+                {"id":"old","name":"Legacy"},
+                {"id":"when","type":"select","name":"When","default_option":"b",
+                 "options":[{"text":"A","value":"a"},{"text":"B","value":"b"}]},
+                {"id":"who","type":"select","name":"Who","data_source":"users"}
+            ]},{"text":"plain","actions":null}]}}"#,
+        )
+        .unwrap();
+        let cards = post.attachments();
+        assert_eq!(cards.len(), 2);
+        let actions = &cards[0].actions;
+        assert_eq!(actions.len(), 4);
+        assert!(!actions[0].is_select() && !actions[1].is_select());
+        assert!(actions[2].is_select());
+        assert_eq!(actions[2].options[1].value, "b");
+        assert_eq!(actions[3].data_source, "users");
+        assert!(cards[1].actions.is_empty());
+    }
 
     #[test]
     fn a_post_with_no_replies_decodes() {

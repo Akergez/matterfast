@@ -1,6 +1,10 @@
-# Matras
+# Matterfast
 
-A native Mattermost client for GNOME — GTK4 + libadwaita, in Rust.
+A native Mattermost client for the Linux desktop, in Rust. The interface is
+drawn with [GPUI](https://crates.io/crates/gpui-kit) and its component kit.
+
+Matterfast is a fork of [Matras](https://github.com/Toxblh/matras) by Anton
+Palgunov.
 
 <img src="/docs/screenshots/main.png" />
 
@@ -8,10 +12,10 @@ Four crates:
 
 | Crate | What it is |
 |---|---|
-| `mattermost-api` | Async Mattermost client: REST v4, models, and a reliable WebSocket with replay-aware reconnect. No GTK dependency. |
-| `mattermost-calls` | The Mattermost Calls wire protocol and a WebRTC peer (webrtc-rs). No GTK dependency. |
-| `matras` | The application: an adaptive libadwaita window. |
-| `matras-testserver` | A fake Mattermost, real enough to exercise the client end to end. Dev-only. |
+| `mattermost-api` | Async Mattermost client: REST v4, models, and a reliable WebSocket with replay-aware reconnect. No UI dependency. |
+| `mattermost-calls` | The Mattermost Calls wire protocol and a WebRTC peer (webrtc-rs). No UI dependency. |
+| `matterfast` | The application: one adaptive window, from desktop width down to a phone. |
+| `matterfast-testserver` | A fake Mattermost, real enough to exercise the client end to end. Dev-only. |
 
 The two library crates are deliberately independent of the UI — they are usable
 for a bot, a CLI, or a different front end.
@@ -40,7 +44,7 @@ for a bot, a CLI, or a different front end.
 - Sidebar rows carry the faces of whoever is in a channel's call
 - Sidebar categories with the real ordering rules, unread/mention/muted
   styling, and a row menu to mute a channel or move it to another category
-- Virtualized message list: only the visible screenful has GTK widgets, while
+- Virtualized message list: only the visible screenful is laid out, while
   author grouping, day separators, edits, attachments, message priority,
   system messages and webhook name overrides remain intact
 - **Profile pictures and media**, shared in memory and persisted in an
@@ -109,7 +113,10 @@ rather than a real local store.
 
 ## Single sign-on
 
-The GitLab button sends the browser to `/oauth/gitlab/login?desktop_token=…`.
+The "Single sign-on" button asks the server which providers it has enabled —
+OpenID Connect, SAML, GitLab, Google, Entra ID — and sends the browser to that
+one's login route with `?desktop_token=…` (`/oauth/<service>/login`, or
+`/login/sso/saml`). With several enabled, it offers a button for each.
 The server cannot redirect an OAuth callback to a loopback port — it insists the
 redirect matches the site's own scheme and host — so the answer comes back
 through a URL scheme instead: Mattermost bounces the browser to a page that
@@ -121,11 +128,11 @@ handles the scheme. A packaged build gets this for free. From a source tree:
 
 ```sh
 cargo build
-sed "s|^Exec=matras|Exec=$PWD/target/debug/matras|" \
-  data/ru.toxblh.Matras.desktop \
-  > ~/.local/share/applications/ru.toxblh.Matras.desktop
+sed "s|^Exec=matterfast|Exec=$PWD/target/debug/matterfast|" \
+  data/io.gitlab.akergez.Matterfast.desktop \
+  > ~/.local/share/applications/io.gitlab.akergez.Matterfast.desktop
 update-desktop-database ~/.local/share/applications
-xdg-mime default ru.toxblh.Matras.desktop x-scheme-handler/mattermost-dev
+xdg-mime default io.gitlab.akergez.Matterfast.desktop x-scheme-handler/mattermost-dev
 ```
 
 The scheme is `mattermost-dev`, not `mattermost`, so nothing collides with the
@@ -140,20 +147,40 @@ on the ref file adds the remote and installs the app; everything after that is
 an ordinary `flatpak update`:
 
 ```sh
-flatpak install https://altlinux.space/toxblh/flatpak/raw/branch/master/ru.toxblh.Matras.flatpakref
+flatpak install https://akergez.gitlab.io/matterfast/io.gitlab.akergez.Matterfast.flatpakref
 ```
 
 The runtime comes from Flathub, so that remote has to exist — the ref file
 points at it and flatpak will offer to add it.
 
+Without flatpak, each [release](https://gitlab.com/akergez/matterfast/-/releases)
+carries a tarball for x86_64 and for aarch64. It is laid out like an install
+prefix, so unpacking it is the installation; the libraries listed under
+"Building" have to come from the distribution:
+
+```sh
+tar -xzf matterfast-v0.1.0-linux-x86_64.tar.gz --strip-components=1 -C ~/.local
+```
+
 ## Building
 
 
-Needs Rust 1.85+, GTK 4.12+ and libadwaita 1.5+.
+Needs a recent stable Rust (1.95 is what it is developed with), a Vulkan
+driver to run, and the development files for Wayland/X11 input, fonts, ALSA,
+GStreamer and Opus to build.
 
 ```sh
 # Debian/Ubuntu
-sudo apt install libgtk-4-dev libadwaita-1-dev libssl-dev pkg-config build-essential
+sudo apt install build-essential pkg-config libssl-dev \
+  libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev libvulkan-dev \
+  libfontconfig-dev libfreetype-dev libasound2-dev \
+  libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libopus-dev
+
+# Fedora
+sudo dnf install gcc pkgconf-pkg-config openssl-devel \
+  wayland-devel libxkbcommon-devel libxkbcommon-x11-devel libxcb-devel vulkan-loader-devel \
+  fontconfig-devel freetype-devel alsa-lib-devel \
+  gstreamer1-devel gstreamer1-plugins-base-devel opus-devel
 
 cargo build --release
 cargo test --workspace
@@ -162,28 +189,48 @@ cargo test --workspace
 Run it:
 
 ```sh
-./target/release/matras
+./target/release/matterfast
 ```
 
 To look at the layout without a server:
 
 ```sh
-MATRAS_DEMO=1 ./target/release/matras
+MATTERFAST_DEMO=1 ./target/release/matterfast
 ```
+
+## UI tests
+
+`crates/matterfast/tests/ui/` holds scenarios: scripts of clicks, keystrokes
+and `expect:` checks that are played into the real application, against the
+demo data or a fresh `matterfast-testserver`.
+
+```sh
+build-aux/ui-tests.sh --headless          # all of them, under a private headless sway
+build-aux/ui-tests.sh --headless theme    # one
+build-aux/ui-tests.sh                     # on your own display
+```
+
+`--headless` needs `sway` and a Vulkan driver (Mesa's `lavapipe` will do) and
+is how CI runs them. It matters for scenarios that click: coordinates only
+mean something at the window size the scenario names, and a tiling desktop
+will not give the window that size. Checks read the session — the open
+channel, whether a dialog is up, the theme — not pixels, so they do not
+depend on fonts or the GPU. The step list is at the top of
+`crates/matterfast/src/ui/script.rs`.
 
 ## Testing against a server
 
-`matras-testserver` is a fake Mattermost with real state: it hands out real ids,
+`matterfast-testserver` is a fake Mattermost with real state: it hands out real ids,
 serves avatars, keeps threads and reactions, and pushes the same websocket
 events the real server does — including the double-encoded payloads and the
 inconsistent key casing, because reproducing those is the point.
 
 ```sh
-cargo run -p matras-testserver          # 127.0.0.1:8065, logs every request
+cargo run -p matterfast-testserver          # 127.0.0.1:8065, logs every request
 
-MATRAS_SERVER=http://127.0.0.1:8065 \
-MATRAS_USER=anton MATRAS_PASSWORD=test \
-  cargo run -p matras               # skips the sign-in form
+MATTERFAST_SERVER=http://127.0.0.1:8065 \
+MATTERFAST_USER=anton MATTERFAST_PASSWORD=test \
+  cargo run -p matterfast               # skips the sign-in form
 ```
 
 A background "colleague" posts every 12 seconds (`MM_BOT_SECONDS` to change it)
@@ -238,55 +285,85 @@ protocol largely are not. `docs/PROTOCOL.md` records what was found by reading
 `mattermost/mattermost`, `mattermost-plugin-calls`, `rtcd` and `calls-common`,
 including several behaviours that fail *silently* if you get them wrong.
 
-## Publishing the flatpak
+## Continuous integration
 
-`.forgejo/workflows/flatpak.yml` builds the manifest in `build-aux/` on every
-push to `master` and force-pushes the resulting ostree repository to
-`toxblh/flatpak` on ALS, where Forgejo's `raw/branch/master` endpoint serves it
-as an ordinary HTTP flatpak remote. There is no static host to keep alive.
+`.gitlab-ci.yml` runs on GitLab CI, on Linux runners only, one per
+architecture — the builds are native, not cross-compiled.
 
-The repository it pushes to is `toxblh/flatpak`, public, so that Forgejo will
-serve it to anonymous clients. CI authenticates with a write **deploy key** on
-that one repository rather than an account token, and pins the host key.
+| When | What |
+|---|---|
+| every merge request, the default branch, tags | `cargo test --workspace`, then the UI scenarios under a headless compositor |
+| the default branch | the flatpak for x86_64 and aarch64, signed and published to GitLab Pages; a tarball per architecture as a job artifact |
+| a `v*` tag | the tarballs again, kept in the package registry and linked from a release |
 
-Five Actions secrets on this repository drive it:
+The runners are named by two CI/CD variables, `RUNNER_AMD64` and
+`RUNNER_ARM64`, which default to GitLab.com's hosted `saas-linux-medium-*`
+machines. The flatpak jobs need a privileged container, because
+flatpak-builder sandboxes the build with bwrap.
 
-| Secret | Value |
+### Publishing the flatpak
+
+The two flatpak jobs run one after the other and build into the same ostree
+repository, which travels between them as a job artifact. The `pages` job then
+signs it and lays it out as the Pages site: the repository under `/repo`, and
+`io.gitlab.akergez.Matterfast.flatpakref` beside it with the public key
+embedded, so the install link above always carries the key that signed what
+it points at. There is no other host and no deploy key: Pages is served from
+the pipeline's own artifact.
+
+Three CI/CD variables drive it. Make them protected and masked, so that only
+the default branch can sign:
+
+| Variable | Value |
 |---|---|
 | `FLATPAK_GPG_ID` | fingerprint of the signing key |
 | `FLATPAK_GPG_KEY_B64` | `gpg2 --export-secret-keys <fpr> \| base64 -w0` |
 | `FLATPAK_GPG_PASSPHRASE` | that key's passphrase |
-| `FLATPAK_REPO_SSH_KEY_B64` | the deploy key's private half, base64 |
-| `FLATPAK_REPO_KNOWN_HOSTS` | `ssh-keyscan altlinux.space`, fingerprint-verified |
 
 The signing key never enters a personal keyring: it lives as an exported
-blob beside its passphrase, and every publish — local or CI — imports it into
-a throwaway `GNUPGHOME` the same way.
-
-```sh
-~/.config/als-forgejo/matras-flatpak-key.b64   # FLATPAK_GPG_KEY_B64
-~/.config/als-forgejo/matras-flatpak-pass      # FLATPAK_GPG_PASSPHRASE
-```
-
-That homedir also gets a stub pinentry, because ostree signs through gpgme,
-which cannot hand a passphrase to gpg-agent itself, and the build image has
-no pinentry to prompt with.
-
-The workflow writes `ru.toxblh.Matras.flatpakref` into the published repository
-itself, with the public key embedded, so the install link above always carries
-the key that signed what it points at.
+blob beside its passphrase, and every publish imports it into a throwaway
+`GNUPGHOME`. That homedir also gets a stub pinentry, because ostree signs
+through gpgme, which cannot hand a passphrase to gpg-agent itself, and the
+build image has no pinentry to prompt with.
 
 The same script builds locally, into `.flatpak-repo`:
 
 ```sh
 build-aux/publish-flatpak.sh
-flatpak install --user .flatpak-repo ru.toxblh.Matras
+flatpak install --user .flatpak-repo io.gitlab.akergez.Matterfast
+```
+
+and the tarball is one more command after a dist build:
+
+```sh
+cargo build --profile dist --locked -p matterfast
+build-aux/package-tarball.sh            # dist/matterfast-<version>-linux-<arch>.tar.gz
 ```
 
 ## Licence
 
 GPL-3.0-only. See `LICENSE`.
 
-Matras is an independent client. It is not affiliated with, endorsed by, or
+Based on [Matras](https://github.com/Toxblh/matras) by Anton Palgunov.
+
+### Bundled fonts
+
+The binary carries two fonts, each under its own licence; the texts are in
+`crates/matterfast/assets/fonts/` and are installed beside the application.
+
+- [Inter](https://github.com/rsms/inter) 4.1, © The Inter Project Authors,
+  [SIL Open Font License 1.1](https://openfontlicense.org). Unmodified.
+- [Twemoji Mozilla](https://github.com/mozilla/twemoji-colr) 0.7.0. The emoji
+  graphics are [Twemoji](https://github.com/twitter/twemoji), © Twitter, Inc
+  and other contributors,
+  [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/); the font build
+  is © Mozilla Foundation,
+  [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0).
+  Modified: only the names inside the font file were changed, to
+  `Noto Color Emoji`, because the text renderer draws colour glyphs only
+  from a font with that name. It is not Noto Color Emoji and is not
+  affiliated with Google's Noto project.
+
+Matterfast is an independent client. It is not affiliated with, endorsed by, or
 sponsored by Mattermost, Inc.; "Mattermost" is used only to name the server
 protocol it speaks.

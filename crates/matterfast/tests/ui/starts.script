@@ -1,0 +1,9 @@
+# mode: demo
+# size: 1320x840
+#
+# The demo session comes up signed in, on a channel, with nothing in the way.
+wait:2500
+expect:session=yes
+expect:channel=Development
+expect:dialog=closed
+quit

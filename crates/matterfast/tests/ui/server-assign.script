@@ -1,0 +1,23 @@
+# mode: server
+# size: 1320x840
+#
+# The "Assign to" menu on the interactive card in Development is a user
+# picker: it opens a dialog, and Escape puts it away.
+wait:5000
+key:ctrl-k
+wait:600
+type:Devel
+wait:800
+key:enter
+wait:2500
+expect:channel=Development
+expect:dialog=closed
+move:780,739
+wait:300
+click:798,739
+wait:1500
+expect:dialog=open
+key:escape
+wait:800
+expect:dialog=closed
+quit

@@ -35,7 +35,7 @@ pub use channel::{
 pub use draft::Draft;
 pub use file::{FileInfo, FileInfoList, FileUploadResponse};
 pub use post::{
-    AttachmentField, Emoji, MessageAttachment, Participant, Post, PostAcknowledgement, PostEmbed,
+    AttachmentAction, AttachmentField, Emoji, MessageAttachment, Participant, Post, PostAcknowledgement, PostEmbed,
     PostList, PostMetadata, PostPriority, PostSearchResults, Reaction, ScheduledPost,
     TeamScheduledPosts, UserThread, UserThreads,
 };

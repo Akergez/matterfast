@@ -71,7 +71,7 @@ impl Client {
         headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
 
         let mut builder = reqwest::Client::builder()
-            .user_agent(concat!("matras/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!("matterfast/", env!("CARGO_PKG_VERSION")))
             .default_headers(headers);
         if crate::tls::insecure() {
             tracing::warn!("MM_INSECURE_TLS: certificate verification disabled");
@@ -1361,7 +1361,7 @@ impl Client {
     /// `GET /api/v4/files/{file}` with `Range: bytes=0-{len-1}` — just the
     /// head of a file, for building a video poster from its container's
     /// index without downloading the whole clip (see
-    /// `ui::media::head_playable` in the GTK client).
+    /// `ui::media::head_playable` in the client).
     ///
     /// The route is served by Go's `http.ServeContent`, which honours `Range`
     /// and answers `206 Partial Content`; a proxy that strips the header
@@ -1617,6 +1617,30 @@ impl Client {
     ) -> Result<serde_json::Value> {
         self.post_json("/actions/dialogs/submit", request, "submit dialog")
             .await
+    }
+
+    /// `POST /api/v4/posts/{post_id}/actions/{action_id}` — presses a button
+    /// on a card, or picks `selected_option` from one of its menus.
+    ///
+    /// The server calls the integration and applies whatever it answers: an
+    /// edit to the post, an ephemeral message, a dialog. All of those arrive
+    /// over the websocket, so the reply here is little more than `status`.
+    pub async fn do_post_action(
+        &self,
+        post_id: &str,
+        action_id: &str,
+        selected_option: &str,
+        cookie: &str,
+    ) -> Result<serde_json::Value> {
+        let mut body = std::collections::HashMap::new();
+        body.insert("selected_option", selected_option);
+        body.insert("cookie", cookie);
+        self.post_json(
+            &format!("/posts/{post_id}/actions/{action_id}"),
+            &body,
+            "post action",
+        )
+        .await
     }
 
     /// `POST /api/v4/commands/execute` — runs a slash command.

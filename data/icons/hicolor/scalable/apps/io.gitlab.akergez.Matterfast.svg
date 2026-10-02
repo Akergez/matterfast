@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  io.gitlab.akergez.Matterfast — application icon
+
+  Concept: a message that arrives fast. The object is a speech bubble drawn as
+  a slab in the GNOME perspective — the lit top face, and the darker front
+  profile below it, which also carries the tail at the bottom-left — with a
+  lightning bolt on the face where the typing dots would be.
+
+  GNOME HIG 45+: free-standing object on a transparent canvas, no baseplate,
+  bottom on the baseline. Every surface here is straight, so all fills are
+  flat and there are no gradients. No shadow is cast outside the silhouette.
+
+  Palette: GNOME Adwaita named colours only.
+    Blue 3    #3584e4  top face
+    Blue 5    #1a5fb4  front profile, tail
+    Yellow 2  #f8e45c  bolt
+    Yellow 5  #e5a50a  the bolt's own front profile
+-->
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="128" height="128" viewBox="0 0 128 128">
+  <!-- Front profile and the bubble tail: Blue 5 -->
+  <path id="bubble-side"
+        d="M 16 70 L 40 92 L 16 106 Z
+           M 32 28 H 96 A 16 16 0 0 1 112 44 V 76 A 16 16 0 0 1 96 92 H 32 A 16 16 0 0 1 16 76 V 44 A 16 16 0 0 1 32 28 Z"
+        fill="#1a5fb4"/>
+
+  <!-- Top face, the same outline raised by the slab's thickness: Blue 3 -->
+  <path id="bubble-top"
+        d="M 32 22 H 96 A 16 16 0 0 1 112 38 V 70 A 16 16 0 0 1 96 86 H 32 A 16 16 0 0 1 16 70 V 38 A 16 16 0 0 1 32 22 Z"
+        fill="#3584e4"/>
+
+  <!-- The bolt is a slab too: its profile sits one step below its face, so it
+       reads as standing on the bubble instead of printed on it. Both are kept
+       wide enough that the zigzag survives at 32px. -->
+  <path id="bolt-side" d="M 70 31 L 44 61 H 61 L 55 82 L 84 50 H 66 Z" fill="#e5a50a"/>
+  <path id="bolt" d="M 70 27 L 44 57 H 61 L 55 78 L 84 46 H 66 Z" fill="#f8e45c"/>
+</svg>

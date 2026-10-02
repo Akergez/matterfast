@@ -1,0 +1,40 @@
+[package]
+name = "matterfast"
+version.workspace = true
+edition = "2024"
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Not the `tokio` flavour of either of these: the toolkit talks D-Bus through the
+# same `zbus`, on its own executor, and `zbus/tokio` would make every one of its
+# calls need a Tokio reactor it does not have.
+ashpd = { version = "0.13", default-features = false, features = ["async-io", "screencast"] }
+async-channel = "2.5.0"
+chrono = "0.4"
+chrono-tz = "0.10"
+cpal = "0.18.2"
+dirs = "6"
+emojis = "0.9.0"
+futures-util.workspace = true
+gstreamer = "0.24.5"
+gstreamer-app = "0.24.5"
+gstreamer-video = "0.24.5"
+gpui-kit = "0.7.0"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
+mattermost-api = { version = "0.1.0", path = "../mattermost-api" }
+mattermost-calls = { version = "0.1.0", path = "../mattermost-calls" }
+oo7 = { version = "0.6", default-features = false, features = ["async-std", "native_crypto"] }
+opus = "0.3.1"
+rand = "0.9"
+pulldown-cmark = { version = "0.13.4", default-features = false }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "fs"] }
+tracing.workspace = true
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+zbus = { version = "5", default-features = false, features = ["async-io"] }

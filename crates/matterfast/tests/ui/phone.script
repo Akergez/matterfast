@@ -1,0 +1,14 @@
+# mode: demo
+# size: 400x800
+#
+# The collapsed, phone-sized layout draws and the switcher still works in it.
+wait:2500
+expect:session=yes
+key:ctrl-k
+wait:600
+type:releas
+wait:600
+key:enter
+wait:1200
+expect:channel=Releases
+quit

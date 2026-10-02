@@ -1,0 +1,17 @@
+# mode: server
+# size: 1320x840
+#
+# The channel list filled from a server answers clicks like the demo's does.
+wait:5000
+expect:session=yes
+move:60,165
+wait:300
+click:71,165
+wait:2500
+expect:channel=General
+move:60,133
+wait:300
+click:92,133
+wait:2500
+expect:channel=Development
+quit

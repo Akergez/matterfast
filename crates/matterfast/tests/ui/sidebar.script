@@ -1,0 +1,18 @@
+# mode: demo
+# size: 1320x840
+#
+# Clicking a row in the channel list opens that channel: a public channel,
+# then a direct message, whose title is the other person's name.
+wait:2500
+expect:channel=Development
+move:60,232
+wait:300
+click:72,232
+wait:1200
+expect:channel=General
+move:80,331
+wait:300
+click:92,331
+wait:1200
+expect:channel=Lena Petrova
+quit

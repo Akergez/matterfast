@@ -1,14 +1,14 @@
 [workspace]
 resolver = "2"
-members = ["crates/mattermost-api", "crates/mattermost-calls", "crates/matras", "crates/matras-testserver"]
+members = ["crates/mattermost-api", "crates/mattermost-calls", "crates/matterfast", "crates/matterfast-testserver"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.85"
 license = "GPL-3.0-only"
-authors = ["Anton Palgunov <toxblh@gmail.com>"]
-repository = "https://github.com/toxblh/matras"
+authors = ["Akergez"]
+repository = "https://gitlab.com/akergez/matterfast"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -19,8 +19,19 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"
 futures-util = "0.3"
 
 [profile.release]
-# Cross-crate inlining matters in a GTK application built from many thin Rust
-# wrappers, while thin LTO keeps release builds practical. One codegen unit
-# gives LLVM a coherent view of the hot UI path and also reduces binary size.
+# What `cargo build --release` gives you while working on the application: an
+# optimised binary that does not take minutes to rebuild after an edit. On the
+# 8-core machine this is developed on, rebuilding after one changed line took
+# 195 s under the settings `dist` now has, and takes about 30 s under these.
+incremental = true
+
+[profile.dist]
+# What gets shipped. Cross-crate inlining matters in an application built from
+# many thin Rust wrappers, while thin LTO keeps the build practical. One
+# codegen unit gives LLVM a coherent view of the hot UI path and also reduces
+# binary size (78 MB against 96 MB). It is slow, and it only has to happen
+# once per release: `cargo build --profile dist`, binary in `target/dist`.
+inherits = "release"
 lto = "thin"
 codegen-units = 1
+incremental = false

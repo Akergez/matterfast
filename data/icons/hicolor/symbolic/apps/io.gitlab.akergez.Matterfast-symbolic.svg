@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  io.gitlab.akergez.Matterfast — symbolic icon (16x16)
+  The same bubble-and-bolt silhouette reduced to one colour: the body with its
+  tail, and the bolt knocked out of it. The slab's thickness is dropped at
+  this size, and the bolt's horizontal edges sit on the pixel grid so they
+  stay crisp.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="16" height="16" viewBox="0 0 16 16">
+  <path id="bubble-bolt" fill="#000000" fill-rule="evenodd"
+        d="M 3.5 2 H 12.5 A 2.5 2.5 0 0 1 15 4.5 V 8.5 A 2.5 2.5 0 0 1 12.5 11 H 4.5 L 1 13.5 V 4.5 A 2.5 2.5 0 0 1 3.5 2 Z
+           M 9 3 L 5 7 H 7.5 L 6.5 10 L 11 6 H 8.5 Z"/>
+</svg>

@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=Matterfast
+GenericName=Team Chat
+Comment=Chat, threads and calls on a Mattermost server
+Exec=matterfast %u
+Icon=io.gitlab.akergez.Matterfast
+Terminal=false
+Categories=Network;InstantMessaging;Chat;
+Keywords=Matterfast;Mattermost;chat;team;messaging;
+# The SSO callback scheme. `mattermost-dev` rather than `mattermost`,
+# which belongs to the official desktop app; the server picks it when the
+# desktop token starts with "dev-".
+MimeType=x-scheme-handler/mattermost-dev;
+StartupNotify=true

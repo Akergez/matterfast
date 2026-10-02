@@ -1,0 +1,77 @@
+id: io.gitlab.akergez.Matterfast
+# The plain freedesktop runtime: the interface draws itself through GPUI on
+# Vulkan and needs nothing from GTK. GStreamer, which plays attachments and
+# call video, is part of this runtime.
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: matterfast
+
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # Talking to a Mattermost server, and WebRTC for calls.
+  - --share=network
+  # cpal reaches the microphone through the runtime's ALSA-to-PulseAudio shim.
+  - --socket=pulseaudio
+  # The session token lives in the Secret Service, not in a file.
+  - --talk-name=org.freedesktop.secrets
+  # Notifications go straight to the notification service: they have to be
+  # replaced and withdrawn as messages are read, which needs their ids.
+  - --talk-name=org.freedesktop.Notifications
+  - --filesystem=xdg-download
+
+modules:
+  - name: matterfast
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin
+      env:
+        CARGO_HOME: /run/build/matterfast/cargo
+      # This repository builds from crates.io rather than from a generated
+      # offline source list: it is published from our own CI, not Flathub,
+      # so a network-isolated build buys nothing but a megabyte of churn in
+      # cargo-sources.json on every dependency bump.
+      build-args:
+        - --share=network
+    build-commands:
+      - cargo build --profile dist --locked
+      - install -Dm755 target/dist/matterfast /app/bin/matterfast
+      - install -Dm644 data/io.gitlab.akergez.Matterfast.desktop /app/share/applications/io.gitlab.akergez.Matterfast.desktop
+      - install -Dm644 data/io.gitlab.akergez.Matterfast.metainfo.xml /app/share/metainfo/io.gitlab.akergez.Matterfast.metainfo.xml
+      # The fonts are compiled into the binary, and their licences ask to
+      # travel with them.
+      - install -Dm644 LICENSE
+        crates/matterfast/assets/fonts/Inter-LICENSE.txt
+        crates/matterfast/assets/fonts/Twemoji-LICENSE.md
+        -t /app/share/licenses/io.gitlab.akergez.Matterfast
+      # The icon ships rasterized. Both `flatpak build-export` and
+      # appstreamcli load icons through glycin, which has no SVG loader in the
+      # images this is built on, so an exported SVG fails the build outright. The
+      # source of truth is still the SVG in data/.
+      - rsvg-convert -w 128 -h 128 -o icon-128.png
+        data/icons/hicolor/scalable/apps/io.gitlab.akergez.Matterfast.svg
+      - rsvg-convert -w 256 -h 256 -o icon-256.png
+        data/icons/hicolor/scalable/apps/io.gitlab.akergez.Matterfast.svg
+      - install -Dm644 icon-128.png
+        /app/share/icons/hicolor/128x128/apps/io.gitlab.akergez.Matterfast.png
+      - install -Dm644 icon-256.png
+        /app/share/icons/hicolor/256x256/apps/io.gitlab.akergez.Matterfast.png
+    sources:
+      - type: dir
+        path: ..
+        # Everything the publish script itself writes into the checkout. The
+        # ostree repository and the builder's state directory are large; the
+        # state directory also holds live mounts, which cannot be copied.
+        skip:
+          - .git
+          - .flatpak-build
+          - .flatpak-repo
+          - .flatpak-state
+          - .cargo-home
+          - dist
+          - target
