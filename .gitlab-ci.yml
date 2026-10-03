@@ -24,10 +24,6 @@ workflow:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
 
 variables:
-  # GitLab.com's hosted runners. On a self-managed instance, or with your own
-  # machines, override these two in Settings → CI/CD → Variables.
-  RUNNER_AMD64: saas-linux-medium-amd64
-  RUNNER_ARM64: saas-linux-medium-arm64
   # The toolchain the application is developed with; multi-arch, so the same
   # tag serves both runners.
   RUST_VERSION: "1.95"
@@ -46,10 +42,10 @@ variables:
 # ---------------------------------------------------------------- templates
 
 .amd64:
-  tags: [$RUNNER_AMD64]
+  tags: [linux-x86]
 
 .arm64:
-  tags: [$RUNNER_ARM64]
+  tags: [linux-arm64]
 
 # A build for release. `version` hands over $VERSION, the tag without its
 # `v`, and $PACKAGES, where this version's files go in the package registry;

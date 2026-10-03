@@ -319,9 +319,8 @@ Nothing is built for distribution from a branch. A tag pipeline builds:
 Each file goes into the project's package registry under the version, and
 the release links to them and carries the flatpak install command.
 
-The runners are named by two CI/CD variables, `RUNNER_AMD64` and
-`RUNNER_ARM64`, which default to GitLab.com's hosted `saas-linux-medium-*`
-machines. The flatpak jobs need a privileged container, because
+The jobs pick their runner by tag: `linux-arm64` for the aarch64 builds,
+`linux-x86` for everything else. The flatpak jobs need a privileged container, because
 flatpak-builder sandboxes the build with bwrap.
 
 ### Making a release
