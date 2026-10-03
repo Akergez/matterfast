@@ -50,10 +50,13 @@ if [[ ${1:-} == --headless ]]; then
   # has no wl_seat at all, and the toolkit will not start without one.)
   # pixman, so the compositor needs no GPU; the application draws itself
   # through whatever Vulkan driver there is — lavapipe in CI.
+  # --unsupported-gpu: sway refuses to start when the kernel has Nvidia's
+  # module loaded, and a container sees its host's modules. Nothing here
+  # touches the GPU, so the refusal is about a driver that is never used.
   printf '%s\n' 'default_border none' 'default_floating_border none' \
     'focus_follows_mouse no' > "$runtime/sway.conf"
   WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDERER=pixman \
-    sway -c "$runtime/sway.conf" >"$runtime/sway.log" 2>&1 &
+    sway --unsupported-gpu -c "$runtime/sway.conf" >"$runtime/sway.log" 2>&1 &
   compositor_pid=$!
   for _ in $(seq 100); do
     socket=$(find "$runtime" -maxdepth 1 -name 'wayland-*' ! -name '*.lock' -print -quit)
