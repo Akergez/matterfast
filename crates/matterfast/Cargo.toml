@@ -7,6 +7,11 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
+[build-dependencies]
+# Links the icon into the Windows executable (`build.rs`). The same crate,
+# at the same version, that GPUI embeds its manifest with.
+embed-resource = "3"
+
 [dependencies]
 async-channel = "2.5.0"
 chrono = "0.4"

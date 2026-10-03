@@ -95,8 +95,6 @@ pub fn start(
         provider.path,
     );
 
-    // The path only: the token in the query is half of the sign-in.
-    tracing::info!(path = provider.path, "opening the browser to sign in");
     cx.open_url(&url);
 
     PENDING.with(|p| {
@@ -129,7 +127,6 @@ pub fn deliver(uri: &str, cx: &mut App) {
         return;
     }
 
-    tracing::info!("the browser came back; trading its token for a session");
     let client = pending.client.clone();
     let on_success = pending.on_success.clone();
     let on_error = pending.on_error.clone();
@@ -147,10 +144,7 @@ pub fn deliver(uri: &str, cx: &mut App) {
             Err(mattermost_api::Error::Api(app)) if app.status_code == 401 => {
                 on_error("That sign-in did not complete. Try again.", cx)
             }
-            Err(e) => {
-                tracing::warn!(error = %e, "the sign-in token was not accepted");
-                on_error(&super::login::describe(&e), cx)
-            }
+            Err(e) => on_error(&super::login::describe(&e), cx),
         },
     );
 }

@@ -4781,6 +4781,7 @@ dependencies = [
  "chrono-tz",
  "cpal",
  "dirs 6.0.0",
+ "embed-resource",
  "emojis",
  "flate2",
  "futures-util",
