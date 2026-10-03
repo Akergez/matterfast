@@ -143,6 +143,14 @@ pub fn built_in_fonts(cx: &App) -> (SharedString, SharedString) {
         .clone()
 }
 
+/// Whether the phone has changed between light and dark since the theme was
+/// last made to follow it.
+#[cfg(target_os = "android")]
+pub fn behind_the_system(cx: &App) -> bool {
+    matches!(theme_choice(), ThemeChoice::System)
+        && gpui_mobile::android::jni::query_night_mode_via_jni() != Theme::global(cx).mode.is_dark()
+}
+
 /// Makes the theme say what the settings say. Call after the bundled fonts
 /// are installed and the themes are loaded, again once there is a window — on Linux only a window knows
 /// what the desktop's appearance is — and whenever a choice changes.
@@ -152,12 +160,35 @@ pub fn apply(window: Option<&mut Window>, cx: &mut App) {
     let mode = match theme_choice() {
         ThemeChoice::Light => ThemeMode::Light,
         ThemeChoice::Dark => ThemeMode::Dark,
+        // Android's window is told of a change of appearance but starts out
+        // calling itself light whatever the phone says, so the phone is asked.
+        #[cfg(target_os = "android")]
+        ThemeChoice::System => {
+            let _ = &window;
+            if gpui_mobile::android::jni::query_night_mode_via_jni() {
+                ThemeMode::Dark
+            } else {
+                ThemeMode::Light
+            }
+        }
+        #[cfg(not(target_os = "android"))]
         ThemeChoice::System => window
             .as_ref()
             .map(|window| window.appearance())
             .unwrap_or_else(|| cx.window_appearance())
             .into(),
     };
+    // The clock and the icons beside it are drawn over our own title bar, and
+    // have to be told which of its colours to stand out against.
+    #[cfg(target_os = "android")]
+    gpui_mobile::set_system_chrome(&gpui_mobile::SystemChromeStyle {
+        status_bar_style: if mode.is_dark() {
+            gpui_mobile::StatusBarContentStyle::Light
+        } else {
+            gpui_mobile::StatusBarContentStyle::Dark
+        },
+        ..Default::default()
+    });
     let wanted = themes::pick(mode, theme_name(mode).as_deref(), cx);
     let theme = Theme::global(cx);
     let worn = if mode.is_dark() { &theme.dark_theme } else { &theme.light_theme };

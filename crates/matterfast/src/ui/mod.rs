@@ -19,6 +19,7 @@ mod autocomplete;
 mod call_dock;
 mod chat;
 mod dialogs;
+mod group;
 mod interactive;
 mod kit;
 mod lightbox;
@@ -150,6 +151,63 @@ fn local_mentions<'a>(
         .collect()
 }
 
+/// How many rows of a mention list are kept for groups when both people and
+/// groups match: people are the common case, but a group that is never
+/// offered cannot be found at all.
+const GROUP_COMPLETIONS: usize = 3;
+
+/// The groups an `@` completion offers for `lowered`, the same way people are
+/// found: by what is written after the `@` first, then by what the group is
+/// called.
+fn local_groups(groups: &[Group], lowered: &str) -> Vec<autocomplete::Candidate> {
+    let mut found: Vec<(u8, &Group)> = groups
+        .iter()
+        .filter_map(|group| {
+            let name = group.name.to_lowercase();
+            let title = group.display_name.to_lowercase();
+            let rank = if name.starts_with(lowered) {
+                0
+            } else if title
+                .split(|c: char| !c.is_alphanumeric())
+                .any(|word| word.starts_with(lowered))
+            {
+                1
+            } else if name.contains(lowered) || title.contains(lowered) {
+                2
+            } else {
+                return None;
+            };
+            Some((rank, group))
+        })
+        .collect();
+    found.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.name.cmp(&b.1.name)));
+    found
+        .into_iter()
+        .take(COMPLETIONS)
+        .map(|(_, group)| autocomplete::Candidate {
+            insert: format!("@{}", group.name),
+            primary: group.display_name.clone(),
+            secondary: group::summary(group),
+            emoji: None,
+            image: None,
+            user_id: None,
+        })
+        .collect()
+}
+
+/// One mention list out of the people and the groups that matched: people
+/// first, and room left for groups whenever there are any.
+fn mention_list(
+    mut people: Vec<autocomplete::Candidate>,
+    mut groups: Vec<autocomplete::Candidate>,
+) -> Vec<autocomplete::Candidate> {
+    let room = COMPLETIONS.saturating_sub(people.len());
+    groups.truncate(room.max(GROUP_COMPLETIONS));
+    people.truncate(COMPLETIONS - groups.len());
+    people.extend(groups);
+    people
+}
+
 /// The `@names` a message mentions, by the same rule the renderer uses.
 fn mentioned_names(message: &str) -> Vec<String> {
     let mut names = Vec::new();
@@ -174,8 +232,75 @@ fn mentioned_names(message: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod mention_tests {
-    use super::{local_mentions, mentioned_names, COMPLETIONS};
-    use mattermost_api::models::User;
+    use super::{
+        autocomplete, local_groups, local_mentions, mention_list, mentioned_names, COMPLETIONS,
+        GROUP_COMPLETIONS,
+    };
+    use mattermost_api::models::{Group, User};
+
+    fn group(name: &str, title: &str) -> Group {
+        Group {
+            id: name.to_string(),
+            name: name.to_string(),
+            display_name: title.to_string(),
+            member_count: Some(2),
+        }
+    }
+
+    #[test]
+    fn groups_are_found_by_handle_and_by_title() {
+        let groups = [
+            group("backend", "Server people"),
+            group("on-call", "Backend duty"),
+            group("design", "Designers"),
+        ];
+        let found = |term: &str| -> Vec<String> {
+            local_groups(&groups, term)
+                .into_iter()
+                .map(|candidate| candidate.insert)
+                .collect()
+        };
+        // The handle before a word of the title.
+        assert_eq!(found("back"), ["@backend", "@on-call"]);
+        assert_eq!(found("duty"), ["@on-call"]);
+        assert_eq!(found(""), ["@backend", "@design", "@on-call"]);
+        assert!(found("zzz").is_empty());
+
+        let shown = &local_groups(&groups, "des")[0];
+        assert_eq!(shown.primary, "Designers");
+        assert_eq!(shown.secondary, "@design · 2 people");
+        assert_eq!(shown.user_id, None);
+    }
+
+    #[test]
+    fn a_full_list_of_people_still_leaves_room_for_groups() {
+        let row = |name: String| autocomplete::Candidate {
+            insert: name.clone(),
+            primary: name,
+            secondary: String::new(),
+            emoji: None,
+            image: None,
+            user_id: None,
+        };
+        let people = |n: usize| (0..n).map(|i| row(format!("@p{i}"))).collect::<Vec<_>>();
+        let groups = |n: usize| (0..n).map(|i| row(format!("@g{i}"))).collect::<Vec<_>>();
+
+        let list = mention_list(people(COMPLETIONS), groups(5));
+        assert_eq!(list.len(), COMPLETIONS);
+        assert_eq!(
+            list.iter().filter(|c| c.insert.starts_with("@g")).count(),
+            GROUP_COMPLETIONS
+        );
+        // People first.
+        assert_eq!(list[0].insert, "@p0");
+
+        // Nobody matched: the groups get the whole list.
+        assert_eq!(mention_list(Vec::new(), groups(5)).len(), 5);
+        // No groups: nothing is taken from the people.
+        assert_eq!(mention_list(people(COMPLETIONS), Vec::new()).len(), COMPLETIONS);
+        // One group costs one row.
+        assert_eq!(mention_list(people(COMPLETIONS), groups(1)).len(), COMPLETIONS);
+    }
 
     /// A directory the size of a large company, to check that answering from
     /// memory stays instant. The claim is "under a frame"; this asserts an
@@ -462,6 +587,11 @@ impl WindowSlot {
     }
 }
 
+/// Whether opening a conversation or a thread puts the cursor in its
+/// composer. Not on a phone, where that brings the keyboard up over what was
+/// opened to be read.
+const FOCUS_ON_ARRIVAL: bool = !cfg!(target_os = "android");
+
 /// Whether the right-hand panel is showing, and how.
 #[derive(Default)]
 pub struct Overlay {
@@ -494,6 +624,29 @@ pub struct Split {
     /// conversation, not the sidebar.
     show_content: Cell<bool>,
     collapsed: Cell<bool>,
+    /// How far the channel list has slid in over the conversation, from 0 to
+    /// 1. It trails `show_content` while it animates, and follows the finger
+    /// while one is dragging it.
+    open: Cell<f32>,
+    /// When `open` last moved by itself, which is what its next step is
+    /// measured from.
+    ticked: Cell<Option<std::time::Instant>>,
+    swipe: Cell<Swipe>,
+    /// The last sideways movement of the finger, which says where it was
+    /// heading when it let go.
+    heading: Cell<f32>,
+}
+
+/// What a pan across the window is to the channel list.
+#[derive(Clone, Copy, PartialEq)]
+enum Swipe {
+    /// Somebody else's: a list being scrolled.
+    Idle,
+    /// The finger is carrying the channel list.
+    Dragging,
+    /// The finger has let go and the gesture's momentum is still arriving;
+    /// the list is already on its way and the momentum is nobody's.
+    Coasting,
 }
 
 impl Default for Split {
@@ -501,19 +654,89 @@ impl Default for Split {
         Split {
             show_content: Cell::new(true),
             collapsed: Cell::new(false),
+            open: Cell::new(0.0),
+            ticked: Cell::new(None),
+            swipe: Cell::new(Swipe::Idle),
+            heading: Cell::new(0.0),
         }
     }
 }
 
 impl Split {
+    /// How far in the channel list is for this frame, moving it a step
+    /// towards where it belongs. Asks for another frame until it is there.
+    pub fn advance(&self, window: &mut Window) -> f32 {
+        let target = if self.show_content.get() { 0.0 } else { 1.0 };
+        let mut open = self.open.get();
+        if self.swipe.get() == Swipe::Dragging {
+            return open;
+        }
+        if open == target {
+            self.ticked.set(None);
+            return open;
+        }
+        let now = std::time::Instant::now();
+        let elapsed = self
+            .ticked
+            .replace(Some(now))
+            .map_or(1.0 / 60.0, |last| (now - last).as_secs_f32())
+            .min(0.05);
+        // Fast at first and slowing into place, from wherever it is — which
+        // is what lets it carry on from the point a finger let go at.
+        open += (target - open) * (1.0 - (-elapsed / 0.06).exp());
+        if (target - open).abs() < 0.004 {
+            open = target;
+        }
+        self.open.set(open);
+        window.request_animation_frame();
+        open
+    }
+
+    /// One step of a pan across a collapsed window. Says whether the step was
+    /// taken — it moved the channel list, and is not a scroll for anything
+    /// underneath. `width` is how wide the channel list is.
+    pub fn swiped(&self, dx: f32, dy: f32, phase: gpui_kit::TouchPhase, width: f32) -> bool {
+        use gpui_kit::TouchPhase;
+        if phase == TouchPhase::Started {
+            // A pan is locked to one axis from its first step. Sideways, it
+            // is ours if there is somewhere for the list to go that way.
+            let open = self.open.get();
+            let ours = dy == 0.0 && ((dx > 0.0 && open < 1.0) || (dx < 0.0 && open > 0.0));
+            self.swipe.set(if ours { Swipe::Dragging } else { Swipe::Idle });
+            self.heading.set(0.0);
+        }
+        match self.swipe.get() {
+            Swipe::Idle => false,
+            Swipe::Coasting => {
+                if matches!(phase, TouchPhase::Ended | TouchPhase::Cancelled) {
+                    self.swipe.set(Swipe::Idle);
+                }
+                true
+            }
+            Swipe::Dragging => {
+                let open = (self.open.get() + dx / width).clamp(0.0, 1.0);
+                self.open.set(open);
+                if dx != 0.0 {
+                    self.heading.set(dx);
+                }
+                if matches!(phase, TouchPhase::Ended | TouchPhase::Cancelled) {
+                    // A flick goes where it was heading; a list that was
+                    // carried and set down goes to whichever end is nearer.
+                    let heading = self.heading.get();
+                    let show_list = if heading.abs() > 1.5 { heading > 0.0 } else { open > 0.5 };
+                    self.show_content.set(!show_list);
+                    self.ticked.set(None);
+                    self.swipe.set(Swipe::Coasting);
+                }
+                true
+            }
+        }
+    }
+
     pub fn set_show_content(&self, show: bool, cx: &mut App) {
         if self.show_content.replace(show) != show {
             cx.refresh_windows();
         }
-    }
-
-    pub fn show_content(&self) -> bool {
-        self.show_content.get()
     }
 }
 
@@ -777,7 +1000,7 @@ impl Ui {
         match message::link_target(url) {
             message::LinkTarget::Profile(handle) => self.show_profile_by_handle(&handle, cx),
             message::LinkTarget::Permalink(post_id) => self.open_permalink(post_id, cx),
-            message::LinkTarget::Web(url) => cx.open_url(&url),
+            message::LinkTarget::Web(url) => crate::open_url(&url, cx),
         }
     }
 
@@ -1424,6 +1647,77 @@ impl Ui {
                 Err(e) => tracing::debug!(error = %e, "could not list the custom emoji"),
             },
         );
+    }
+
+    /// Fetches the groups that can be mentioned — all of them, a page at a
+    /// time, like the emoji and for the same reason: a message has to know
+    /// which `@words` are groups without a round trip, and so does the
+    /// composer's list.
+    ///
+    /// Groups change: they are made, renamed and removed, and people join and
+    /// leave. The server says so over the websocket, but not to everyone — an
+    /// event about a group goes to its members — so this is also asked again
+    /// whenever somebody starts typing a mention or opens a group, no more
+    /// often than [`Self::GROUPS_STALE_MS`]. Who is *in* a group is never
+    /// kept at all: [`group::show`] asks each time.
+    fn load_groups(self: &Rc<Self>, _cx: &mut App) {
+        const PAGE: u32 = 200;
+        const PAGES: u32 = 10;
+        let client = {
+            let mut st = self.state.borrow_mut();
+            st.groups_fetched_at = now_ms();
+            st.client.clone()
+        };
+        let ui = self.clone();
+        runtime::spawn(
+            async move {
+                let mut groups = Vec::new();
+                for page in 0..PAGES {
+                    let batch = client.mentionable_groups(page, PAGE).await?;
+                    let last = (batch.len() as u32) < PAGE;
+                    // One without a name cannot be written after an `@`.
+                    groups.extend(batch.into_iter().filter(|group| !group.name.is_empty()));
+                    if last {
+                        break;
+                    }
+                }
+                Ok::<_, mattermost_api::Error>(groups)
+            },
+            move |result, cx| match result {
+                Ok(groups) => {
+                    let renamed = {
+                        let mut st = ui.state.borrow_mut();
+                        let names = |groups: &[mattermost_api::models::Group]| {
+                            groups
+                                .iter()
+                                .map(|group| group.name.clone())
+                                .collect::<std::collections::BTreeSet<_>>()
+                        };
+                        let renamed = names(&st.groups) != names(&groups);
+                        st.groups = groups;
+                        renamed
+                    };
+                    // Messages drawn before this landed took them for words.
+                    if renamed {
+                        ui.refresh_all(cx);
+                    }
+                }
+                // A server without groups answers 501, which is the same as
+                // having none.
+                Err(e) => tracing::debug!(error = %e, "could not list the groups"),
+            },
+        );
+    }
+
+    /// How old the list of groups may be before a mention asks for it again.
+    const GROUPS_STALE_MS: i64 = 60 * 1000;
+
+    /// [`Self::load_groups`], unless it was done a moment ago.
+    fn refresh_groups(self: &Rc<Self>, cx: &mut App) {
+        let age = now_ms() - self.state.borrow().groups_fetched_at;
+        if age > Self::GROUPS_STALE_MS {
+            self.load_groups(cx);
+        }
     }
 
     fn load_bots(self: &Rc<Self>, _cx: &mut App) {
@@ -2269,7 +2563,7 @@ impl Ui {
                 );
             },
             move |link_url, cx| {
-                cx.open_url(&link_url);
+                crate::open_url(&link_url, cx);
             },
             move |bookmark_id, _cx| {
                 let client = client.clone();
@@ -3069,6 +3363,9 @@ impl Ui {
             }
             Query::Mention(term) => {
                 let lowered = term.to_lowercase();
+                // Groups come and go, and so do their people; this is the
+                // moment the list has to be right.
+                self.refresh_groups(cx);
                 let (client, team_id, channel_id, local) = {
                     let st = self.state.borrow();
                     let display = st.teammate_name_display().to_string();
@@ -3080,6 +3377,7 @@ impl Ui {
                     let local = local_mentions(st.users.values(), &lowered, &display, &|id| {
                         self.avatars.texture(id)
                     });
+                    let local = mention_list(local, local_groups(&st.groups, &lowered));
 
                     (
                         st.client.clone(),
@@ -3136,9 +3434,7 @@ impl Ui {
     ) {
         let generation = self.completion_generation.get();
         let ui = self.clone();
-        let groups_client = client.clone();
-        let group_term = term.clone();
-        let group_ui = self.clone();
+        let lowered = term.to_lowercase();
         runtime::spawn(
             async move {
                 client
@@ -3150,7 +3446,12 @@ impl Ui {
                     return;
                 }
                 let Ok(found) = result else { return };
-                let display = ui.state.borrow().teammate_name_display().to_string();
+                let st = ui.state.borrow();
+                let display = st.teammate_name_display().to_string();
+                // The groups are held here, and matched here: the server is
+                // only asked about people.
+                let groups = local_groups(&st.groups, &lowered);
+                drop(st);
                 // People in the channel first; the server already
                 // separates them, and suggesting someone who is not
                 // here would post a mention that notifies nobody.
@@ -3171,38 +3472,12 @@ impl Ui {
                         user_id: Some(user.id.clone()),
                     })
                     .collect();
+                // Nobody by that name on the server either: what is on screen
+                // from memory stays.
                 if items.is_empty() {
                     return;
                 }
-                ui.set_completions(items.clone(), cx);
-
-                runtime::spawn(
-                    async move { groups_client.mentionable_groups(&group_term).await },
-                    move |result, cx| {
-                        if group_ui.completion_generation.get() != generation {
-                            return;
-                        }
-                        let Ok(groups) = result else { return };
-                        if groups.is_empty() {
-                            return;
-                        }
-                        let mut items = items;
-                        items.extend(groups.into_iter().map(|group| autocomplete::Candidate {
-                            insert: format!("@{}", group.name),
-                            primary: format!("@{}", group.name),
-                            secondary: match group.member_count {
-                                Some(n) => {
-                                    format!("{} · {n} people", group.display_name)
-                                }
-                                None => group.display_name,
-                            },
-                            emoji: None,
-                            image: None,
-                            user_id: None,
-                        }));
-                        group_ui.set_completions(items, cx);
-                    },
-                );
+                ui.set_completions(mention_list(items, groups), cx);
             },
         );
     }
@@ -4097,7 +4372,7 @@ impl Ui {
                         .and_then(|v| v.as_str())
                         .filter(|l| !l.is_empty())
                     {
-                        cx.open_url(location);
+                        crate::open_url(location, cx);
                     }
                 }
                 Err(e) => ui.toast(&format!("That command failed: {e}"), cx),
@@ -4886,6 +5161,15 @@ impl Ui {
             return;
         }
 
+        // A group: who is in it. The list of groups is asked for again as
+        // well, since this one may have been renamed or removed meanwhile.
+        let group = self.state.borrow().group(handle).cloned();
+        if let Some(group) = group {
+            self.refresh_groups(cx);
+            group::show(self, group, cx);
+            return;
+        }
+
         // Somebody mentioned in a message we are reading but who has never
         // posted here — worth one lookup rather than a dead link.
         let client = self.state.borrow().client.clone();
@@ -5101,7 +5385,8 @@ impl Ui {
                     ui.load_inbox(cx);
                     ui.load_drafts(cx);
                     ui.load_bots(cx);
-            ui.load_custom_emoji(cx);
+                    ui.load_custom_emoji(cx);
+                    ui.load_groups(cx);
                     if let Some(id) = first {
                         ui.dispatch(Action::SelectChannel(id), cx);
                     }
@@ -5191,7 +5476,9 @@ impl Ui {
                             {
                                 ui.chat.restore_anchor(&anchor, cx);
                             }
-                            ui.chat.focus_composer(cx);
+                            if FOCUS_ON_ARRIVAL {
+                                ui.chat.focus_composer(cx);
+                            }
                             ui.resolve_mentions(cx);
                             // Straight into the store, so the next launch has
                             // this channel without asking for it again.
@@ -5206,7 +5493,9 @@ impl Ui {
                 },
             );
         } else {
-            self.chat.focus_composer(cx);
+            if FOCUS_ON_ARRIVAL {
+                self.chat.focus_composer(cx);
+            }
             // A feed that came out of the cache is last time's picture: it
             // is worth showing at once and wrong until it has been topped up.
             let behind = self
@@ -5382,7 +5671,9 @@ impl Ui {
                     // only steal focus into the reply box if the panel is
                     // still showing the thread this answer is for.
                     if ui.right.mode(cx) == PanelMode::Thread(root_id) {
-                        ui.right.focus_composer(cx);
+                        if FOCUS_ON_ARRIVAL {
+                            ui.right.focus_composer(cx);
+                        }
                     }
                 }
                 Err(e) => {
@@ -6236,6 +6527,7 @@ impl Ui {
         let mut reload_teams = false;
         let mut reload_inbox = false;
         let mut reload_emoji = false;
+        let mut reload_groups = false;
         let mut open_dialog: Option<mattermost_api::models::dialog::OpenDialogRequest> = None;
         let mut notice: Option<String> = None;
         let mut refetch_post: Option<String> = None;
@@ -6323,6 +6615,8 @@ impl Ui {
                 // Somebody added one: it should be a picture, and on offer,
                 // without a restart.
                 Event::EmojiChanged => reload_emoji = true,
+                // A group is new, gone or renamed, or its people changed.
+                Event::GroupsChanged => reload_groups = true,
                 Event::Notice { message } => notice = Some(message),
                 Event::ThreadsChanged => reload_inbox = true,
                 // Nothing on screen depends on these continuously; they matter
@@ -6492,6 +6786,9 @@ impl Ui {
         }
         if reload_emoji {
             self.load_custom_emoji(cx);
+        }
+        if reload_groups {
+            self.load_groups(cx);
         }
         if reload_inbox {
             self.load_inbox(cx);
@@ -6855,6 +7152,7 @@ fn bootstrap(ui: Rc<Ui>, on_auth_failure: Option<Box<dyn FnOnce(&mut App)>>, _cx
             ui.load_drafts(cx);
             ui.load_bots(cx);
             ui.load_custom_emoji(cx);
+            ui.load_groups(cx);
             ui.load_team_unreads(cx);
             ui.preload_unread(cx);
 
@@ -6908,6 +7206,9 @@ fn bootstrap(ui: Rc<Ui>, on_auth_failure: Option<Box<dyn FnOnce(&mut App)>>, _cx
                             // leaves us out of their echo.
                             ui.state.borrow().client.set_connection_id(connection_id);
                             ui.chat.set_connection_problem(None, cx);
+                            // Whatever happened to the groups while the
+                            // socket was down was said to nobody.
+                            ui.load_groups(cx);
                         }
                         // Losing the socket is not an event that scrolls past:
                         // it stays true until it stops being true, so it is a

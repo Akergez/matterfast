@@ -84,7 +84,7 @@ mod vault {
 /// The Keychain and the Credential Manager, which cannot be searched the way
 /// the Secret Service can: an entry is found by its exact name or not at all.
 /// So every session is kept in one entry, as a list.
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
 mod vault {
     pub type Error = keyring::Error;
 
@@ -110,6 +110,72 @@ mod vault {
         }
         let raw = serde_json::to_string(sessions).expect("strings always serialise");
         entry()?.set_password(&raw)
+    }
+
+    pub async fn all() -> Result<Vec<Vec<u8>>, Error> {
+        Ok(read()?.into_iter().map(|(_, secret)| secret.into_bytes()).collect())
+    }
+
+    pub async fn put(server: &str, secret: &[u8]) -> Result<(), Error> {
+        let mut sessions = read()?;
+        sessions.retain(|(stored, _)| stored != server);
+        sessions.push((server.to_string(), String::from_utf8_lossy(secret).into_owned()));
+        write(&sessions)
+    }
+
+    /// Removes one server's session, or with `None` all of them.
+    pub async fn remove(server: Option<&str>) -> Result<(), Error> {
+        let mut sessions = read()?;
+        match server {
+            Some(server) => sessions.retain(|(stored, _)| stored != server),
+            None => sessions.clear(),
+        }
+        write(&sessions)
+    }
+}
+
+/// Android, where the `keyring` crate has no store and quietly keeps secrets
+/// in memory, to be gone at the next launch. The application's own directory
+/// is the store there: no other application can read it, which is the
+/// property the keyrings are relied on for elsewhere.
+#[cfg(target_os = "android")]
+mod vault {
+    use std::fs;
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::path::PathBuf;
+
+    pub type Error = std::io::Error;
+
+    fn path() -> PathBuf {
+        crate::paths::config_dir()
+            .join(crate::APP_ID)
+            .join("sessions.json")
+    }
+
+    /// (server, secret) pairs, oldest first.
+    fn read() -> Result<Vec<(String, String)>, Error> {
+        match fs::read_to_string(path()) {
+            Ok(raw) => Ok(serde_json::from_str(&raw).unwrap_or_default()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn write(sessions: &[(String, String)]) -> Result<(), Error> {
+        let file = path();
+        if let Some(dir) = file.parent() {
+            fs::create_dir_all(dir)?;
+        }
+        let raw = serde_json::to_string(sessions).expect("strings always serialise");
+        let mut f = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&file)?;
+        f.write_all(raw.as_bytes())?;
+        f.sync_all()
     }
 
     pub async fn all() -> Result<Vec<Vec<u8>>, Error> {

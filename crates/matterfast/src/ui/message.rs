@@ -182,7 +182,7 @@ pub fn system_markdown(text: &str, st: &AppState) -> String {
 /// An ordinary message as Markdown.
 ///
 /// A mention is only linked when it names somebody we have actually seen —
-/// usernames, and the special ones the server resolves for everyone.
+/// usernames, groups, and the special ones the server resolves for everyone.
 pub fn message_markdown(text: &str, st: &AppState) -> String {
     let display = st.teammate_name_display().to_string();
     crate::markdown::prepare_full(
@@ -199,6 +199,10 @@ pub fn message_markdown(text: &str, st: &AppState) -> String {
                 .find(|u| u.username == handle)
                 .map(|u| u.display_name(&display))
                 .filter(|name| !name.is_empty());
+            // A group is shown by the handle it is mentioned with.
+            if name.is_none() && st.group(handle).is_some() {
+                return Some(handle.to_string());
+            }
             // Possibly somebody real who has simply never posted where we
             // were looking. Noted, so the session can find out.
             if name.is_none() {
@@ -621,7 +625,7 @@ struct Mention;
 
 /// A mention, carried from parsing to drawing.
 struct MentionOf {
-    /// The username, or one of `here`, `channel`, `all`.
+    /// The username, a group's name, or one of `here`, `channel`, `all`.
     handle: String,
     /// What the message shows: the person's name as this reader has asked
     /// for names to be shown.
@@ -1188,7 +1192,7 @@ fn attachment_card(
                 .cursor_pointer()
                 .hover(|style| style.underline())
                 .child(card.title.clone())
-                .on_click(move |_, _, cx| cx.open_url(&url))
+                .on_click(move |_, _, cx| crate::open_url(&url, cx))
                 .into_any_element()
         });
         empty = false;
@@ -1314,7 +1318,7 @@ fn link_preview(
         card.id(("link", index))
             .cursor_pointer()
             .hover(|style| style.border_color(cx.theme().ring))
-            .on_click(move |_, _, cx| cx.open_url(&url))
+            .on_click(move |_, _, cx| crate::open_url(&url, cx))
             .into_any_element(),
     )
 }

@@ -1,7 +1,30 @@
+# Cargo's output, and the packages the build-aux scripts make of it.
 /target
-.skills
+/dist
+
+# The flatpak build (build-aux/publish-flatpak.sh).
 /.flatpak-build
 /.flatpak-repo
 /.flatpak-state
+
+# What CI keeps inside the checkout so that it can be cached
+# (.gitlab-ci.yml).
+/.cargo-home
+/.xwin-cache
+/.android-sdk
+/.gradle-home
+
+# Signing keys never belong here; CI is handed them as variables.
+*.p12
+*.jks
+*.keystore
+
+# Editors and assistants.
 /.claude
-/dist
+.skills
+.idea
+.vscode
+*.swp
+
+# macOS.
+.DS_Store

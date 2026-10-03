@@ -14,6 +14,10 @@
 //! system's own service and that is all: it cannot be replaced or taken back
 //! down from here, and a click on it is not reported.
 //!
+//! Android has a service of its own kind, reached through Java of ours: a
+//! notification there replaces its predecessor and reports being pressed, and
+//! beside it runs the service that keeps the process awake to raise any.
+//!
 //! Nothing here touches the window: it runs on Tokio, takes commands down one
 //! channel and reports what the person pressed up another.
 
@@ -61,6 +65,9 @@ enum Command {
     Show(Notice),
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     Withdraw(String),
+    /// Somebody signed in, or out.
+    #[cfg(target_os = "android")]
+    Session(bool),
 }
 
 /// A handle on the notification task. Cheap to clone; dropping the last one
@@ -86,6 +93,16 @@ impl Notifier {
     /// Takes a notification back down, if it is still up.
     pub fn withdraw(&self, tag: &str) {
         let _ = self.tx.send(Command::Withdraw(tag.to_string()));
+    }
+
+    /// Says whether anybody is signed in. Only Android cares: a process with
+    /// nothing on screen is put to sleep there, so for as long as there is a
+    /// session to hear from, a service of ours has to say it is still wanted.
+    pub fn session(&self, signed_in: bool) {
+        #[cfg(target_os = "android")]
+        let _ = self.tx.send(Command::Session(signed_in));
+        #[cfg(not(target_os = "android"))]
+        let _ = signed_in;
     }
 }
 
@@ -125,7 +142,137 @@ fn action_from_key(key: &str) -> Option<String> {
     (key != DEFAULT_ACTION).then(|| key.to_string())
 }
 
-#[cfg(not(target_os = "linux"))]
+/// Android: the notifications are raised, and the service that keeps the
+/// process awake is run, by Java of ours (`Notifications`, `SessionService`).
+#[cfg(target_os = "android")]
+async fn run(
+    mut commands: tokio::sync::mpsc::UnboundedReceiver<Command>,
+    responses: async_channel::Sender<Response>,
+) {
+    android::listen_for_presses(responses);
+    while let Some(command) = commands.recv().await {
+        // Asking for the permission waits for the person's answer, which is
+        // no thing to do on a thread other tasks are waiting for.
+        let done = tokio::task::spawn_blocking(move || android::perform(command)).await;
+        match done {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => tracing::warn!(%error, "a notification command failed"),
+            Err(error) => tracing::warn!(%error, "a notification command did not finish"),
+        }
+    }
+}
+
+#[cfg(target_os = "android")]
+pub use android::pressed;
+
+#[cfg(target_os = "android")]
+mod android {
+    use std::sync::Mutex;
+
+    use gpui_mobile::android::jni as bridge;
+    use gpui_mobile::packages::permission_handler::{request_permission, Permission};
+    use jni::objects::JValue;
+
+    use super::{Command, Response};
+
+    const CLASS: &str = "io.gitlab.akergez.matterfast.Notifications";
+
+    /// What a pressed notification opens the activity with, before its tag.
+    /// The same text is in `Notifications.java`.
+    const PRESSED: &str = "matterfast-notice:";
+
+    static RESPONSES: Mutex<Option<async_channel::Sender<Response>>> = Mutex::new(None);
+
+    pub fn listen_for_presses(responses: async_channel::Sender<Response>) {
+        *RESPONSES.lock().unwrap() = Some(responses);
+    }
+
+    /// Takes a link the activity was opened with, if it is a pressed
+    /// notification's. Answers whether it was.
+    pub fn pressed(link: &str) -> bool {
+        let Some(tag) = link.strip_prefix(PRESSED) else {
+            return false;
+        };
+        if let Some(responses) = RESPONSES.lock().unwrap().as_ref() {
+            let _ = responses.try_send(Response { tag: tag.to_string(), action: None });
+        }
+        true
+    }
+
+    pub fn perform(command: Command) -> Result<(), String> {
+        match command {
+            Command::Session(true) => {
+                // The system's own question, asked once; a refusal is found
+                // out by the Java side, which then runs no service.
+                if let Err(error) = request_permission(Permission::Notification) {
+                    tracing::warn!(%error, "could not ask to show notifications");
+                }
+                session(true)
+            }
+            Command::Session(false) => session(false),
+            Command::Show(notice) => bridge::with_env(|env| {
+                let activity = bridge::activity(env)?;
+                let class = bridge::find_app_class(env, CLASS)?;
+                let tag = env.new_string(&notice.tag).map_err(|e| e.to_string())?;
+                let title = env.new_string(&notice.title).map_err(|e| e.to_string())?;
+                let body = env.new_string(&notice.body).map_err(|e| e.to_string())?;
+                env.call_static_method(
+                    &class,
+                    jni::jni_str!("show"),
+                    jni::jni_sig!("(Landroid/app/Activity;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I)V"),
+                    &[
+                        JValue::Object(&activity),
+                        JValue::Object(&tag),
+                        JValue::Object(&title),
+                        JValue::Object(&body),
+                        JValue::Int(notice.urgent as i32),
+                    ],
+                )
+                .map_err(|e| {
+                    env.exception_clear();
+                    e.to_string()
+                })?;
+                Ok(())
+            }),
+            Command::Withdraw(tag) => bridge::with_env(|env| {
+                let activity = bridge::activity(env)?;
+                let class = bridge::find_app_class(env, CLASS)?;
+                let tag = env.new_string(&tag).map_err(|e| e.to_string())?;
+                env.call_static_method(
+                    &class,
+                    jni::jni_str!("withdraw"),
+                    jni::jni_sig!("(Landroid/app/Activity;Ljava/lang/String;)V"),
+                    &[JValue::Object(&activity), JValue::Object(&tag)],
+                )
+                .map_err(|e| {
+                    env.exception_clear();
+                    e.to_string()
+                })?;
+                Ok(())
+            }),
+        }
+    }
+
+    fn session(signed_in: bool) -> Result<(), String> {
+        bridge::with_env(|env| {
+            let activity = bridge::activity(env)?;
+            let class = bridge::find_app_class(env, CLASS)?;
+            env.call_static_method(
+                &class,
+                jni::jni_str!("session"),
+                jni::jni_sig!("(Landroid/app/Activity;I)V"),
+                &[JValue::Object(&activity), JValue::Int(signed_in as i32)],
+            )
+            .map_err(|e| {
+                env.exception_clear();
+                e.to_string()
+            })?;
+            Ok(())
+        })
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
 async fn run(
     mut commands: tokio::sync::mpsc::UnboundedReceiver<Command>,
     // Kept open for as long as the task runs, so the receiving end waits

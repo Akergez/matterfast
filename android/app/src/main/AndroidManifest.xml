@@ -1,0 +1,139 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!--
+  The Android shell around the Rust application.
+
+  The activity is a NativeActivity (through GpuiActivity and
+  GpuiInputActivity, which add the splash screen and a real InputConnection
+  for the soft keyboard). It loads the shared object named by
+  `android.app.lib_name`, which is the `matterfast` crate built as a cdylib,
+  and calls `android_main` in it.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- Asked for at run time on Android 13 and later. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- The service that keeps the session connected while the application
+         is off the screen (SessionService). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
+    <!-- Calls. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+
+    <!-- Vulkan where there is one, OpenGL ES 3 where there is not. -->
+    <uses-feature
+        android:name="android.hardware.vulkan.level"
+        android:required="false"
+        android:version="0"
+    />
+    <uses-feature
+        android:name="android.hardware.vulkan.version"
+        android:required="false"
+        android:version="0x00401000"
+    />
+    <uses-feature android:glEsVersion="0x00030000" android:required="true" />
+    <uses-feature
+        android:name="android.hardware.touchscreen"
+        android:required="false"
+    />
+    <uses-feature
+        android:name="android.hardware.microphone"
+        android:required="false"
+    />
+
+    <application
+        android:allowBackup="false"
+        android:hardwareAccelerated="true"
+        android:largeHeap="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/GpuiTheme"
+    >
+
+        <!--
+          `configChanges` keeps the activity across rotation and the keyboard
+          appearing: the Rust side is told through the NDK instead.
+          `singleTask` is the single-instance contract of the desktop: a
+          sign-in link comes back to the copy that started the sign-in.
+        -->
+        <activity
+            android:name="dev.gpui.mobile.GpuiActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|keyboard|navigation|uiMode|density"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:screenOrientation="unspecified"
+            android:theme="@style/GpuiSplashTheme"
+            android:windowSoftInputMode="adjustResize"
+        >
+
+            <!-- Without the `lib` prefix and the `.so` suffix; set in
+                 build.gradle.kts. -->
+            <meta-data
+                android:name="android.app.lib_name"
+                android:value="${nativeLibraryName}"
+            />
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!-- How the browser finishes a single sign-on. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="mattermost-dev" />
+            </intent-filter>
+        </activity>
+
+        <!-- GPUI's file prompts: documents are copied into the cache and
+             handed back as paths. -->
+        <activity
+            android:name="dev.gpui.mobile.GpuiPathPicker"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|keyboard|navigation|uiMode|density"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+        />
+        <activity
+            android:name="dev.gpui.mobile.GpuiPickerActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+        />
+
+        <!-- Run-time permission requests. -->
+        <activity
+            android:name="dev.gpui.mobile.GpuiPermissionActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+        />
+
+        <activity
+            android:name="dev.gpui.mobile.GpuiAuthActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+        />
+
+        <!-- None of the system's kinds fits a chat client that holds its own
+             connection instead of being woken by Google's push service. -->
+        <service
+            android:name="io.gitlab.akergez.matterfast.SessionService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse"
+        >
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps the chat server connection open to notify of new messages"
+            />
+        </service>
+
+    </application>
+
+</manifest>

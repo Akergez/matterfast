@@ -14,13 +14,16 @@
 use std::borrow::Cow;
 
 use gpui_kit::component::Theme;
-use gpui_kit::{font, App};
+#[cfg(not(target_os = "android"))]
+use gpui_kit::font;
+use gpui_kit::App;
 
 /// The family the bundled UI faces belong to.
 const UI_FAMILY: &str = "Inter";
 
 /// The family the renderer's fallback list looks for when a character turns
 /// out to be an emoji. The bundled emoji font answers to this name.
+#[cfg(not(target_os = "android"))]
 const EMOJI_FAMILY: &str = "Noto Color Emoji";
 
 /// Registers the bundled fonts and points the theme at them. Call once, after
@@ -36,6 +39,11 @@ pub fn install(cx: &mut App) {
     //
     // The answer itself is not wanted — the lookup falls through to the
     // default UI font — only the side effect is.
+    //
+    // Not on Android: the platform there never registers the system's COLRv1
+    // font in the first place, and none of the families the lookup falls
+    // through to exist, so asking is a panic rather than a side effect.
+    #[cfg(not(target_os = "android"))]
     let _ = cx.text_system().resolve_font(&font(EMOJI_FAMILY));
 
     let fonts: Vec<Cow<'static, [u8]>> = vec![

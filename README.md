@@ -167,12 +167,20 @@ The runtime comes from Flathub, so that remote has to exist — the ref file
 points at it and flatpak will offer to add it.
 
 Without flatpak, each [release](https://gitlab.com/ragusseven/matterfast/-/releases)
-carries a tarball for x86_64 and for aarch64, and a Windows zip for x86_64. It is laid out like an install
+carries a tarball for x86_64 and for aarch64, a Windows zip for x86_64, an
+Android package and a macOS disk image for Apple silicon. The tarball is laid out like an install
 prefix, so unpacking it is the installation; the libraries listed under
 "Building" have to come from the distribution:
 
 ```sh
-tar -xzf matterfast-0.2.0-linux-x86_64.tar.gz --strip-components=1 -C ~/.local
+tar -xzf matterfast-1.0.0-linux-x86_64.tar.gz --strip-components=1 -C ~/.local
+```
+
+The macOS application is not signed by an Apple developer account, so a
+downloaded copy is held back until its quarantine mark is taken off:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/Matterfast.app
 ```
 
 ## Building
@@ -300,11 +308,11 @@ including several behaviours that fail *silently* if you get them wrong.
 
 ## Continuous integration
 
-`.gitlab-ci.yml` runs on GitLab CI, on Linux runners only.
+`.gitlab-ci.yml` runs on GitLab CI, on Linux runners and one Mac.
 
 | When | What |
 |---|---|
-| every commit, on a branch or in a merge request | `cargo test --workspace`, the UI scenarios under a headless compositor, then the Linux tarballs and the Windows zip, kept as job artifacts |
+| every commit, on a branch or in a merge request | `cargo test --workspace`, the UI scenarios under a headless compositor, then the Linux tarballs, the Windows zip, the Android package and the macOS disk image, kept as job artifacts |
 | a version tag, `v1.2.3` | the same tests, then every package, the flatpak repository on GitLab Pages, and a release |
 
 A commit's packages are built with the `release` profile and are not
@@ -316,14 +324,46 @@ builds, with the `dist` profile:
 - a Linux tarball for each of the two, likewise;
 - a Windows zip for x86_64, cross-compiled on Linux
   (`build-aux/build-windows.sh`). It has no video yet, and there is no
-  aarch64 one: a dependency does not cross-compile for it.
+  aarch64 one: a dependency does not cross-compile for it;
+- an Android package for arm64, cross-compiled on Linux
+  (`build-aux/build-android.sh`), signed with the release key;
+- a macOS disk image for Apple silicon, built on a Mac
+  (`build-aux/package-macos.sh`).
 
 Each file goes into the project's package registry under the version, and
-the release links to them and carries the flatpak install command.
+the release links to them and carries the flatpak install command. The
+Android package and the macOS bundle take their version from the tag.
 
-The jobs pick their runner by tag: `linux-arm64` for the aarch64 builds,
-`linux-x86` for everything else. The flatpak jobs need a privileged container, because
-flatpak-builder sandboxes the build with bwrap.
+The jobs pick their runner by tag: `linux-arm64` for the aarch64 Linux builds,
+`macos-arm64` for the macOS one, `linux-x86` for everything else, the Android
+build included: the NDK exists for no other Linux. The flatpak jobs need a
+privileged container, because flatpak-builder sandboxes the build with bwrap.
+
+The Mac is a runner with a shell executor, and has to have what a job cannot
+install for itself: Xcode (the toolkit's shaders are compiled by its Metal
+compiler, which is also why this build is not cross-compiled), rustup, and
+`brew install cmake librsvg`.
+
+### Signing the Android package
+
+Android installs an update only over a package signed with the same key, so
+every release is signed with one key, and a tag pipeline fails without it.
+A commit's package is signed with a debug key made on the spot: it installs,
+but not over a release, and not over another commit's.
+
+```sh
+keytool -genkeypair -storetype PKCS12 -keystore matterfast.p12 -alias matterfast \
+  -keyalg RSA -keysize 4096 -validity 10000 -dname 'CN=Matterfast'
+base64 < matterfast.p12 | tr -d '\n'
+```
+
+Keep the keystore: a lost key means nobody can update without uninstalling
+first. Two CI/CD variables, masked, and protected only if the `v*` tags are:
+
+| Variable | Value |
+|---|---|
+| `ANDROID_KEYSTORE_B64` | the base64 above |
+| `ANDROID_KEYSTORE_PASSWORD` | the keystore's password |
 
 ### Making a release
 

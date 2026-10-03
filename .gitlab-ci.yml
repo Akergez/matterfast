@@ -1,22 +1,25 @@
-# Every commit is tested and built: the Linux tarballs and the Windows zip
-# come out of every pipeline as job artifacts, so a change can be tried on
-# the machine it was made for without a release. Everything that is published
-# is published from a version tag, and only from one: `v1.2.3`, on a commit
-# whose crates all say 1.2.3.
+# Every commit is tested and built: the Linux tarballs, the Windows zip, the
+# Android package and the macOS disk image come out of every pipeline as job
+# artifacts, so a change can be tried on the machine it was made for without
+# a release. Everything that is published is published from a version tag,
+# and only from one: `v1.2.3`, on a commit whose crates all say 1.2.3.
 #
 # A pipeline:
 #   test     the unit and UI tests; on a tag, the check that tag and crates
 #            agree
-#   build    Linux tarballs (x86_64, aarch64) and a Windows zip (x86_64);
+#   build    Linux tarballs (x86_64, aarch64), a Windows zip (x86_64), an
+#            Android package (aarch64) and a macOS disk image (aarch64);
 #            on a tag, also the flatpak (x86_64, aarch64)
 #   publish  on a tag only: the flatpak repository to GitLab Pages; every
 #            package to the package registry; a release that links to them
 #
-# Every job runs on Linux. The Linux builds are native, each architecture on
-# its own runner: they link GStreamer, ALSA and the Wayland/X11 stack, and a
-# foreign-architecture sysroot for those is more to keep working than a
-# second runner. The Windows builds are cross-compiled; see
-# build-aux/build-windows.sh for what stands in for a Windows machine.
+# Every job but one runs on Linux. The Linux builds are native, each
+# architecture on its own runner: they link GStreamer, ALSA and the
+# Wayland/X11 stack, and a foreign-architecture sysroot for those is more to
+# keep working than a second runner. The Windows and Android builds are
+# cross-compiled; see build-aux/build-windows.sh for what stands in for a
+# Windows machine. Nothing stands in for a Mac: the toolkit's shaders are
+# compiled by Xcode's Metal compiler, so that build has a runner of its own.
 
 stages: [test, build, publish]
 
@@ -52,6 +55,11 @@ variables:
 
 .arm64:
   tags: [linux-arm64]
+
+# A Mac with a shell executor, which has to bring what no job can install:
+# Xcode, rustup, cmake and librsvg.
+.macos:
+  tags: [macos-arm64]
 
 # A build for release. `version` hands over $VERSION, the tag without its
 # `v`, and $PACKAGES, where this version's files go in the package registry;
@@ -179,6 +187,53 @@ variables:
     paths: [dist]
     expire_in: 30 days
 
+.android:
+  image: $RUST_IMAGE
+  # The x86-64 runner: Google builds the NDK for no other Linux.
+  extends: [.package, .amd64]
+  timeout: 3h
+  variables:
+    ANDROID_HOME: $CI_PROJECT_DIR/.android-sdk
+    GRADLE_USER_HOME: $CI_PROJECT_DIR/.gradle-home
+    # Google's command-line tools, by their build number.
+    ANDROID_SDK_TOOLS: "13114758"
+    CARGO_NDK_VERSION: "4.1.2"
+  before_script:
+    - rustup target add aarch64-linux-android
+    - apt-get update -q
+    - apt-get install -y -q --no-install-recommends
+        cmake libclang-dev openjdk-17-jdk-headless unzip
+    # Beside cargo itself: $CARGO_HOME/bin is not on PATH here.
+    - cargo install cargo-ndk --locked --version "$CARGO_NDK_VERSION" --root /usr/local
+    - |
+      if [ ! -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ]; then
+        mkdir -p "$ANDROID_HOME/cmdline-tools"
+        curl --fail --silent --show-error --location --output sdk-tools.zip \
+          "https://dl.google.com/android/repository/commandlinetools-linux-${ANDROID_SDK_TOOLS}_latest.zip"
+        unzip -q sdk-tools.zip -d "$ANDROID_HOME/cmdline-tools"
+        mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+        rm sdk-tools.zip
+      fi
+    # `yes` is killed when sdkmanager has read enough, which is not a failure.
+    - (yes || true) | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
+    # The versions android/app/build.gradle.kts names.
+    - '"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+        "platforms;android-36" "build-tools;36.0.0" "ndk;27.0.12077973"'
+  script:
+    - build-aux/build-android.sh "$VERSION"
+    - *upload
+  cache:
+    - !reference [.rust, cache]
+    # The SDK and NDK, and what Gradle downloads: itself and its plugins.
+    - key: android-sdk
+      paths:
+        - .android-sdk
+        - .gradle-home/wrapper
+        - .gradle-home/caches/modules-2
+  artifacts:
+    paths: [dist]
+    expire_in: 30 days
+
 # --------------------------------------------------------------------- test
 
 test:
@@ -239,6 +294,30 @@ windows:x86_64:
   variables:
     ARCH: x86_64
 
+android:aarch64:
+  extends: .android
+
+macos:aarch64:
+  extends: [.package, .macos]
+  timeout: 3h
+  variables:
+    # The runner's own rustup, told which toolchain to run.
+    RUSTUP_TOOLCHAIN: $RUST_VERSION
+    # The Opus sources ask for a CMake older than Homebrew's accepts.
+    CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+    # The oldest macOS the bundle says it runs on (data/macos/Info.plist).
+    MACOSX_DEPLOYMENT_TARGET: "11.0"
+  before_script:
+    - rustup toolchain install "$RUST_VERSION" --profile minimal
+  script:
+    - cargo build --profile "$MATTERFAST_PROFILE" --locked -p matterfast
+    - build-aux/package-macos.sh "$VERSION"
+    - *upload
+  cache: !reference [.rust, cache]
+  artifacts:
+    paths: [dist]
+    expire_in: 30 days
+
 # ------------------------------------------------------------------ publish
 
 # GitLab Pages serves what this job leaves in `public`: the signed ostree
@@ -273,6 +352,8 @@ release:
     - "tarball:x86_64"
     - "tarball:aarch64"
     - "windows:x86_64"
+    - "android:aarch64"
+    - "macos:aarch64"
   script:
     - echo "Releasing Matterfast $VERSION"
   release:
@@ -296,6 +377,12 @@ release:
           tar -xzf matterfast-$VERSION-linux-x86_64.tar.gz --strip-components=1 -C ~/.local
 
       **Windows, x86_64**: unpack the zip and run matterfast.exe. This build has no video: attachments do not play and calls are sound only.
+
+      **Android, arm64**, Android 8 and later: open the .apk on the phone and allow the installation. It has no video either.
+
+      **macOS, Apple silicon**: open the .dmg and drag Matterfast into Applications. No video here either. The application is not signed by an Apple developer account, so macOS holds back a downloaded copy until its quarantine mark is taken off:
+
+          xattr -dr com.apple.quarantine /Applications/Matterfast.app
     assets:
       links:
         - name: matterfast-$VERSION-x86_64.flatpak
@@ -312,4 +399,10 @@ release:
           link_type: package
         - name: matterfast-$VERSION-windows-x86_64.zip
           url: $PACKAGES/matterfast-$VERSION-windows-x86_64.zip
+          link_type: package
+        - name: matterfast-$VERSION-android-aarch64.apk
+          url: $PACKAGES/matterfast-$VERSION-android-aarch64.apk
+          link_type: package
+        - name: matterfast-$VERSION-macos-aarch64.dmg
+          url: $PACKAGES/matterfast-$VERSION-macos-aarch64.dmg
           link_type: package

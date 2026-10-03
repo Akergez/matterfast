@@ -1606,15 +1606,34 @@ impl Client {
     ///
     /// Licensed servers only: Team Edition answers 501, which is the same as
     /// having no groups and needs no special handling beyond ignoring it.
-    pub async fn mentionable_groups(&self, term: &str) -> Result<Vec<Group>> {
+    pub async fn mentionable_groups(&self, page: u32, per_page: u32) -> Result<Vec<Group>> {
         self.get_q(
             "/groups",
             &[
                 ("filter_allow_reference", "true".to_string()),
-                ("q", term.to_string()),
-                ("per_page", "10".to_string()),
+                ("include_member_count", "true".to_string()),
+                ("page", page.to_string()),
+                ("per_page", per_page.min(PER_PAGE_MAX).to_string()),
             ],
             "groups",
+        )
+        .await
+    }
+
+    /// `GET /api/v4/groups/{id}/members` — the people a group mention reaches.
+    pub async fn group_members(
+        &self,
+        group_id: &str,
+        page: u32,
+        per_page: u32,
+    ) -> Result<GroupMembers> {
+        self.get_q(
+            &format!("/groups/{group_id}/members"),
+            &[
+                ("page", page.to_string()),
+                ("per_page", per_page.min(PER_PAGE_MAX).to_string()),
+            ],
+            "group members",
         )
         .await
     }

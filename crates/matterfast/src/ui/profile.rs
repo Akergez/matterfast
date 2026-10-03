@@ -37,7 +37,8 @@ pub fn show(ui: &Rc<Ui>, user_id: &str, cx: &mut App) -> bool {
 /// Who a mention is, at a glance: what pointing at one shows. The whole card
 /// is a click away; this is the part you can take in without clicking.
 ///
-/// `handle` is a username, or one of the words that address a whole channel.
+/// `handle` is a username, a group's name, or one of the words that address
+/// a whole channel.
 pub fn glance(ui: &Rc<Ui>, handle: &str, cx: &App) -> gpui_kit::AnyElement {
     let muted = cx.theme().muted_foreground;
     if let Some(explanation) = super::message::audience(handle) {
@@ -55,6 +56,23 @@ pub fn glance(ui: &Rc<Ui>, handle: &str, cx: &App) -> gpui_kit::AnyElement {
 
     let st = ui.state.borrow();
     let Some(user) = st.users.values().find(|u| u.username == handle).cloned() else {
+        if let Some(group) = st.group(handle) {
+            return v_flex()
+                .w(px(240.))
+                .gap_0p5()
+                .child(
+                    div()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(group.display_name.clone()),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(muted)
+                        .child(super::group::summary(group)),
+                )
+                .into_any_element();
+        }
         drop(st);
         // Somebody this client has not met. Asking is what gets them here;
         // the card fills in on the next look.

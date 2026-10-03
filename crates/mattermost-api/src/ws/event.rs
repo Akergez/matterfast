@@ -211,6 +211,9 @@ pub enum Event {
     UsersChanged,
     /// The server's custom emoji set changed.
     EmojiChanged,
+    /// A user group was created, renamed or removed, or somebody joined or
+    /// left one.
+    GroupsChanged,
     /// Text the server wants shown to this person.
     Notice {
         message: String,
@@ -303,6 +306,13 @@ impl Event {
             // emoji. All three make a cached copy wrong rather than absent.
             "user_activation_status_change" | "new_user" => Event::UsersChanged,
             "emoji_added" => Event::EmojiChanged,
+            "received_group"
+            | "group_member_add"
+            | "group_member_deleted"
+            | "received_group_associated_to_team"
+            | "received_group_not_associated_to_team"
+            | "received_group_associated_to_channel"
+            | "received_group_not_associated_to_channel" => Event::GroupsChanged,
             // A plugin's own toast, and the "you have unread urgent messages"
             // nudge. Both are text aimed at the person.
             "show_toast" | "persistent_notification_triggered" => Event::Notice {

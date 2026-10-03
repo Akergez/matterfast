@@ -1,0 +1,4 @@
+# The compiler every build uses, here and on CI (`RUST_VERSION` in
+# .gitlab-ci.yml says the same). rustup fetches it on the first `cargo` run.
+[toolchain]
+channel = "1.95"

@@ -229,6 +229,13 @@ pub struct AppState {
     /// The names of the server's own emoji, in order. What decides whether
     /// `:word:` in a message is a picture, and what the pickers offer.
     pub custom_emoji: std::collections::BTreeSet<String>,
+    /// The groups that can be mentioned, as last fetched: what decides
+    /// whether `@word` in a message is a group, and what the composer offers
+    /// beside people. Empty on a server without them.
+    pub groups: Vec<mattermost_api::models::Group>,
+    /// When `groups` was last asked for. They change, and not every change
+    /// is announced to everyone, so the list is only trusted for a while.
+    pub groups_fetched_at: Millis,
     /// Handles mentioned in messages that have been drawn but that name
     /// nobody held here. Written while preparing a message, which only has
     /// this state to hand; the session drains it and asks the server.
@@ -335,6 +342,8 @@ impl AppState {
             team_unreads: HashMap::new(),
             bots: Vec::new(),
             custom_emoji: std::collections::BTreeSet::new(),
+            groups: Vec::new(),
+            groups_fetched_at: 0,
             unknown_handles: RefCell::new(std::collections::BTreeSet::new()),
             pending_files: Vec::new(),
             search_results: Vec::new(),
@@ -433,6 +442,11 @@ impl AppState {
 
     pub fn display_name(&self, user: &User) -> String {
         user.display_name(self.teammate_name_display())
+    }
+
+    /// The group mentioned as `@name`, if there is one.
+    pub fn group(&self, name: &str) -> Option<&mattermost_api::models::Group> {
+        self.groups.iter().find(|group| group.name == name)
     }
 
     /// Unread thread count for the badge on the inbox button.

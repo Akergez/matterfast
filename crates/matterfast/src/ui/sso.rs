@@ -95,7 +95,7 @@ pub fn start(
         provider.path,
     );
 
-    cx.open_url(&url);
+    crate::open_url(&url, cx);
 
     PENDING.with(|p| {
         *p.borrow_mut() = Some(Pending {

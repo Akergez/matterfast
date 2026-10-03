@@ -69,12 +69,24 @@ where
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Group {
     pub id: String,
-    #[serde(default)]
+    /// What is written after the `@`. `null` for a directory group nobody
+    /// has given a mention name to.
+    #[serde(default, deserialize_with = "null_as_default")]
     pub name: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub display_name: String,
     #[serde(default)]
     pub member_count: Option<i64>,
+}
+
+/// `GET /groups/{id}/members`: one page of a group's people, and how many
+/// there are in all.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct GroupMembers {
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub members: Vec<User>,
+    #[serde(default)]
+    pub total_member_count: i64,
 }
 
 /// `server/public/model/preference.go`. `value` is *always* a string, even for

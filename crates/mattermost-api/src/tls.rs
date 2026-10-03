@@ -44,7 +44,7 @@ pub fn insecure() -> bool {
 /// `None` means the default — verify normally.
 pub(crate) fn ws_connector() -> Option<tokio_tungstenite::Connector> {
     if !insecure() {
-        return None;
+        return system_connector();
     }
     tracing::warn!("MM_INSECURE_TLS: websocket certificate verification disabled");
     let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
@@ -55,6 +55,34 @@ pub(crate) fn ws_connector() -> Option<tokio_tungstenite::Connector> {
         .with_custom_certificate_verifier(Arc::new(NoVerify(provider)))
         .with_no_client_auth();
     Some(tokio_tungstenite::Connector::Rustls(Arc::new(config)))
+}
+
+/// What verifies normally. Everywhere but Android that is the websocket
+/// library's own default, which reads the system's root certificates.
+#[cfg(not(target_os = "android"))]
+fn system_connector() -> Option<tokio_tungstenite::Connector> {
+    None
+}
+
+/// Android keeps no such file for the default to read, so it would trust
+/// nobody and never connect. The system is asked instead, as REST asks it.
+#[cfg(target_os = "android")]
+fn system_connector() -> Option<tokio_tungstenite::Connector> {
+    use rustls_platform_verifier::BuilderVerifierExt;
+
+    let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
+    let config = rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .and_then(|builder| builder.with_platform_verifier());
+    match config {
+        Ok(config) => Some(tokio_tungstenite::Connector::Rustls(Arc::new(
+            config.with_no_client_auth(),
+        ))),
+        Err(error) => {
+            tracing::error!(%error, "no system certificate verifier for the websocket");
+            None
+        }
+    }
 }
 
 /// Accepts every certificate chain. Signatures are still checked against the

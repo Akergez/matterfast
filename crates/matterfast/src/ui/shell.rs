@@ -24,9 +24,10 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    div, img, px, size, AnyElement, AnyWindowHandle, App, Bounds, Context, DragMoveEvent, Entity,
-    FocusHandle, FontWeight, Global, Image, ImageFormat, KeyBinding, MouseButton, ObjectFit, Pixels,
-    Subscription, Window, WindowBounds, WindowOptions,
+    canvas, div, img, px, size, AnyElement, AnyWindowHandle, App, Bounds, Context, DispatchPhase,
+    DragMoveEvent, Entity, FocusHandle, FontWeight, Global, Image, ImageFormat, KeyBinding,
+    MouseButton, ObjectFit, Pixels, ScrollWheelEvent, Subscription, Window, WindowBounds,
+    WindowOptions,
 };
 use mattermost_api::models::{ClientConfig, User};
 
@@ -222,6 +223,7 @@ pub fn signed_out(cx: &mut App) {
     if let Some(ui) = cx.global_mut::<Matterfast>().ui.take() {
         ui.detach(cx);
     }
+    cx.global::<Matterfast>().notifier.session(false);
     with_shell(cx, |shell, window, cx| shell.show_login(window, cx));
 }
 
@@ -276,6 +278,24 @@ impl Shell {
         crate::appearance::apply(Some(window), cx);
         let appearance = window
             .observe_window_appearance(|window, cx| crate::appearance::apply(Some(window), cx));
+        // Android's window announces a change of appearance only when it
+        // differs from what the window itself believes, and it starts out
+        // believing light, so a switch back to light goes unannounced. Every
+        // change of configuration is announced as a change of keyboard layout,
+        // though — from inside the platform's own lock, hence the task.
+        #[cfg(target_os = "android")]
+        cx.on_keyboard_layout_change(|cx| {
+            cx.spawn(async move |cx| {
+                let _ = cx.update(|cx| {
+                    if crate::appearance::behind_the_system(cx) {
+                        crate::appearance::apply(None, cx);
+                        cx.refresh_windows();
+                    }
+                });
+            })
+            .detach();
+        })
+        .detach();
         Shell {
             _appearance: appearance,
             stage: Stage::Loading,
@@ -390,6 +410,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Rc<Ui> {
         let notifier = cx.global::<Matterfast>().notifier.clone();
+        notifier.session(true);
         let ui = Ui::new(state, notifier);
         cx.global_mut::<Matterfast>().ui = Some(ui.clone());
         self.show_session(ui.clone(), window, cx);
@@ -516,7 +537,7 @@ impl Shell {
     ///
     /// It is painted as the channel sidebar is: the two are one frame around
     /// the conversation, in one colour, and everything else is the page.
-    fn title_bar(&self, window: &mut Window, cx: &mut Context<Self>) -> TitleBar {
+    fn title_bar(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
         let width = f32::from(window.viewport_size().width);
         let roomy = width >= SIDEBAR_PAGE_BELOW;
@@ -548,15 +569,30 @@ impl Shell {
 
         // The toolkit's bar is a gradient of its own colour; a flat fill in
         // the sidebar's is what makes the two read as one surface.
+        #[cfg(not(target_os = "android"))]
         let framed = || {
             TitleBar::new()
                 .bg(theme.sidebar)
                 .border_color(theme.sidebar_border)
                 .text_color(theme.sidebar_foreground)
         };
+        // A phone has no window to drag, minimise or close, and the toolkit's
+        // bar draws the buttons for that regardless: a plain strip instead,
+        // tall enough for a finger.
+        #[cfg(target_os = "android")]
+        let framed = || {
+            h_flex()
+                .flex_none()
+                .h(px(44.))
+                .px_3()
+                .border_b_1()
+                .bg(theme.sidebar)
+                .border_color(theme.sidebar_border)
+                .text_color(theme.sidebar_foreground)
+        };
 
         let Some(ui) = self.session().cloned() else {
-            return framed().child(bar.child(name));
+            return framed().child(bar.child(name)).into_any_element();
         };
         let (server, mentions) = {
             let st = ui.state.borrow();
@@ -602,8 +638,26 @@ impl Shell {
         );
 
         bar = bar.child(name).child(search).child(actions);
-        framed().child(bar)
+        framed().child(bar).into_any_element()
     }
+}
+
+/// How much of the top and of the bottom of the screen the system draws its
+/// own bars over, which the window lies under edge to edge.
+#[cfg(target_os = "android")]
+fn system_bars() -> (f32, f32) {
+    gpui_mobile::android::jni::platform()
+        .and_then(|platform| platform.primary_window())
+        .map(|window| {
+            let insets = window.safe_area_insets_logical();
+            (insets.top, insets.bottom)
+        })
+        .unwrap_or_default()
+}
+
+#[cfg(not(target_os = "android"))]
+fn system_bars() -> (f32, f32) {
+    (0.0, 0.0)
 }
 
 /// The list of stored servers to pick from.
@@ -837,20 +891,65 @@ fn session(ui: &Rc<Ui>, window: &mut Window, cx: &mut App) -> AnyElement {
     });
 
     if collapsed {
-        // Two pages of a stack. The dock lives in the sidebar, except when
-        // the sidebar is a page you have navigated away from — then it
-        // belongs under the conversation.
-        panes = panes.child(if ui.split.show_content() {
+        // The conversation, and the channel list as a drawer that slides in
+        // over it from the left. The dock would come and go with the drawer,
+        // so here it belongs under the conversation.
+        let drawer = (width * 0.86).min(360.0);
+        let open = ui.split.advance(window);
+        panes = panes.child(
             div()
                 .size_full()
-                .child(super::chat::render(ui, true, dock, cx))
-                .into_any_element()
-        } else {
-            div()
-                .size_full()
-                .child(super::sidebar::render(ui, dock, cx))
-                .into_any_element()
-        });
+                .child(super::chat::render(ui, true, dock, cx)),
+        );
+        if open > 0.0 {
+            panes = panes
+                .child(
+                    div()
+                        .id("drawer-scrim")
+                        .absolute()
+                        .inset_0()
+                        .bg(gpui_kit::black().opacity(0.45 * open))
+                        .occlude()
+                        .on_click(ui.click(|ui, cx| ui.split.set_show_content(true, cx))),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .bottom_0()
+                        .left(px((open - 1.0) * drawer))
+                        .w(px(drawer))
+                        .shadow_lg()
+                        .occlude()
+                        .child(super::sidebar::render(ui, None, cx)),
+                );
+        }
+        // A phone has no edge to click: the list is pulled out by a swipe
+        // to the right and pushed back by one to the left. Anything laid
+        // over the conversation keeps its own swipes.
+        if cfg!(target_os = "android") && !ui.overlay.shown() && !window.has_active_dialog(cx) {
+            let ui = ui.clone();
+            panes = panes.child(
+                canvas(
+                    |_, _, _| (),
+                    move |_, _, window, _| {
+                        window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
+                            if phase != DispatchPhase::Capture {
+                                return;
+                            }
+                            let delta = event.delta.pixel_delta(px(1.));
+                            let (dx, dy) = (f32::from(delta.x), f32::from(delta.y));
+                            if ui.split.swiped(dx, dy, event.touch_phase, drawer) {
+                                cx.stop_propagation();
+                                window.refresh();
+                            }
+                        });
+                    },
+                )
+                .absolute()
+                .size_0(),
+            );
+        }
     } else {
         panes = panes
             .child(
@@ -918,6 +1017,7 @@ impl Render for Shell {
         }
 
         let title_bar = self.title_bar(window, cx);
+        let (bars_top, bars_bottom) = system_bars();
         let body = match &self.stage {
             Stage::Loading => div()
                 .size_full()
@@ -975,8 +1075,12 @@ impl Render for Shell {
                     cx.stop_propagation();
                 }
             }))
+            // Under the status bar, in the title bar's colour so that the two
+            // read as one.
+            .child(div().flex_none().h(px(bars_top)).w_full().bg(theme.sidebar))
             .child(title_bar)
             .child(div().flex_1().min_h_0().w_full().child(body))
+            .pb(px(bars_bottom))
     }
 }
 

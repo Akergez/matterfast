@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The status bar's icon: the application icon's outline in one colour, the
+     bolt cut out of the bubble. Only its shape is used; the system tints it. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="128"
+    android:viewportHeight="128">
+    <!-- The tail -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M 16 70 L 40 92 L 16 106 Z" />
+    <!-- The bubble, less the bolt -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M 32 22 H 96 A 16 16 0 0 1 112 38 V 76 A 16 16 0 0 1 96 92 H 32 A 16 16 0 0 1 16 76 V 38 A 16 16 0 0 1 32 22 Z M 70 29 L 44 59 H 61 L 55 80 L 84 48 H 66 Z" />
+</vector>
