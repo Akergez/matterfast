@@ -304,10 +304,12 @@ including several behaviours that fail *silently* if you get them wrong.
 
 | When | What |
 |---|---|
-| every merge request, the default branch | `cargo test --workspace`, then the UI scenarios under a headless compositor |
+| every commit, on a branch or in a merge request | `cargo test --workspace`, the UI scenarios under a headless compositor, then the Linux tarballs and the Windows zip, kept as job artifacts |
 | a version tag, `v1.2.3` | the same tests, then every package, the flatpak repository on GitLab Pages, and a release |
 
-Nothing is built for distribution from a branch. A tag pipeline builds:
+A commit's packages are built with the `release` profile and are not
+published anywhere; the flatpak is built from a tag only. A tag pipeline
+builds, with the `dist` profile:
 
 - the flatpak for x86_64 and aarch64, natively on a runner of each
   architecture;

@@ -1,13 +1,16 @@
-# Tests on every merge request and on the default branch. Everything that is
-# built to be handed to someone is built from a version tag, and only from
-# one: `v1.2.3`, on a commit whose crates all say 1.2.3.
+# Every commit is tested and built: the Linux tarballs and the Windows zip
+# come out of every pipeline as job artifacts, so a change can be tried on
+# the machine it was made for without a release. Everything that is published
+# is published from a version tag, and only from one: `v1.2.3`, on a commit
+# whose crates all say 1.2.3.
 #
-# A tag pipeline:
-#   test     the unit and UI tests, and the check that tag and crates agree
-#   build    flatpak (x86_64, aarch64), Linux tarballs (x86_64, aarch64),
-#            a Windows zip (x86_64)
-#   publish  the flatpak repository to GitLab Pages; every package to the
-#            package registry; a release that links to them
+# A pipeline:
+#   test     the unit and UI tests; on a tag, the check that tag and crates
+#            agree
+#   build    Linux tarballs (x86_64, aarch64) and a Windows zip (x86_64);
+#            on a tag, also the flatpak (x86_64, aarch64)
+#   publish  on a tag only: the flatpak repository to GitLab Pages; every
+#            package to the package registry; a release that links to them
 #
 # Every job runs on Linux. The Linux builds are native, each architecture on
 # its own runner: they link GStreamer, ALSA and the Wayland/X11 stack, and a
@@ -21,7 +24,10 @@ workflow:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    # A branch with a merge request open already has that pipeline.
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
+      when: never
+    - if: $CI_COMMIT_BRANCH
 
 variables:
   # The toolchain the application is developed with; multi-arch, so the same
@@ -56,14 +62,35 @@ variables:
     - if: $CI_COMMIT_TAG
   needs: [version, test]
 
-# Puts everything in dist/ into the package registry.
+# A package built from every commit and kept as a job artifact. Only a tag
+# pipeline has a `version` job, hence optional. A commit is built with the
+# `release` profile: `dist` is one codegen unit with LTO, which is worth its
+# hour for what ships and not for a build somebody wants to try a fix with.
+.package:
+  stage: build
+  needs:
+    - job: version
+      optional: true
+    - test
+  variables:
+    MATTERFAST_PROFILE: release
+  rules:
+    - if: $CI_COMMIT_TAG
+      variables:
+        MATTERFAST_PROFILE: dist
+    - when: on_success
+
+# Puts everything in dist/ into the package registry — of a release; a
+# commit's packages stay job artifacts.
 .upload: &upload
   - |
-    for file in dist/*; do
-      curl --fail --silent --show-error \
-        --header "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file "$file" \
-        "$PACKAGES/${file##*/}"
-    done
+    if [ -n "$CI_COMMIT_TAG" ]; then
+      for file in dist/*; do
+        curl --fail --silent --show-error \
+          --header "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file "$file" \
+          "$PACKAGES/${file##*/}"
+      done
+    fi
 
 .rust:
   image: $RUST_IMAGE
@@ -116,11 +143,10 @@ variables:
     expire_in: 1 day
 
 .tarball:
-  stage: build
-  extends: [.rust, .release]
+  extends: [.rust, .package]
   timeout: 3h
   script:
-    - cargo build --profile dist --locked -p matterfast
+    - cargo build --profile "$MATTERFAST_PROFILE" --locked -p matterfast
     - build-aux/package-tarball.sh "$VERSION"
     - *upload
   artifacts:
@@ -128,11 +154,10 @@ variables:
     expire_in: 30 days
 
 .windows:
-  stage: build
   image: $XWIN_IMAGE
   # Always the x86-64 runner, whichever Windows it builds for: the shader
   # compiler is run through wine, and the build is a cross-compile anyway.
-  extends: [.release, .amd64]
+  extends: [.package, .amd64]
   timeout: 3h
   before_script:
     - rustup toolchain install "$RUST_VERSION" --profile minimal --target "$ARCH-pc-windows-msvc"
