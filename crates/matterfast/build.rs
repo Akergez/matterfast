@@ -9,7 +9,7 @@
 //!
 //! ```sh
 //! magick -background none -density 384 \
-//!   data/icons/hicolor/scalable/apps/io.gitlab.akergez.Matterfast.svg \
+//!   data/icons/hicolor/scalable/apps/app.akergez.Matterfast.svg \
 //!   -define icon:auto-resize=256,64,48,32,24,16 \
 //!   crates/matterfast/windows/matterfast.ico
 //! ```

@@ -2,6 +2,6 @@
 // class, and so what the taskbar, Alt-Tab and the title bar show. Explorer
 // shows the first icon in the file for the .exe itself, which is this one.
 //
-// matterfast.ico is data/icons/hicolor/scalable/apps/io.gitlab.akergez.Matterfast.svg
+// matterfast.ico is data/icons/hicolor/scalable/apps/app.akergez.Matterfast.svg
 // rendered at 16, 24, 32, 48, 64 and 256 pixels; see build.rs.
 1 ICON "matterfast.ico"

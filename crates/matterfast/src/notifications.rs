@@ -175,7 +175,7 @@ mod android {
 
     use super::{Command, Response};
 
-    const CLASS: &str = "io.gitlab.akergez.matterfast.Notifications";
+    const CLASS: &str = "app.akergez.matterfast.Notifications";
 
     /// What a pressed notification opens the activity with, before its tag.
     /// The same text is in `Notifications.java`.

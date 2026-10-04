@@ -30,7 +30,7 @@ fn app_icon() -> std::sync::Arc<Image> {
     ICON.get_or_init(|| {
         std::sync::Arc::new(Image::from_bytes(
             ImageFormat::Svg,
-            include_bytes!("../../../../data/icons/hicolor/scalable/apps/io.gitlab.akergez.Matterfast.svg")
+            include_bytes!("../../../../data/icons/hicolor/scalable/apps/app.akergez.Matterfast.svg")
                 .to_vec(),
         ))
     })

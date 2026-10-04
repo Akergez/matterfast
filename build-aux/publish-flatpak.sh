@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build Matterfast as a flatpak, and lay out the signed repository that
-# io.gitlab.akergez.Matterfast.flatpakref points at.
+# app.akergez.Matterfast.flatpakref points at.
 #
 #   build-aux/publish-flatpak.sh             build this machine's architecture
 #                                            into .flatpak-repo, nothing else
@@ -10,7 +10,7 @@
 # The two halves are separate because CI builds each architecture on its own
 # runner, one after the other into the same repository, and only then signs:
 # the key is needed once, in the one job that publishes, instead of on every
-# machine that compiles. The site is what GitLab Pages serves. It is laid out
+# machine that compiles. The site is what GitHub Pages serves. It is laid out
 # afresh on every publish, since Pages replaces the whole site anyway; a
 # client then fetches the new commit whole instead of as a delta against the
 # old one, which for one large binary costs next to nothing.
@@ -30,7 +30,7 @@ set -Eeuo pipefail
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 cd -- "$root"
 
-app_id=io.gitlab.akergez.Matterfast
+app_id=app.akergez.Matterfast
 app_branch=${FLATPAK_BRANCH:-stable}
 
 repo_dir=$root/.flatpak-repo

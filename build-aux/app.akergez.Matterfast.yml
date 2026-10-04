@@ -1,4 +1,4 @@
-id: io.gitlab.akergez.Matterfast
+id: app.akergez.Matterfast
 # The plain freedesktop runtime: the interface draws itself through GPUI on
 # Vulkan and needs nothing from GTK. GStreamer, which plays attachments and
 # call video, is part of this runtime.
@@ -41,26 +41,26 @@ modules:
     build-commands:
       - cargo build --profile dist --locked -p matterfast
       - install -Dm755 target/dist/matterfast /app/bin/matterfast
-      - install -Dm644 data/io.gitlab.akergez.Matterfast.desktop /app/share/applications/io.gitlab.akergez.Matterfast.desktop
-      - install -Dm644 data/io.gitlab.akergez.Matterfast.metainfo.xml /app/share/metainfo/io.gitlab.akergez.Matterfast.metainfo.xml
+      - install -Dm644 data/app.akergez.Matterfast.desktop /app/share/applications/app.akergez.Matterfast.desktop
+      - install -Dm644 data/app.akergez.Matterfast.metainfo.xml /app/share/metainfo/app.akergez.Matterfast.metainfo.xml
       # The fonts are compiled into the binary, and their licences ask to
       # travel with them.
       - install -Dm644 LICENSE
         crates/matterfast/assets/fonts/Inter-LICENSE.txt
         crates/matterfast/assets/fonts/Twemoji-LICENSE.md
-        -t /app/share/licenses/io.gitlab.akergez.Matterfast
+        -t /app/share/licenses/app.akergez.Matterfast
       # The icon ships rasterized. Both `flatpak build-export` and
       # appstreamcli load icons through glycin, which has no SVG loader in the
       # images this is built on, so an exported SVG fails the build outright. The
       # source of truth is still the SVG in data/.
       - rsvg-convert -w 128 -h 128 -o icon-128.png
-        data/icons/hicolor/scalable/apps/io.gitlab.akergez.Matterfast.svg
+        data/icons/hicolor/scalable/apps/app.akergez.Matterfast.svg
       - rsvg-convert -w 256 -h 256 -o icon-256.png
-        data/icons/hicolor/scalable/apps/io.gitlab.akergez.Matterfast.svg
+        data/icons/hicolor/scalable/apps/app.akergez.Matterfast.svg
       - install -Dm644 icon-128.png
-        /app/share/icons/hicolor/128x128/apps/io.gitlab.akergez.Matterfast.png
+        /app/share/icons/hicolor/128x128/apps/app.akergez.Matterfast.png
       - install -Dm644 icon-256.png
-        /app/share/icons/hicolor/256x256/apps/io.gitlab.akergez.Matterfast.png
+        /app/share/icons/hicolor/256x256/apps/app.akergez.Matterfast.png
     sources:
       - type: dir
         path: ..

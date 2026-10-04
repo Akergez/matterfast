@@ -92,7 +92,7 @@ for a bot, a CLI, or a different front end.
   choice for each. Besides the built-in pair, themes are the Zed editor's:
   none is shipped, the settings browse and install them from Zed's extension
   registry, and a Zed theme file dropped into
-  `~/.local/share/io.gitlab.akergez.Matterfast/themes/` is picked up at the
+  `~/.local/share/app.akergez.Matterfast/themes/` is picked up at the
   next start
 - **Ctrl+K** jumps to a channel or a person, opening the DM if there is not one
   yet
@@ -135,10 +135,10 @@ handles the scheme. A packaged build gets this for free. From a source tree:
 ```sh
 cargo build
 sed "s|^Exec=matterfast|Exec=$PWD/target/debug/matterfast|" \
-  data/io.gitlab.akergez.Matterfast.desktop \
-  > ~/.local/share/applications/io.gitlab.akergez.Matterfast.desktop
+  data/app.akergez.Matterfast.desktop \
+  > ~/.local/share/applications/app.akergez.Matterfast.desktop
 update-desktop-database ~/.local/share/applications
-xdg-mime default io.gitlab.akergez.Matterfast.desktop x-scheme-handler/mattermost-dev
+xdg-mime default app.akergez.Matterfast.desktop x-scheme-handler/mattermost-dev
 ```
 
 On Windows there is no installer and nothing to install: the application
@@ -160,13 +160,13 @@ on the ref file adds the remote and installs the app; everything after that is
 an ordinary `flatpak update`:
 
 ```sh
-flatpak install https://matterfast-63d8e7.gitlab.io/io.gitlab.akergez.Matterfast.flatpakref
+flatpak install https://akergez.github.io/matterfast/app.akergez.Matterfast.flatpakref
 ```
 
 The runtime comes from Flathub, so that remote has to exist — the ref file
 points at it and flatpak will offer to add it.
 
-Without flatpak, each [release](https://gitlab.com/ragusseven/matterfast/-/releases)
+Without flatpak, each [release](https://github.com/akergez/matterfast/releases)
 carries a tarball for x86_64 and for aarch64, a Windows zip for x86_64, an
 Android package and a macOS disk image for Apple silicon. The tarball is laid out like an install
 prefix, so unpacking it is the installation; the libraries listed under
@@ -308,15 +308,15 @@ including several behaviours that fail *silently* if you get them wrong.
 
 ## Continuous integration
 
-`.gitlab-ci.yml` runs on GitLab CI, on Linux runners and one Mac.
+`.github/workflows/ci.yml` runs on GitHub Actions, on Linux runners and one Mac.
 
 | When | What |
 |---|---|
-| every commit, on a branch or in a merge request | `cargo test --workspace`, the UI scenarios under a headless compositor, then the Linux tarballs, the Windows zip, the Android package and the macOS disk image, kept as job artifacts |
-| a version tag, `v1.2.3` | the same tests, then every package, the flatpak repository on GitLab Pages, and a release |
+| every commit, on a branch or in a pull request | `cargo test --workspace`, the UI scenarios under a headless compositor, then the Linux tarballs, the Windows zip, the Android package and the macOS disk image, kept as workflow artifacts |
+| a version tag, `v1.2.3` | the same tests, then every package, the flatpak repository on GitHub Pages, and a release |
 
 A commit's packages are built with the `release` profile and are not
-published anywhere; the flatpak is built from a tag only. A tag pipeline
+published anywhere; the flatpak is built from a tag only. A tag run
 builds, with the `dist` profile:
 
 - the flatpak for x86_64 and aarch64, natively on a runner of each
@@ -330,24 +330,22 @@ builds, with the `dist` profile:
 - a macOS disk image for Apple silicon, built on a Mac
   (`build-aux/package-macos.sh`).
 
-Each file goes into the project's package registry under the version, and
-the release links to them and carries the flatpak install command. The
+Each file is attached to the release, which
+carries the flatpak install command. The
 Android package and the macOS bundle take their version from the tag.
 
-The jobs pick their runner by tag: `linux-arm64` for the aarch64 Linux builds,
-`macos-arm64` for the macOS one, `linux-x86` for everything else, the Android
-build included: the NDK exists for no other Linux. The flatpak jobs need a
-privileged container, because flatpak-builder sandboxes the build with bwrap.
-
-The Mac is a runner with a shell executor, and has to have what a job cannot
-install for itself: Xcode (the toolkit's shaders are compiled by its Metal
-compiler, which is also why this build is not cross-compiled), rustup, and
-`brew install cmake librsvg`.
+The jobs run on GitHub's own runners: `ubuntu-24.04-arm` for the aarch64 Linux
+builds, `macos-15` (Apple silicon, with Xcode: the toolkit's shaders are
+compiled by its Metal compiler, which is also why this build is not
+cross-compiled) for the macOS one, `ubuntu-24.04` for everything else, the
+Android build included: the NDK exists for no other Linux. The flatpak jobs
+need a privileged container, because flatpak-builder sandboxes the build with
+bwrap.
 
 ### Signing the Android package
 
 Android installs an update only over a package signed with the same key, so
-every release is signed with one key, and a tag pipeline fails without it.
+every release is signed with one key, and a tag run fails without it.
 A commit's package is signed with a debug key made on the spot: it installs,
 but not over a release, and not over another commit's.
 
@@ -358,7 +356,7 @@ base64 < matterfast.p12 | tr -d '\n'
 ```
 
 Keep the keystore: a lost key means nobody can update without uninstalling
-first. Two CI/CD variables, masked, and protected only if the `v*` tags are:
+first. Two repository secrets (Settings → Secrets and variables → Actions):
 
 | Variable | Value |
 |---|---|
@@ -367,7 +365,7 @@ first. Two CI/CD variables, masked, and protected only if the `v*` tags are:
 
 ### Making a release
 
-The tag is the version, and `build-aux/check-version.sh` fails the pipeline
+The tag is the version, and `build-aux/check-version.sh` fails the run
 before anything is built if the crates say something else.
 
 ```sh
@@ -379,23 +377,23 @@ build-aux/check-version.sh v1.2.3                          # prints 1.2.3 when t
 # 2. commit, tag that commit, push both
 git commit -am 'Release 1.2.3'
 git tag v1.2.3
-git push origin master v1.2.3
+git push origin gpui v1.2.3
 ```
 
 ### Publishing the flatpak
 
 The two flatpak jobs run one after the other and build into the same ostree
-repository, which travels between them as a job artifact. The `pages` job then
-signs it, packs each architecture as a single `.flatpak` file for the package
-registry, and lays the repository out as the Pages site: the repository under `/repo`, and
-`io.gitlab.akergez.Matterfast.flatpakref` beside it with the public key
+repository, which travels between them as a workflow artifact. The `pages` job then
+signs it, packs each architecture as a single `.flatpak` file for the release,
+and lays the repository out as the Pages site: the repository under `/repo`, and
+`app.akergez.Matterfast.flatpakref` beside it with the public key
 embedded, so the install link above always carries the key that signed what
 it points at. There is no other host and no deploy key: Pages is served from
-the pipeline's own artifact.
+the workflow's own artifact.
 
-Three CI/CD variables drive it. Mask them. If you also protect them, protect
-the `v*` tags too (Settings → Repository → Protected tags), or the tag
-pipeline will not be given them:
+Three repository secrets drive it (Settings → Secrets and variables →
+Actions). The site is deployed with `actions/deploy-pages`, so set Settings →
+Pages → Source to "GitHub Actions" once:
 
 | Variable | Value |
 |---|---|
@@ -413,7 +411,7 @@ The same script builds locally, into `.flatpak-repo`:
 
 ```sh
 build-aux/publish-flatpak.sh
-flatpak install --user .flatpak-repo io.gitlab.akergez.Matterfast
+flatpak install --user .flatpak-repo app.akergez.Matterfast
 ```
 
 and the tarball is one more command after a dist build:

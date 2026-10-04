@@ -17,7 +17,7 @@ set -Eeuo pipefail
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 cd -- "$root"
 
-app_id=io.gitlab.akergez.Matterfast
+app_id=app.akergez.Matterfast
 binary=${MATTERFAST_BINARY:-target/${MATTERFAST_PROFILE:-dist}/matterfast}
 arch=$(uname -m)
 # The workspace version, unless the caller says otherwise.

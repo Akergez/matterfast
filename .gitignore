@@ -8,7 +8,7 @@
 /.flatpak-state
 
 # What CI keeps inside the checkout so that it can be cached
-# (.gitlab-ci.yml).
+# (.github/workflows/ci.yml).
 /.cargo-home
 /.xwin-cache
 /.android-sdk

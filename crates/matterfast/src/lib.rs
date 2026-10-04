@@ -39,7 +39,7 @@ mod video;
 mod zed_extensions;
 pub(crate) use matterfast_zed_theme as zed_theme;
 
-pub const APP_ID: &str = "io.gitlab.akergez.Matterfast";
+pub const APP_ID: &str = "app.akergez.Matterfast";
 
 /// The desktop entry point: what `main` is.
 #[cfg(not(target_os = "android"))]

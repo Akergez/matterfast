@@ -25,11 +25,11 @@ val keystore: String? = providers.environmentVariable("ANDROID_KEYSTORE").orNull
     ?.takeIf { it.isNotEmpty() }
 
 android {
-    namespace = "io.gitlab.akergez.matterfast"
+    namespace = "app.akergez.matterfast"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "io.gitlab.akergez.matterfast"
+        applicationId = "app.akergez.matterfast"
         minSdk = 26          // Vulkan 1.0 is mandatory from API 26
         targetSdk = 34
         versionCode = major * 1_000_000 + minor * 1_000 + patch

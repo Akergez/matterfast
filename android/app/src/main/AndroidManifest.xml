@@ -124,7 +124,7 @@
         <!-- None of the system's kinds fits a chat client that holds its own
              connection instead of being woken by Google's push service. -->
         <service
-            android:name="io.gitlab.akergez.matterfast.SessionService"
+            android:name="app.akergez.matterfast.SessionService"
             android:exported="false"
             android:foregroundServiceType="specialUse"
         >

@@ -1,4 +1,4 @@
-package io.gitlab.akergez.matterfast;
+package app.akergez.matterfast;
 
 import android.app.NotificationChannel;
 import android.app.NotificationManager;

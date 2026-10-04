@@ -21,7 +21,7 @@ set -Eeuo pipefail
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 cd -- "$root"
 
-app_id=io.gitlab.akergez.Matterfast
+app_id=app.akergez.Matterfast
 binary=${MATTERFAST_BINARY:-target/${MATTERFAST_PROFILE:-release}/matterfast}
 # The workspace version, unless the caller says otherwise.
 version=${1:-$(sed -n '/^\[workspace\.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)}

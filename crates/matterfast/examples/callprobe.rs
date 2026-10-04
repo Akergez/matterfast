@@ -174,5 +174,5 @@ fn credentials() -> Result<(String, String), Box<dyn std::error::Error>> {
 }
 
 fn matterfast_app_id() -> &'static str {
-    "io.gitlab.akergez.Matterfast"
+    "app.akergez.Matterfast"
 }

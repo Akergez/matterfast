@@ -8,7 +8,7 @@ edition = "2021"
 rust-version = "1.85"
 license = "GPL-3.0-only"
 authors = ["Akergez"]
-repository = "https://gitlab.com/ragusseven/matterfast"
+repository = "https://github.com/akergez/matterfast"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
