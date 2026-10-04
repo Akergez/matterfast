@@ -1,0 +1,12 @@
+[package]
+name = "matterfast-markdown"
+version.workspace = true
+edition = "2024"
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+matterfast-emoji = { path = "../matterfast-emoji" }
+pulldown-cmark = { version = "0.13.4", default-features = false }

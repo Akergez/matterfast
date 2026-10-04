@@ -1,0 +1,12 @@
+[package]
+name = "matterfast-timefmt"
+version.workspace = true
+edition = "2024"
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+chrono = "0.4"
+mattermost-api = { path = "../mattermost-api" }

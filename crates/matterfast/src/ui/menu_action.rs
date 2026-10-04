@@ -1,0 +1,28 @@
+/// The entries in the two header menus.
+#[derive(Debug, Clone, Copy)]
+pub enum MenuAction {
+    NewChannel,
+    BrowseChannels,
+    AccountNotifications,
+    EditProfile,
+    CustomStatus,
+    QuickSwitch,
+    SignOut,
+    ScheduledPosts,
+    ChannelMembers,
+    ChannelBookmarks,
+    BrowseTeams,
+    NewCategory,
+    LeaveTeam,
+    FocusSearch,
+    OpenInbox,
+    NextUnread,
+    PreviousUnread,
+    EditChannel,
+    ArchiveChannel,
+    ChannelNotifications,
+    LeaveChannel,
+    PinnedPosts,
+    Storage,
+    Settings,
+}

@@ -39,7 +39,7 @@ modules:
       build-args:
         - --share=network
     build-commands:
-      - cargo build --profile dist --locked
+      - cargo build --profile dist --locked -p matterfast
       - install -Dm755 target/dist/matterfast /app/bin/matterfast
       - install -Dm644 data/io.gitlab.akergez.Matterfast.desktop /app/share/applications/io.gitlab.akergez.Matterfast.desktop
       - install -Dm644 data/io.gitlab.akergez.Matterfast.metainfo.xml /app/share/metainfo/io.gitlab.akergez.Matterfast.metainfo.xml

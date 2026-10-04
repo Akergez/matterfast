@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/mattermost-api", "crates/mattermost-calls", "crates/matterfast", "crates/matterfast-testserver"]
+members = ["crates/mattermost-api", "crates/mattermost-calls", "crates/matterfast", "crates/matterfast-timefmt", "crates/matterfast-emoji", "crates/matterfast-paths", "crates/matterfast-zed-theme", "crates/matterfast-markdown", "crates/matterfast-testserver"]
 
 [workspace.package]
 version = "1.0.1"

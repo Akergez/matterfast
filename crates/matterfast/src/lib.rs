@@ -15,14 +15,14 @@ mod avatars;
 mod background;
 mod cache;
 mod demo;
-mod emoji;
+pub(crate) use matterfast_emoji as emoji;
 mod fonts;
 // Android keeps one activity itself, so only the requests are used there.
 #[cfg_attr(target_os = "android", allow(dead_code))]
 mod ipc;
-mod markdown;
+pub(crate) use matterfast_markdown as markdown;
 mod notifications;
-mod paths;
+pub(crate) use matterfast_paths as paths;
 #[cfg_attr(not(target_os = "linux"), path = "playback_stub.rs")]
 mod playback;
 mod resource_cache;
@@ -31,13 +31,13 @@ mod session;
 mod state;
 mod store;
 mod themes;
-mod timefmt;
+pub(crate) use matterfast_timefmt as timefmt;
 mod ui;
 #[cfg(any(windows, test))]
 mod url_scheme;
 mod video;
 mod zed_extensions;
-mod zed_theme;
+pub(crate) use matterfast_zed_theme as zed_theme;
 
 pub const APP_ID: &str = "io.gitlab.akergez.Matterfast";
 

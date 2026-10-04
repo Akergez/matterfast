@@ -25,7 +25,7 @@ mod audio;
 #[path = "../src/runtime.rs"]
 #[allow(dead_code)] // the example only needs the Tokio handle
 mod runtime;
-#[path = "../src/video.rs"]
+#[path = "../src/video/mod.rs"]
 #[allow(dead_code, unused_imports)] // the half that draws needs a window, and this has none
 mod video;
 
