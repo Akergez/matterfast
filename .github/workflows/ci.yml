@@ -251,12 +251,13 @@ jobs:
             org.freedesktop.Sdk.Extension.rust-stable//25.08
       - run: build-aux/publish-flatpak.sh
       # The unsigned ostree repository, handed to the next job. It only has to
-      # outlive the run.
+      # outlive the run. It travels as a tar: an artifact drops empty
+      # directories (ostree needs refs/remotes) and file modes.
+      - run: tar -cf flatpak-repo.tar .flatpak-repo
       - uses: actions/upload-artifact@v4
         with:
           name: flatpak-repo-x86_64
-          path: .flatpak-repo
-          include-hidden-files: true
+          path: flatpak-repo.tar
           retention-days: 1
 
   flatpak-aarch64:
@@ -273,7 +274,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: flatpak-repo-x86_64
-          path: .flatpak-repo
+          path: handoff
       - name: Flatpak runtime
         run: |
           dbus-uuidgen > /etc/machine-id
@@ -281,12 +282,13 @@ jobs:
             org.freedesktop.Platform//25.08 \
             org.freedesktop.Sdk//25.08 \
             org.freedesktop.Sdk.Extension.rust-stable//25.08
+      - run: tar -xf handoff/flatpak-repo.tar
       - run: build-aux/publish-flatpak.sh
+      - run: tar -cf flatpak-repo.tar .flatpak-repo
       - uses: actions/upload-artifact@v4
         with:
           name: flatpak-repo
-          path: .flatpak-repo
-          include-hidden-files: true
+          path: flatpak-repo.tar
           retention-days: 1
 
   # --------------------------------------------------------------- publish
@@ -312,8 +314,9 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: flatpak-repo
-          path: .flatpak-repo
+          path: handoff
       - run: |
+          tar -xf handoff/flatpak-repo.tar
           dbus-uuidgen > /etc/machine-id
           build-aux/publish-flatpak.sh --site public
         env:
