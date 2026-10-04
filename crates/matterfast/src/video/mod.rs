@@ -28,6 +28,8 @@ mod show_remote;
 
 pub use frame::Frame;
 pub use frame_image::frame_image;
+#[cfg(target_os = "linux")]
+pub use init_gstreamer::init_gstreamer;
 pub use pipe::{pick_screen, VideoSender};
 pub use remote_view::RemoteView;
 pub use show_remote::show_remote;

@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use gstreamer as gst;
-use gstreamer::prelude::*;
 use gstreamer_app as gst_app;
 use gstreamer_video as gst_video;
 use mattermost_calls::{Marshal, TrackRemote};
