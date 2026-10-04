@@ -198,11 +198,20 @@ variables:
     # Google's command-line tools, by their build number.
     ANDROID_SDK_TOOLS: "13114758"
     CARGO_NDK_VERSION: "4.1.2"
+    # Not Debian's 3.25. The C libraries in the tree (opus) ask for a CMake
+    # older than the NDK's own scripts can run under, and only CMake 4 can be
+    # told to raise that, which is what CMAKE_POLICY_VERSION_MINIMUM in
+    # build-android.sh does.
+    CMAKE_VERSION: "4.3.1"
   before_script:
     - rustup target add aarch64-linux-android
     - apt-get update -q
     - apt-get install -y -q --no-install-recommends
-        cmake libclang-dev openjdk-17-jdk-headless unzip
+        libclang-dev openjdk-17-jdk-headless unzip
+    - curl --fail --silent --show-error --location
+        "https://github.com/Kitware/CMake/releases/download/v$CMAKE_VERSION/cmake-$CMAKE_VERSION-linux-x86_64.tar.gz"
+        | tar -xz -C /usr/local --strip-components=1
+    - cmake --version
     # Beside cargo itself: $CARGO_HOME/bin is not on PATH here.
     - cargo install cargo-ndk --locked --version "$CARGO_NDK_VERSION" --root /usr/local
     - |

@@ -173,7 +173,7 @@ prefix, so unpacking it is the installation; the libraries listed under
 "Building" have to come from the distribution:
 
 ```sh
-tar -xzf matterfast-1.0.0-linux-x86_64.tar.gz --strip-components=1 -C ~/.local
+tar -xzf matterfast-1.0.1-linux-x86_64.tar.gz --strip-components=1 -C ~/.local
 ```
 
 The macOS application is not signed by an Apple developer account, so a
