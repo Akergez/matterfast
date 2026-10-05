@@ -54,6 +54,7 @@ pub fn render(ui: &Rc<Ui>, dock: Option<AnyElement>, cx: &mut App) -> AnyElement
     let last = rows.len().saturating_sub(1);
     let row_ui = ui.clone();
     let channels = list(ui.channels.list.clone(), move |index, _, cx| {
+        let began = std::time::Instant::now();
         let st = row_ui.state.borrow();
         let row = match rows.get(index) {
             Some(Row::Category(id)) => st
@@ -71,6 +72,7 @@ pub fn render(ui: &Rc<Ui>, dock: Option<AnyElement>, cx: &mut App) -> AnyElement
         // A row the state no longer has is gone from the list one frame
         // later; until then it takes the room it was promised.
         let row = row.unwrap_or_else(|| div().h(px(ROW_HEIGHT)).into_any_element());
+        crate::ui::frame_log::row(crate::ui::Part::Sidebar, began);
         div()
             .w_full()
             .when(index == last, |row| row.pb_2())

@@ -20,12 +20,15 @@ pub(super) fn feed(ui: &Rc<Ui>, cx: &App) -> AnyElement {
         let chat = &row_ui.chat;
         let items = chat.items.borrow();
         let highlight = chat.highlight.borrow();
-        match items.get(index) {
+        let began = std::time::Instant::now();
+        let row = match items.get(index) {
             Some(item) => render_item(&row_ui, item, highlight.as_deref(), cx),
             // The list was told about a row the feed no longer has; one frame
             // later it will not be asked for.
             None => div().into_any_element(),
-        }
+        };
+        crate::ui::frame_log::row(crate::ui::Part::Chat, began);
+        row
     })
     .size_full()
     .py_3();

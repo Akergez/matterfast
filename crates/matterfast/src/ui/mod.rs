@@ -21,6 +21,7 @@ pub(crate) mod channel_icon;
 mod chat;
 mod constants;
 mod dialogs;
+mod frame_log;
 mod group;
 mod interactive;
 mod kit;

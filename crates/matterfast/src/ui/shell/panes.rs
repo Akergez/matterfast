@@ -6,7 +6,7 @@ use gpui_kit::{
 };
 
 use super::shell_view::Shell;
-use crate::ui::Ui;
+use crate::ui::{frame_log, Ui};
 
 /// Which of the three columns a [`Pane`] draws.
 #[derive(Clone, Copy)]
@@ -39,7 +39,13 @@ impl Render for Pane {
         // The call dock sits under the channel list, and under the
         // conversation once the list is a page of its own.
         let collapsed = ui.split.collapsed.get();
-        match self.which {
+        let began = std::time::Instant::now();
+        let part = match self.which {
+            Which::Sidebar => Part::Sidebar,
+            Which::Chat => Part::Chat,
+            Which::Right => Part::Right,
+        };
+        let content = match self.which {
             Which::Sidebar => {
                 let dock = (!collapsed)
                     .then(|| crate::ui::call_dock::render(ui, cx))
@@ -57,7 +63,17 @@ impl Render for Pane {
                 ui.learn_unknown_mentions();
                 crate::ui::rhs::render(ui, cx).unwrap_or_else(|| div().into_any_element())
             }
+        };
+        if !frame_log::enabled() {
+            return content;
         }
+        frame_log::built(part, began);
+        div()
+            .size_full()
+            .child(frame_log::mark(part, false))
+            .child(content)
+            .child(frame_log::mark(part, true))
+            .into_any_element()
     }
 }
 

@@ -17,6 +17,7 @@ use crate::ui::MenuAction;
 
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::ui::frame_log::begin();
         let theme = cx.theme().clone();
         let notice = self.notice.borrow_mut().take();
         if let Some(notice) = notice {
@@ -91,5 +92,8 @@ impl Render for Shell {
             .child(title_bar)
             .child(div().flex_1().min_h_0().w_full().child(body))
             .pb(px(bars_bottom))
+            .when(crate::ui::frame_log::enabled(), |shell| {
+                shell.child(crate::ui::frame_log::end())
+            })
     }
 }
