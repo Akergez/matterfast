@@ -29,7 +29,7 @@ impl CallDock {
     /// The dock is drawn from the call in the state, so a refresh is a frame.
     /// Answers whether there is a call to show at all.
     pub fn refresh(&self, state: &SharedState, cx: &mut App) -> bool {
-        cx.refresh_windows();
+        crate::ui::refresh(cx);
         let in_call = state.borrow().call.is_some();
         if !in_call {
             // A caption belongs to the call it was said in.

@@ -72,6 +72,16 @@ pub struct Ui {
     pub(crate) stills_tried: RefCell<HashSet<String>>,
     /// The image being looked at full size, if one is.
     pub(crate) lightbox: RefCell<Option<lightbox::Open>>,
+    /// The message the pointer was last over. Only that one is given its
+    /// bar of actions: building one for every row in sight, on every frame,
+    /// cost more than drawing the messages themselves. It is not cleared
+    /// when the pointer leaves, so a palette opened from the bar keeps the
+    /// bar it hangs from.
+    pub(crate) hovered_post: RefCell<Option<String>>,
+    /// The mentions waiting across the team, as last counted for the window's
+    /// title. The title bar shows the same number and is drawn on every
+    /// frame, and counting is a walk over every channel.
+    pub(crate) mentions: Cell<i64>,
 }
 
 impl Ui {
@@ -112,6 +122,8 @@ impl Ui {
             players: RefCell::new(HashMap::new()),
             stills_tried: RefCell::new(HashSet::new()),
             lightbox: RefCell::new(None),
+            hovered_post: RefCell::new(None),
+            mentions: Cell::new(0),
             window,
             state,
         });
@@ -132,7 +144,7 @@ impl Ui {
                 }
                 runtime::after(AVATAR_REDRAW_WAIT, move |cx| {
                     ui.avatar_redraw_pending.set(false);
-                    cx.refresh_windows();
+                    crate::ui::refresh(cx);
                 });
             }
         });

@@ -97,6 +97,7 @@ impl ChatView {
         let weak = Rc::downgrade(ui);
         let armed = self.pagination_armed.clone();
         self.list.set_scroll_handler(move |event, _, cx| {
+            crate::ui::frame_log::wheel();
             if scroll_trace_enabled() {
                 tracing::info!(
                     target: "matterfast::scroll",

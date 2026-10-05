@@ -89,7 +89,7 @@ impl Render for Shell {
             // Under the status bar, in the title bar's colour so that the two
             // read as one.
             .child(div().flex_none().h(px(bars_top)).w_full().bg(theme.sidebar))
-            .child(title_bar)
+            .child(crate::ui::frame_log::timed("title", title_bar))
             .child(div().flex_1().min_h_0().w_full().child(body))
             .pb(px(bars_bottom))
             .when(crate::ui::frame_log::enabled(), |shell| {

@@ -20,6 +20,6 @@ mod thread_footer;
 
 pub use emoji_element::emoji_element;
 pub use markdown_view::markdown;
-pub(crate) use mention::audience;
+pub(crate) use mention::mark_mine;
 pub use row::row;
 pub use system_block::system_block;

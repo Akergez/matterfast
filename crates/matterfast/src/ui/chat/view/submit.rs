@@ -56,7 +56,7 @@ impl ChatView {
         });
         // The text did change, and the draft should follow it.
         ui.dispatch(Action::ComposerChanged(true), cx);
-        cx.refresh_windows();
+        crate::ui::refresh(cx);
         true
     }
 

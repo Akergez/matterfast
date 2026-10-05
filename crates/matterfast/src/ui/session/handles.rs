@@ -41,7 +41,7 @@ impl Ui {
                 // The text of a message is prepared when the list is built,
                 // so the list has to be built again to say their names.
                 ui.refresh_messages(cx);
-                cx.refresh_windows();
+                crate::ui::refresh(cx);
             },
         );
     }

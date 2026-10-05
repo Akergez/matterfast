@@ -1,0 +1,14 @@
+# mode: demo
+# size: 1320x840
+#
+# The title bar says how many mentions are waiting, and reading the
+# conversation that holds one takes it off the count.
+wait:2500
+expect:mentions=1
+move:80,331
+wait:300
+click:92,331
+wait:1200
+expect:channel=Lena Petrova
+expect:mentions=0
+quit

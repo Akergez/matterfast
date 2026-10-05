@@ -28,7 +28,7 @@ pub(super) fn feed(ui: &Rc<Ui>, cx: &App) -> AnyElement {
             None => div().into_any_element(),
         };
         crate::ui::frame_log::row(crate::ui::Part::Chat, began);
-        row
+        crate::ui::frame_log::timed("row", row)
     })
     .size_full()
     .py_3();
@@ -73,7 +73,7 @@ pub(super) fn feed(ui: &Rc<Ui>, cx: &App) -> AnyElement {
                             .tooltip("Jump to latest")
                             .on_click(ui.click(|ui, cx| {
                                 ui.chat.scroll_to_newest("jump-button");
-                                cx.refresh_windows();
+                                crate::ui::refresh(cx);
                             })),
                     ),
             )

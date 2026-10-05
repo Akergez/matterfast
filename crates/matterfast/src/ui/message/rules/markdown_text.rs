@@ -26,7 +26,7 @@ pub fn system_markdown(text: &str, st: &AppState) -> String {
 /// usernames, groups, and the special ones the server resolves for everyone.
 pub fn message_markdown(text: &str, st: &AppState) -> String {
     let display = st.teammate_name_display().to_string();
-    crate::markdown::prepare_full(
+    let prepared = crate::markdown::prepare_full(
         text,
         &|handle| {
             // The special ones address everybody and have no account behind
@@ -53,7 +53,8 @@ pub fn message_markdown(text: &str, st: &AppState) -> String {
         },
         &|name| st.custom_emoji.contains(name),
         crate::markdown::Sigil::Keep,
-    )
+    );
+    crate::ui::message::mark_mine(prepared, &st.me.username)
 }
 
 #[cfg(test)]

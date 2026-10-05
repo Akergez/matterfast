@@ -31,6 +31,9 @@
 //! - `search-hits=<n>` — how many messages the last search found
 //! - `sidebar-width=<px>|auto`, `panel-width=<px>|auto` — what a side column
 //!   was dragged to, or `auto` for one left at its share of the window
+//! - `mentions=<n>` — the count the title bar is showing
+//! - `pointed=yes|no` — whether a message has had the pointer over it, which
+//!   is what gives it its bar of actions
 //!
 //! Coordinates are divided by `MATTERFAST_SCRIPT_SCALE`, so they can be read
 //! straight off a screenshot taken on a scaled display.
@@ -166,6 +169,11 @@ fn observe(what: &str, window: &mut Window, cx: &mut App) -> Option<String> {
             };
             ui.and_then(|ui| ui.widths.get(divider))
                 .map_or("auto".to_string(), |width| width.round().to_string())
+        }
+        "mentions" => ui.map_or(0, |ui| ui.mentions.get()).to_string(),
+        "pointed" => {
+            let pointed = ui.is_some_and(|ui| ui.hovered_post.borrow().is_some());
+            if pointed { "yes" } else { "no" }.to_string()
         }
         _ => return None,
     })

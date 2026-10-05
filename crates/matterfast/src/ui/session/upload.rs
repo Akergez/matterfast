@@ -125,6 +125,6 @@ impl Ui {
     pub(crate) fn refresh_attachments(self: &Rc<Self>, cx: &mut App) {
         // The chips are drawn from the state's own list of waiting files, so
         // all there is to do is draw again.
-        cx.refresh_windows();
+        crate::ui::refresh(cx);
     }
 }

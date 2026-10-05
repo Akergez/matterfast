@@ -36,7 +36,7 @@ impl Shell {
                 let _ = cx.update(|cx| {
                     if crate::appearance::behind_the_system(cx) {
                         crate::appearance::apply(None, cx);
-                        cx.refresh_windows();
+                        crate::ui::refresh(cx);
                     }
                 });
             })

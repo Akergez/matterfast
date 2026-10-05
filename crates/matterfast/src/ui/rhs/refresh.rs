@@ -40,7 +40,7 @@ impl RightPanel {
             }
         }
         drop(st);
-        cx.refresh_windows();
+        crate::ui::refresh(cx);
     }
 
     fn refresh_thread(&self, root_id: &str, st: &AppState) {

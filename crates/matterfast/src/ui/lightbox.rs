@@ -52,7 +52,7 @@ pub fn show(
     if let Some(previous) = previous {
         cx.drop_image(previous.picture, None);
     }
-    cx.refresh_windows();
+    crate::ui::refresh(cx);
 }
 
 /// Puts the lightbox away, whichever of its two uses it was in. Answers
@@ -69,7 +69,7 @@ pub fn dismiss(ui: &Rc<Ui>, cx: &mut App) -> bool {
     }
     let dismissed = image.is_some() || video.is_some();
     if dismissed {
-        cx.refresh_windows();
+        crate::ui::refresh(cx);
     }
     dismissed
 }

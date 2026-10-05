@@ -77,7 +77,7 @@ pub(super) fn composer(ui: &Rc<Ui>, cx: &App) -> AnyElement {
                         if ui.chat.completing() {
                             ui.chat.completions.borrow_mut().step(-1);
                             cx.stop_propagation();
-                            cx.refresh_windows();
+                            crate::ui::refresh(cx);
                         }
                     }
                 })
@@ -87,7 +87,7 @@ pub(super) fn composer(ui: &Rc<Ui>, cx: &App) -> AnyElement {
                         if ui.chat.completing() {
                             ui.chat.completions.borrow_mut().step(1);
                             cx.stop_propagation();
-                            cx.refresh_windows();
+                            crate::ui::refresh(cx);
                         }
                     }
                 })
@@ -122,7 +122,7 @@ pub(super) fn composer(ui: &Rc<Ui>, cx: &App) -> AnyElement {
                         if ui.chat.completing() {
                             ui.chat.completions.borrow_mut().close();
                             cx.stop_propagation();
-                            cx.refresh_windows();
+                            crate::ui::refresh(cx);
                             // Whatever is in flight for the closed query must
                             // not reopen the list.
                             ui.dispatch(Action::Complete(None), cx);

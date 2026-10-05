@@ -34,7 +34,7 @@ impl SearchBox {
             }
         }
         drop(rows);
-        cx.refresh_windows();
+        crate::ui::refresh(cx);
     }
 
     /// The text or the cursor moved: works out what to suggest now.
@@ -58,7 +58,7 @@ impl SearchBox {
         if person {
             ui.dispatch(Action::SearchPeople, cx);
         }
-        cx.refresh_windows();
+        crate::ui::refresh(cx);
     }
 
     pub(super) fn step(&self, delta: i32) {
@@ -109,6 +109,6 @@ impl SearchBox {
         }
         self.close();
         ui.dispatch(Action::Search(terms), cx);
-        cx.refresh_windows();
+        crate::ui::refresh(cx);
     }
 }

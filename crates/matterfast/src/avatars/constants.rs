@@ -26,11 +26,9 @@ pub(super) const VIDEO_HEAD_BYTES: u64 = 1_500_000;
 /// unit by two orders of magnitude: an avatar is a few kilobytes and a posted
 /// screenshot at draw size is four megabytes, so "a hundred and fifty of
 /// them" meant anywhere between half a megabyte and six hundred. Evicting one
-/// costs a refetch and nothing else — a picture still on screen is held by
-/// the widget showing it.
-///
-/// ponytail: oldest-inserted rather than least-recently-used. An LRU needs
-/// the read path to write, and the read path here is every redraw.
+/// costs a refetch — and a redraw of everything when it lands, which is why
+/// the one to go is the one longest unseen (`Inner::seen`) and not the one
+/// that has been here longest.
 pub(super) const MAX_TEXTURE_BYTES: usize = 96 * 1024 * 1024;
 
 /// Video heads are a megabyte and a half each and are only read once, to make

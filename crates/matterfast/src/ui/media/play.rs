@@ -66,11 +66,11 @@ impl Ui {
                             }
                             Err(error) => player.failed(&error),
                         }
-                        cx.refresh_windows();
+                        crate::ui::refresh(cx);
                     },
                 );
             }
         }
-        cx.refresh_windows();
+        crate::ui::refresh(cx);
     }
 }

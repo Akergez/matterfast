@@ -48,7 +48,7 @@ impl Widths {
     pub fn set(&self, divider: Divider, width: Option<f32>, cx: &mut App) {
         if self.cell(divider).replace(width) != width {
             self.unsaved.set(true);
-            cx.refresh_windows();
+            crate::ui::refresh(cx);
         }
     }
 

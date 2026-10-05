@@ -39,6 +39,6 @@ mod with_shell;
 
 pub use init::init;
 pub use matterfast::current;
-pub use panes::{redraw, Part};
+pub use panes::{redraw, refresh, Part};
 pub use present::{handle_request, present};
 pub use signed_out::signed_out;

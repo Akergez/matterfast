@@ -24,7 +24,7 @@ impl ChatView {
                 self.items.borrow_mut().clear();
                 self.list.reset(0);
             }
-            cx.refresh_windows();
+            crate::ui::refresh(cx);
             return;
         };
         let channel_id = channel.id.clone();
@@ -94,6 +94,6 @@ impl ChatView {
                 _ => self.scroll_to_newest("channel-open"),
             }
         }
-        cx.refresh_windows();
+        crate::ui::refresh(cx);
     }
 }

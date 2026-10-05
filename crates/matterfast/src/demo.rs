@@ -113,13 +113,31 @@ pub fn state() -> SharedState {
     st.feeds.insert("c-dev".into(), dev_channel_feed());
     st.feeds.insert(
         "c-general".into(),
-        feed(vec![post(
-            "p-g1",
-            "c-general",
-            "u-sara",
-            "Standup moved to 10:15 tomorrow.",
-            BASE - 3_600_000,
-        )]),
+        feed(vec![
+            post(
+                "p-g1",
+                "c-general",
+                "u-sara",
+                "Standup moved to 10:15 tomorrow.",
+                BASE - 3_600_000,
+            ),
+            // Somebody else named, and the reader: the two ways a mention is
+            // drawn, at the start of a line where a scenario can find them.
+            post(
+                "p-g2",
+                "c-general",
+                "u-mikk",
+                "@lena will you take the notes?",
+                BASE - 3_000_000,
+            ),
+            post(
+                "p-g3",
+                "c-general",
+                "u-mikk",
+                "@anton you are up after her.",
+                BASE - 2_940_000,
+            ),
+        ]),
     );
 
     // A thread hanging off p-5, so the right-hand panel has something real to

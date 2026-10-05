@@ -85,13 +85,13 @@ impl RightPanel {
             self.list.set_follow_mode(FollowMode::Tail);
         }
         *self.mode.borrow_mut() = mode;
-        cx.refresh_windows();
+        crate::ui::refresh(cx);
     }
 
     /// Reflects whether the open thread is followed.
     pub fn set_following(&self, following: bool, cx: &mut App) {
         if self.following.replace(following) != following {
-            cx.refresh_windows();
+            crate::ui::refresh(cx);
         }
     }
 
@@ -99,7 +99,7 @@ impl RightPanel {
     /// threads and no mentions, which would otherwise land on an empty list.
     pub fn show_threads_tab(&self, cx: &mut App) {
         self.tab.set(InboxTab::Threads);
-        cx.refresh_windows();
+        crate::ui::refresh(cx);
     }
 
     /// A new search starts at its newest hit, wherever the last one was left.

@@ -36,7 +36,7 @@ pub fn render(ui: &Rc<Ui>, width: f32, window: &Window, cx: &mut App) -> AnyElem
                 if ui.search_box.is_open() {
                     ui.search_box.step(-1);
                     cx.stop_propagation();
-                    cx.refresh_windows();
+                    crate::ui::refresh(cx);
                 }
             }
         })
@@ -46,7 +46,7 @@ pub fn render(ui: &Rc<Ui>, width: f32, window: &Window, cx: &mut App) -> AnyElem
                 if ui.search_box.is_open() {
                     ui.search_box.step(1);
                     cx.stop_propagation();
-                    cx.refresh_windows();
+                    crate::ui::refresh(cx);
                 }
             }
         })
@@ -78,7 +78,7 @@ pub fn render(ui: &Rc<Ui>, width: f32, window: &Window, cx: &mut App) -> AnyElem
                 if ui.search_box.is_open() {
                     ui.search_box.close();
                     cx.stop_propagation();
-                    cx.refresh_windows();
+                    crate::ui::refresh(cx);
                 }
             }
         })

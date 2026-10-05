@@ -59,7 +59,7 @@ pub(super) fn inbox_view(ui: &Rc<Ui>, cx: &App) -> AnyElement {
                     2 => InboxTab::Saved,
                     _ => InboxTab::Mentions,
                 });
-                cx.refresh_windows();
+                crate::ui::refresh(cx);
             }
         });
 

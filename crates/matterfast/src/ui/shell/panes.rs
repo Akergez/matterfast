@@ -121,6 +121,18 @@ pub fn redraw(parts: &[Part], cx: &mut App) {
     }
 }
 
+/// Draws every column again, kept or not.
+///
+/// This is `refresh_windows` and nothing more, but a frame log is told where
+/// it was asked for from: a column built in a frame that nothing touched it
+/// in was built for one of these, and there are too many of them to guess
+/// among.
+#[track_caller]
+pub fn refresh(cx: &mut App) {
+    frame_log::asked(std::panic::Location::caller());
+    cx.refresh_windows();
+}
+
 /// The columns of one session, for as long as a window shows it.
 pub(super) struct Panes {
     sidebar: Entity<Pane>,

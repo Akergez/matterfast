@@ -110,7 +110,7 @@ impl Split {
 
     pub fn set_show_content(&self, show: bool, cx: &mut App) {
         if self.show_content.replace(show) != show {
-            cx.refresh_windows();
+            crate::ui::refresh(cx);
         }
     }
 }

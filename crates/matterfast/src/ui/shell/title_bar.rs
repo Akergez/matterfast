@@ -76,10 +76,9 @@ impl Shell {
         let Some(ui) = self.session().cloned() else {
             return framed().child(bar.child(name)).into_any_element();
         };
-        let (server, mentions) = {
-            let st = ui.state.borrow();
-            (pretty_server(st.client.site_url()), st.total_mentions())
-        };
+        let server = pretty_server(ui.state.borrow().client.site_url());
+        // Counted where the window's title is, not here: see `Ui::mentions`.
+        let mentions = ui.mentions.get();
         if roomy {
             name = name.child(
                 div()

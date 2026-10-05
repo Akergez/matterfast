@@ -48,7 +48,7 @@ impl Ui {
                 // of starting a decoder over again.
                 if let Some(still) = still {
                     ui.avatars.remember_poster(&file_id, Arc::new(still), cx);
-                    cx.refresh_windows();
+                    crate::ui::refresh(cx);
                 }
             },
         );

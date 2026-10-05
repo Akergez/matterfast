@@ -38,7 +38,7 @@ pub(super) fn main_menu(ui: &Rc<Ui>) -> AnyElement {
                         .checked(Background::enabled())
                         .on_click(|_, _, cx| {
                             Background::set_enabled(!Background::enabled());
-                            cx.refresh_windows();
+                            crate::ui::refresh(cx);
                         }),
                 )
                 .item(PopupMenuItem::new("Quit").on_click(|_, _, cx| cx.quit()))

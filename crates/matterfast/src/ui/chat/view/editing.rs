@@ -35,7 +35,7 @@ impl ChatView {
     /// and a sticky "urgent" would quietly escalate everything after it.
     pub fn reset_priority(&self, cx: &mut App) {
         self.priority.borrow_mut().clear();
-        cx.refresh_windows();
+        crate::ui::refresh(cx);
     }
 
     pub(crate) fn set_priority(&self, priority: &str, cx: &mut App) {
@@ -43,6 +43,6 @@ impl ChatView {
             "important" | "urgent" => priority.to_string(),
             _ => String::new(),
         };
-        cx.refresh_windows();
+        crate::ui::refresh(cx);
     }
 }

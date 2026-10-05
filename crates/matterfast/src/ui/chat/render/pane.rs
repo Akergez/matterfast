@@ -13,7 +13,7 @@ use super::feed_list::feed;
 use super::header::header;
 use crate::ui::chat::status_lines::{call_banner_text, typing_text};
 use crate::ui::kit::{self, Lucide};
-use crate::ui::{Action, Ui};
+use crate::ui::{frame_log, Action, Ui};
 
 /// Draws the conversation pane. `narrow` is whether the channel list is a
 /// page behind this one rather than a column beside it; `dock` is the call
@@ -39,7 +39,7 @@ pub fn render(ui: &Rc<Ui>, narrow: bool, dock: Option<AnyElement>, cx: &mut App)
         .size_full()
         .min_w_0()
         .bg(cx.theme().background)
-        .child(header(ui, narrow, cx));
+        .child(frame_log::timed("header", header(ui, narrow, cx)));
 
     if !has_channel {
         return pane
@@ -85,7 +85,7 @@ pub fn render(ui: &Rc<Ui>, narrow: bool, dock: Option<AnyElement>, cx: &mut App)
                 .child(Spinner::new().large()),
         );
     } else {
-        pane = pane.child(feed(ui, cx));
+        pane = pane.child(frame_log::timed("feed", feed(ui, cx)));
     }
 
     // Editing is a mode, and a mode you cannot see is a trap: the banner says
@@ -121,7 +121,7 @@ pub fn render(ui: &Rc<Ui>, narrow: bool, dock: Option<AnyElement>, cx: &mut App)
         pane = pane.child(row);
     }
 
-    pane.child(composer(ui, cx))
+    pane.child(frame_log::timed("composer", composer(ui, cx)))
         .when_some(dock, |pane, dock| pane.child(dock))
         // Dropping files anywhere over the conversation attaches them. The
         // target is the whole pane rather than the composer: aiming at a

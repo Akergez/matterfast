@@ -18,7 +18,7 @@ use super::thread_footer::thread_footer;
 use crate::timefmt::format_time;
 use crate::ui::message::rules::{custom_status_tooltip, status_is_live};
 use crate::ui::message::RowOptions;
-use crate::ui::{kit, Ui};
+use crate::ui::{frame_log, kit, Ui};
 
 /// Builds a message row.
 ///
@@ -87,11 +87,14 @@ pub fn row(
                 meta = meta.child(kit::tag("IMPORTANT", theme.primary, theme.primary_foreground));
             }
         }
-        content = content.child(meta);
+        content = content.child(frame_log::timed("meta", meta));
     }
 
     if !body.is_empty() {
-        content = content.child(markdown(eid("body"), body.clone()));
+        content = content.child(frame_log::timed(
+            "body",
+            markdown(eid("body"), body.clone()),
+        ));
     }
 
     if post.is_edited() {
@@ -101,11 +104,14 @@ pub fn row(
     // A webhook or plugin card. These usually come with an empty message, so
     // ignoring them renders nothing at all for the message.
     for (index, card) in post.attachments().iter().enumerate() {
-        content = content.child(attachment_card(ui, &post.id, index, card, cx));
+        content = content.child(frame_log::timed(
+            "card",
+            attachment_card(ui, &post.id, index, card, cx),
+        ));
     }
 
     for (index, file) in post.files().iter().enumerate() {
-        content = content.child(attachment(ui, index, file, cx));
+        content = content.child(frame_log::timed("file", attachment(ui, index, file, cx)));
     }
 
     // A link to another message renders as that message. The server resolves
@@ -113,7 +119,7 @@ pub fn row(
     // link by hand would be a second fetch for something already here.
     for (index, embed) in post.embeds().iter().enumerate() {
         if let Some(preview) = embed_preview(ui, index, embed, &st, cx) {
-            content = content.child(preview);
+            content = content.child(frame_log::timed("embed", preview));
         }
     }
 
@@ -126,13 +132,16 @@ pub fn row(
     }
 
     if let Some(strip) = reaction_strip(ui, post, &st, cx) {
-        content = content.child(strip);
+        content = content.child(frame_log::timed("reactions", strip));
     }
 
     // Under CRT a reply never appears in the channel feed, so the only way into
     // a thread is this footer — it has to be present whenever there are replies.
     if options.show_thread_footer && post.reply_count > 0 {
-        content = content.child(thread_footer(ui, post, &st, cx));
+        content = content.child(frame_log::timed(
+            "footer",
+            thread_footer(ui, post, &st, cx),
+        ));
     }
     // A message with no replies gets no footer: starting a thread is the reply
     // button in the hover bar, and a permanent "Reply" under every message is
@@ -164,7 +173,10 @@ pub fn row(
             .into_any_element()
     };
 
-    let actions = hover_actions(ui, post, options.show_thread_footer, mine, saved, cx);
+    // Only the row under the pointer has the bar: see `Ui::hovered_post`.
+    let hovered = ui.hovered_post.borrow().as_deref() == Some(post.id.as_str());
+    let actions = hovered
+        .then(|| hover_actions(ui, post, options.show_thread_footer, mine, saved, cx));
     drop(st);
 
     h_flex()
@@ -182,16 +194,31 @@ pub fn row(
         .when(options.highlight, |row| row.bg(theme.accent))
         // An unconfirmed send stays dimmed until the server echoes it back.
         .when(post.is_pending(), |row| row.opacity(0.55))
-        .child(leading)
+        .child(frame_log::timed("avatar", leading))
         .child(content)
-        .child(
-            div()
-                .absolute()
-                .top(px(-10.))
-                .right_3()
-                .invisible()
-                .group_hover("message", |style| style.visible())
-                .child(actions),
-        )
+        // The toolkit reports this for a row that scrolls under a pointer
+        // that is not moving, too.
+        .on_hover({
+            let ui = ui.clone();
+            let post_id = post.id.clone();
+            move |hovered, _, cx| {
+                if !*hovered || ui.hovered_post.borrow().as_deref() == Some(post_id.as_str()) {
+                    return;
+                }
+                ui.hovered_post.replace(Some(post_id.clone()));
+                crate::ui::redraw(&[crate::ui::Part::Chat, crate::ui::Part::Right], cx);
+            }
+        })
+        .when_some(actions, |row, actions| {
+            row.child(
+                div()
+                    .absolute()
+                    .top(px(-10.))
+                    .right_3()
+                    .invisible()
+                    .group_hover("message", |style| style.visible())
+                    .child(frame_log::timed("actions", actions)),
+            )
+        })
         .into_any_element()
 }

@@ -125,7 +125,7 @@ pub fn player(ui: &Rc<Ui>, index: usize, file: &FileInfo, cx: &App) -> AnyElemen
             kit::icon_button("expand", Lucide::Maximize, "Fill the window").on_click(ui.click(
                 move |ui, cx| {
                     ui.media_player(&expand_id).expanded.set(true);
-                    cx.refresh_windows();
+                    crate::ui::refresh(cx);
                 },
             )),
         );

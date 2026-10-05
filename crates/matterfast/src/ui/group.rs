@@ -73,7 +73,7 @@ pub fn show(ui: &Rc<Ui>, group: Group, cx: &mut App) {
                         Roster::Failed
                     }
                 };
-                cx.refresh_windows();
+                crate::ui::refresh(cx);
             }
         },
     );

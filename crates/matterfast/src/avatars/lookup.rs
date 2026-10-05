@@ -52,9 +52,7 @@ impl Avatars {
     pub fn poster(&self, file_id: &str) -> Option<Arc<RenderImage>> {
         self.inner
             .borrow()
-            .textures
-            .get(&format!("{POSTER_PREFIX}{file_id}"))
-            .cloned()
+            .texture(&format!("{POSTER_PREFIX}{file_id}"))
     }
 
     /// Keeps a still that was just taken, so the next redraw of that row
@@ -87,8 +85,8 @@ impl Avatars {
     }
 
     fn cached(&self, key: &str) -> Option<Arc<RenderImage>> {
-        if let Some(texture) = self.inner.borrow().textures.get(key) {
-            return Some(texture.clone());
+        if let Some(texture) = self.inner.borrow().texture(key) {
+            return Some(texture);
         }
         self.request(key);
         None

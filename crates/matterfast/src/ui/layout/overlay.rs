@@ -13,12 +13,12 @@ pub struct Overlay {
 impl Overlay {
     pub fn set_show_sidebar(&self, shown: bool, cx: &mut App) {
         self.shown.set(shown);
-        cx.refresh_windows();
+        crate::ui::refresh(cx);
     }
 
     pub fn set_collapsed(&self, collapsed: bool, cx: &mut App) {
         if self.collapsed.replace(collapsed) != collapsed {
-            cx.refresh_windows();
+            crate::ui::refresh(cx);
         }
     }
 

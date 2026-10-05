@@ -10,6 +10,7 @@ impl Ui {
     /// count for the whole account.
     pub(crate) fn refresh_title(&self, cx: &mut App) {
         let mentions = self.state.borrow().total_mentions();
+        self.mentions.set(mentions);
         let title = if mentions > 0 {
             format!("({mentions}) Matterfast")
         } else {

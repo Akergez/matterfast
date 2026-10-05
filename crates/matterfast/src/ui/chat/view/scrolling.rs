@@ -34,7 +34,7 @@ impl ChatView {
         }
         self.scroll_near(index);
         *self.highlight.borrow_mut() = Some(post_id.to_string());
-        cx.refresh_windows();
+        crate::ui::refresh(cx);
 
         let id = post_id.to_string();
         crate::runtime::after(std::time::Duration::from_secs(2), move |cx| {
@@ -42,7 +42,7 @@ impl ChatView {
             let mut highlight = ui.chat.highlight.borrow_mut();
             if highlight.as_deref() == Some(id.as_str()) {
                 *highlight = None;
-                cx.refresh_windows();
+                crate::ui::refresh(cx);
             }
         });
         true
@@ -96,7 +96,7 @@ impl ChatView {
             );
         }
         self.scroll_near(index);
-        cx.refresh_windows();
+        crate::ui::refresh(cx);
         true
     }
 
@@ -131,6 +131,6 @@ impl ChatView {
             return;
         }
         self.scroll_to_newest("own-message-sent");
-        cx.refresh_windows();
+        crate::ui::refresh(cx);
     }
 }
