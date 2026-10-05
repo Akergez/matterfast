@@ -4858,7 +4858,7 @@ checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
 name = "matterfast"
-version = "1.0.3"
+version = "1.0.5"
 dependencies = [
  "android-activity",
  "android_logger",
@@ -4907,14 +4907,14 @@ dependencies = [
 
 [[package]]
 name = "matterfast-emoji"
-version = "1.0.3"
+version = "1.0.5"
 dependencies = [
  "emojis",
 ]
 
 [[package]]
 name = "matterfast-markdown"
-version = "1.0.3"
+version = "1.0.5"
 dependencies = [
  "matterfast-emoji",
  "pulldown-cmark",
@@ -4922,14 +4922,14 @@ dependencies = [
 
 [[package]]
 name = "matterfast-paths"
-version = "1.0.3"
+version = "1.0.5"
 dependencies = [
  "dirs 6.0.0",
 ]
 
 [[package]]
 name = "matterfast-testserver"
-version = "1.0.3"
+version = "1.0.5"
 dependencies = [
  "axum",
  "flate2",
@@ -4943,7 +4943,7 @@ dependencies = [
 
 [[package]]
 name = "matterfast-timefmt"
-version = "1.0.3"
+version = "1.0.5"
 dependencies = [
  "chrono",
  "mattermost-api",
@@ -4951,7 +4951,7 @@ dependencies = [
 
 [[package]]
 name = "matterfast-zed-theme"
-version = "1.0.3"
+version = "1.0.5"
 dependencies = [
  "serde_json",
  "thiserror 2.0.20",
@@ -4959,7 +4959,7 @@ dependencies = [
 
 [[package]]
 name = "mattermost-api"
-version = "1.0.3"
+version = "1.0.5"
 dependencies = [
  "futures-util",
  "rand 0.9.5",
@@ -4977,7 +4977,7 @@ dependencies = [
 
 [[package]]
 name = "mattermost-calls"
-version = "1.0.3"
+version = "1.0.5"
 dependencies = [
  "flate2",
  "futures-util",
