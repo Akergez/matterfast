@@ -73,7 +73,7 @@ impl Ui {
                 .sidebar_groups()
                 .into_iter()
                 .flat_map(|(_, channels)| channels)
-                .map(|c| c.id)
+                .map(|c| c.id.clone())
                 .filter(|id| st.unread(id).is_unread() && !st.feeds.contains_key(id))
                 .take(PRELOAD)
                 .collect();

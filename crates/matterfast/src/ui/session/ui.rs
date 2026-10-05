@@ -81,7 +81,7 @@ impl Ui {
         let window = Rc::new(WindowSlot::default());
         let avatars = Avatars::new(state.borrow().client.clone());
         let ui = Rc::new(Ui {
-            channels: ChannelSidebar,
+            channels: ChannelSidebar::new(),
             dock: CallDock::new(),
             chat: ChatView::new(window.clone()),
             right: RightPanel::new(window.clone()),

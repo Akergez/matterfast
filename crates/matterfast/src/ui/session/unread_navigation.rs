@@ -16,7 +16,7 @@ impl Ui {
                 .sidebar_groups()
                 .into_iter()
                 .flat_map(|(_, channels)| channels)
-                .map(|c| c.id)
+                .map(|c| c.id.clone())
                 .collect();
             let unread: Vec<String> = ordered
                 .iter()

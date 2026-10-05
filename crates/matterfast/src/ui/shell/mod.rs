@@ -21,6 +21,7 @@ mod divider;
 mod init;
 mod matterfast;
 mod open_window;
+mod panes;
 mod present;
 mod pretty_server;
 mod render;
@@ -38,5 +39,6 @@ mod with_shell;
 
 pub use init::init;
 pub use matterfast::current;
+pub use panes::{redraw, Part};
 pub use present::{handle_request, present};
 pub use signed_out::signed_out;

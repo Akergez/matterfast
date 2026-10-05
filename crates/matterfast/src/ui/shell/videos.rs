@@ -39,7 +39,7 @@ pub(super) fn videos(ui: &Rc<Ui>, cx: &App) -> Option<AnyElement> {
                 if let Some((_, view)) = ui.video_views.borrow().get(index) {
                     view.expanded.set(!view.expanded.get());
                 }
-                cx.refresh_windows();
+                crate::ui::redraw(&[crate::ui::Part::Frame], cx);
             }));
         row = row.child(kit::with_tooltip(
             ("video-tip", index),

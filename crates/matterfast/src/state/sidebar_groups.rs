@@ -6,8 +6,9 @@ use super::app_state::AppState;
 
 impl AppState {
     /// Channels of the current team, ordered the way the sidebar wants them,
-    /// grouped by category.
-    pub fn sidebar_groups(&self) -> Vec<(SidebarCategory, Vec<Channel>)> {
+    /// grouped by category. Borrowed: this is asked for on every draw of the
+    /// channel list.
+    pub fn sidebar_groups(&self) -> Vec<(&SidebarCategory, Vec<&Channel>)> {
         let mut out = Vec::new();
         let order = &self.categories.order;
         let by_id: HashMap<&str, &SidebarCategory> = self
@@ -29,27 +30,21 @@ impl AppState {
         };
 
         for category in ordered {
-            let mut channels: Vec<Channel> = category
+            let mut channels: Vec<&Channel> = category
                 .channel_ids
                 .iter()
                 .filter_map(|id| self.channels.get(id))
                 .filter(|c| !c.is_archived())
-                .cloned()
                 .collect();
 
-            let members: Vec<ChannelMember> = channels
-                .iter()
-                .filter_map(|c| self.memberships.get(&c.id).cloned())
-                .collect();
-
-            mattermost_api::bootstrap::sort_channels(
+            mattermost_api::bootstrap::sort_channel_refs(
                 &mut channels,
-                &members,
+                |id| self.memberships.get(id).is_some_and(ChannelMember::is_muted),
                 &category.sorting,
                 &category.channel_ids,
             );
             if !channels.is_empty() {
-                out.push((category.clone(), channels));
+                out.push((category, channels));
             }
         }
         out

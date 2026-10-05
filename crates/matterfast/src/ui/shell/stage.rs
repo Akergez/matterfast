@@ -2,6 +2,7 @@ use std::rc::Rc;
 
 use gpui_kit::Entity;
 
+use super::panes::Panes;
 use crate::ui::login::LoginView;
 use crate::ui::Ui;
 
@@ -13,5 +14,5 @@ pub(super) enum Stage {
     /// More than one account is stored, so ask rather than guessing which
     /// one this launch is for. Each is (server, token).
     ChooseServer(Vec<(String, String)>),
-    Session(Rc<Ui>),
+    Session(Rc<Ui>, Panes),
 }

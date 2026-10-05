@@ -55,7 +55,7 @@ impl Shell {
     /// The session, when that is what the window is showing.
     pub(super) fn session(&self) -> Option<&Rc<Ui>> {
         match &self.stage {
-            Stage::Session(ui) => Some(ui),
+            Stage::Session(ui, _) => Some(ui),
             _ => None,
         }
     }

@@ -11,12 +11,18 @@ use super::constants::{
     DRAGGED_MIN, DRAGGED_SHARE, SIDEBAR_PAGE_BELOW, STATIC_PANEL_MIN_WIDTH,
 };
 use super::divider::divider;
+use super::panes::Panes;
 use super::videos::videos;
 use crate::ui::rhs::PanelMode;
 use crate::ui::{Divider, Ui};
 
 /// The three panes, laid out for however wide the window is right now.
-pub(super) fn session(ui: &Rc<Ui>, window: &mut Window, cx: &mut App) -> AnyElement {
+pub(super) fn session(
+    ui: &Rc<Ui>,
+    columns: &Panes,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
     ui.learn_unknown_mentions();
     let width = f32::from(window.viewport_size().width);
     ui.scale.set(window.scale_factor());
@@ -34,12 +40,8 @@ pub(super) fn session(ui: &Rc<Ui>, window: &mut Window, cx: &mut App) -> AnyElem
             ui.right.mode(cx),
             PanelMode::Inbox | PanelMode::Search(_)
         );
-    let panel = ui
-        .overlay
-        .shown()
-        .then(|| crate::ui::rhs::render(ui, cx))
-        .flatten();
-    let dock = crate::ui::call_dock::render(ui, cx);
+    let panel = (ui.overlay.shown() && !matches!(ui.right.mode(cx), PanelMode::Hidden))
+        .then(|| columns.right());
 
     // On a phone the panel is a page: a strip of conversation left showing
     // beside it is too narrow to read and too easy to tap by accident.
@@ -80,11 +82,7 @@ pub(super) fn session(ui: &Rc<Ui>, window: &mut Window, cx: &mut App) -> AnyElem
         // so here it belongs under the conversation.
         let drawer = (width * 0.86).min(360.0);
         let open = ui.split.advance(window);
-        panes = panes.child(
-            div()
-                .size_full()
-                .child(crate::ui::chat::render(ui, true, dock, cx)),
-        );
+        panes = panes.child(div().size_full().child(columns.chat()));
         if open > 0.0 {
             panes = panes
                 .child(
@@ -105,7 +103,7 @@ pub(super) fn session(ui: &Rc<Ui>, window: &mut Window, cx: &mut App) -> AnyElem
                         .w(px(drawer))
                         .shadow_lg()
                         .occlude()
-                        .child(crate::ui::sidebar::render(ui, None, cx)),
+                        .child(columns.sidebar()),
                 );
         }
         // A phone has no edge to click: the list is pulled out by a swipe
@@ -141,15 +139,9 @@ pub(super) fn session(ui: &Rc<Ui>, window: &mut Window, cx: &mut App) -> AnyElem
                     .flex_none()
                     .h_full()
                     .w(px(sidebar_width))
-                    .child(crate::ui::sidebar::render(ui, dock, cx)),
+                    .child(columns.sidebar()),
             )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .h_full()
-                    .child(crate::ui::chat::render(ui, false, None, cx)),
-            );
+            .child(div().flex_1().min_w_0().h_full().child(columns.chat()));
     }
 
     if let Some(panel) = panel {

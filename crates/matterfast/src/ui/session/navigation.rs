@@ -52,7 +52,7 @@ impl Ui {
                             .into_iter()
                             .flat_map(|(_, cs)| cs)
                             .next()
-                            .map(|c| c.id)
+                            .map(|c| c.id.clone())
                     };
                     ui.refresh_all(cx);
                     ui.load_inbox(cx);

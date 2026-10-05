@@ -15,7 +15,8 @@ impl ChatView {
     pub fn set_typing(&self, names: &[String], cx: &mut App) {
         if *self.typing.borrow() != names {
             *self.typing.borrow_mut() = names.to_vec();
-            cx.refresh_windows();
+            // The line under the feed, and nowhere else.
+            crate::ui::redraw(&[crate::ui::Part::Chat], cx);
         }
     }
 

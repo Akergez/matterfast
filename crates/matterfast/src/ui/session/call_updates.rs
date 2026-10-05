@@ -9,6 +9,7 @@ use mattermost_calls::{CallUpdate, CallsEvent as Ev};
 use super::calls::{is_running, participants};
 use super::ui::Ui;
 use crate::runtime;
+use crate::ui::Part;
 use crate::video;
 
 impl Ui {
@@ -101,7 +102,10 @@ impl Ui {
                 } else {
                     format!("{who} — camera")
                 };
-                match video::show_remote(&title, track, |cx| cx.refresh_windows()) {
+                // The picture floats over the columns, which have no need to
+                // be drawn again thirty times a second on its account.
+                let on_frame = |cx: &mut App| crate::ui::redraw(&[Part::Frame], cx);
+                match video::show_remote(&title, track, on_frame) {
                     Ok(view) => {
                         let key = format!("{session_id}:{track_type}");
                         let mut views = self.video_views.borrow_mut();

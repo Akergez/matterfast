@@ -3,18 +3,19 @@
 use gpui_kit::App;
 
 use super::ui::Ui;
+use crate::ui::Part;
 
 impl Ui {
     /// Removes one remote picture, if it is on screen.
     pub(crate) fn drop_video(&self, session_id: &str, kind: &str, cx: &mut App) {
         let key = format!("{session_id}:{kind}");
         self.video_views.borrow_mut().retain(|(id, _)| id != &key);
-        cx.refresh_windows();
+        crate::ui::redraw(&[Part::Frame], cx);
     }
 
     pub(crate) fn close_videos(&self, cx: &mut App) {
         self.video_views.borrow_mut().clear();
-        cx.refresh_windows();
+        crate::ui::redraw(&[Part::Frame], cx);
     }
 
     /// A person's display name, or something honest when we do not have them.

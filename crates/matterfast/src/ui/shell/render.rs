@@ -38,7 +38,7 @@ impl Render for Shell {
                 .into_any_element(),
             Stage::Login(view) => view.clone().into_any_element(),
             Stage::ChooseServer(servers) => choose_server(&servers.clone(), cx),
-            Stage::Session(ui) => session(&ui.clone(), window, cx),
+            Stage::Session(ui, panes) => session(&ui.clone(), panes, window, cx),
         };
 
         v_flex()

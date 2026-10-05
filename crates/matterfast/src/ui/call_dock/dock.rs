@@ -21,7 +21,9 @@ impl CallDock {
     /// Shows one line of live transcription, or clears it.
     pub fn set_caption(&self, who: &str, text: &str, cx: &mut App) {
         *self.caption.borrow_mut() = caption_line(who, text);
-        cx.refresh_windows();
+        // The dock is under the channel list, or under the conversation in a
+        // narrow window; speech arrives a few words at a time.
+        crate::ui::redraw(&[crate::ui::Part::Sidebar, crate::ui::Part::Chat], cx);
     }
 
     /// The dock is drawn from the call in the state, so a refresh is a frame.

@@ -5,6 +5,7 @@ use gpui_kit::{AppContext, Context, Window};
 use mattermost_api::models::{ClientConfig, User};
 
 use super::matterfast::Matterfast;
+use super::panes::Panes;
 use super::shell_view::Shell;
 use super::signed_out::signed_out;
 use super::stage::Stage;
@@ -65,7 +66,7 @@ impl Shell {
         ui.right.attach(reply);
         ui.search_box.attach(search);
         self.session_subscriptions = vec![composer_events, reply_events, search_events];
-        self.stage = Stage::Session(ui.clone());
+        self.stage = Stage::Session(ui.clone(), Panes::new(&ui, cx));
         cx.notify();
 
         // The rest wants the window, and this is the window in the middle of

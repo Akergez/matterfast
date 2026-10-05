@@ -2,10 +2,11 @@ use std::rc::Rc;
 
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme};
 use gpui_kit::prelude::*;
-use gpui_kit::{div, px, AnyElement, App, FontWeight};
+use gpui_kit::{div, list, px, AnyElement, App, FontWeight};
 
 use super::category_header::category_header;
 use super::channel_row::channel_row;
+use super::channel_sidebar::{Row, ROW_HEIGHT};
 use super::main_menu::main_menu;
 use super::switcher::switcher;
 use crate::ui::kit::{self, Lucide};
@@ -48,14 +49,41 @@ pub fn render(ui: &Rc<Ui>, dock: Option<AnyElement>, cx: &mut App) -> AnyElement
         )
         .child(main_menu(ui));
 
-    let mut list = v_flex().id("channels").flex_1().min_h_0().px_1p5().pb_2();
-    for (category, channels) in st.sidebar_groups() {
-        list = list.child(category_header(ui, &category, cx));
-        for channel in &channels {
-            list = list.child(channel_row(ui, channel, &st, cx));
-        }
-    }
+    let rows = ui.channels.rows(&st.sidebar_groups());
     drop(st);
+    let last = rows.len().saturating_sub(1);
+    let row_ui = ui.clone();
+    let channels = list(ui.channels.list.clone(), move |index, _, cx| {
+        let st = row_ui.state.borrow();
+        let row = match rows.get(index) {
+            Some(Row::Category(id)) => st
+                .categories
+                .categories
+                .iter()
+                .find(|category| &category.id == id)
+                .map(|category| category_header(&row_ui, category, cx)),
+            Some(Row::Channel(id)) => st
+                .channels
+                .get(id)
+                .map(|channel| channel_row(&row_ui, channel, &st, cx)),
+            None => None,
+        };
+        // A row the state no longer has is gone from the list one frame
+        // later; until then it takes the room it was promised.
+        let row = row.unwrap_or_else(|| div().h(px(ROW_HEIGHT)).into_any_element());
+        div()
+            .w_full()
+            .when(index == last, |row| row.pb_2())
+            .child(row)
+            .into_any_element()
+    })
+    .size_full();
+    let list = div()
+        .id("channels")
+        .flex_1()
+        .min_h_0()
+        .px_1p5()
+        .child(channels);
 
     let pane = v_flex()
         .size_full()
@@ -65,7 +93,7 @@ pub fn render(ui: &Rc<Ui>, dock: Option<AnyElement>, cx: &mut App) -> AnyElement
         .border_color(theme.sidebar_border)
         .child(header);
 
-    pane.child(list.overflow_y_scroll())
+    pane.child(list)
         .when_some(dock, |pane, dock| pane.child(dock))
         .into_any_element()
 }

@@ -19,6 +19,9 @@
 //! 5. deferred: other teams, profiles, unread channels' posts, roles, threads
 //! ```
 
+use std::cmp::Reverse;
+use std::collections::{HashMap, HashSet};
+
 use crate::error::Result;
 use crate::models::*;
 use crate::rest::Client;
@@ -175,34 +178,60 @@ pub fn sort_channels(
     sorting: &str,
     order_hint: &[String],
 ) {
-    let muted = |id: &str| {
-        members
-            .iter()
-            .find(|m| m.channel_id == id)
-            .map(ChannelMember::is_muted)
-            .unwrap_or(false)
-    };
+    let muted: HashSet<&str> = members
+        .iter()
+        .filter(|m| m.is_muted())
+        .map(|m| m.channel_id.as_str())
+        .collect();
+    sort_by_rule(
+        channels,
+        |channel| channel,
+        |id| muted.contains(id),
+        sorting,
+        order_hint,
+    );
+}
+
+/// [`sort_channels`] for channels that stay where they are: the sidebar is
+/// drawn far more often than it changes, and has no use for copies.
+pub fn sort_channel_refs(
+    channels: &mut [&Channel],
+    muted: impl Fn(&str) -> bool,
+    sorting: &str,
+    order_hint: &[String],
+) {
+    sort_by_rule(channels, |channel| channel, muted, sorting, order_hint);
+}
+
+/// Every key is worked out once per channel rather than once per comparison:
+/// lowercasing a name allocates, and a category can hold hundreds.
+fn sort_by_rule<T>(
+    channels: &mut [T],
+    channel: impl Fn(&T) -> &Channel,
+    muted: impl Fn(&str) -> bool,
+    sorting: &str,
+    order_hint: &[String],
+) {
     match sorting {
-        "recent" => channels.sort_by(|a, b| {
-            let ka = a.last_post_at.max(a.create_at);
-            let kb = b.last_post_at.max(b.create_at);
-            kb.cmp(&ka)
+        "recent" => channels.sort_by_cached_key(|c| {
+            let c = channel(c);
+            Reverse(c.last_post_at.max(c.create_at))
         }),
         "manual" => {
-            let index = |id: &String| {
-                order_hint
-                    .iter()
-                    .position(|c| c == id)
+            let mut index: HashMap<&str, usize> = HashMap::new();
+            for (position, id) in order_hint.iter().enumerate() {
+                index.entry(id.as_str()).or_insert(position);
+            }
+            channels.sort_by_cached_key(|c| {
+                index
+                    .get(channel(c).id.as_str())
+                    .copied()
                     .unwrap_or(usize::MAX)
-            };
-            channels.sort_by_key(|c| index(&c.id));
+            });
         }
-        _ => channels.sort_by(|a, b| {
-            muted(&a.id).cmp(&muted(&b.id)).then_with(|| {
-                a.display_name
-                    .to_lowercase()
-                    .cmp(&b.display_name.to_lowercase())
-            })
+        _ => channels.sort_by_cached_key(|c| {
+            let c = channel(c);
+            (muted(&c.id), c.display_name.to_lowercase())
         }),
     }
 }
