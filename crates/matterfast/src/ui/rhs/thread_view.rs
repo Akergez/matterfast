@@ -8,6 +8,8 @@ use gpui_kit::prelude::*;
 use gpui_kit::{div, list, AnyElement, App};
 
 use super::thread_row::ThreadRow;
+use crate::ui::autocomplete::Composer;
+use crate::ui::chat::{completion_keys, completion_list};
 use crate::ui::kit::{self, Lucide};
 use crate::ui::message::{self, RowOptions};
 use crate::ui::Ui;
@@ -59,10 +61,19 @@ pub(super) fn thread_view(ui: &Rc<Ui>, cx: &App) -> AnyElement {
 
     let mut pane = v_flex().flex_1().min_h_0().child(
         div()
+            .relative()
             .flex_1()
             .min_h_0()
-            .child(rows)
-            .vertical_scrollbar(&list_state),
+            .child(
+                div()
+                    .size_full()
+                    .child(rows)
+                    .vertical_scrollbar(&list_state),
+            )
+            // Over the bottom of the replies, just above the box it answers.
+            .when_some(completion_list(ui, Composer::Thread, cx), |replies, list| {
+                replies.child(list)
+            }),
     );
 
     if let Some(composer) = panel.composer.borrow().clone() {
@@ -74,7 +85,22 @@ pub(super) fn thread_view(ui: &Rc<Ui>, cx: &App) -> AnyElement {
                 .pt_1()
                 .pb_3()
                 .items_center()
-                .child(div().flex_1().min_w_0().child(Textarea::new(&composer)))
+                .child(
+                    completion_keys(ui, Composer::Thread, div().flex_1().min_w_0()).child(
+                        Textarea::new(&composer).on_paste({
+                            let ui = ui.clone();
+                            move |item, window, cx| {
+                                crate::ui::paste_link::pasted(
+                                    &ui,
+                                    Composer::Thread,
+                                    item,
+                                    window,
+                                    cx,
+                                )
+                            }
+                        }),
+                    ),
+                )
                 .child(
                     Button::new("reply")
                         .icon(Lucide::SendHorizontal)

@@ -3,7 +3,7 @@ use std::rc::Rc;
 use gpui_kit::App;
 
 use super::chat_view::ChatView;
-use crate::ui::{autocomplete, Action, Ui};
+use crate::ui::{Action, Ui};
 
 impl ChatView {
     /// Enter in the composer: picks the selected candidate while the list is
@@ -30,30 +30,9 @@ impl ChatView {
     /// `false` when the list is not open, so the key means what it usually
     /// does.
     pub(crate) fn accept_completion(&self, ui: &Rc<Ui>, cx: &mut App) -> bool {
-        let Some(insert) = self
-            .completions
-            .borrow()
-            .is_open()
-            .then(|| self.completions.borrow().chosen())
-            .flatten()
-        else {
+        if !crate::ui::session::accept_in(&self.completions, &self.composer, &self.window, cx) {
             return false;
-        };
-        let Some(composer) = self.composer.borrow().clone() else {
-            return false;
-        };
-        let (text, cursor) = {
-            let composer = composer.read(cx);
-            (composer.value().to_string(), composer.cursor())
-        };
-        let (text, caret) = autocomplete::accept(&text, cursor, &insert);
-        self.completions.borrow_mut().close();
-        self.window.update(cx, move |window, cx| {
-            composer.update(cx, |composer, cx| {
-                composer.set_value(text.clone(), window, cx);
-                composer.set_selected_range(caret..caret, cx);
-            });
-        });
+        }
         // The text did change, and the draft should follow it.
         ui.dispatch(Action::ComposerChanged(true), cx);
         crate::ui::refresh(cx);

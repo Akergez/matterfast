@@ -78,6 +78,9 @@ pub(super) fn feed(ui: &Rc<Ui>, cx: &App) -> AnyElement {
                     ),
             )
         })
-        .when_some(completion_list(ui, cx), |feed, list| feed.child(list))
+        .when_some(
+            completion_list(ui, crate::ui::autocomplete::Composer::Channel, cx),
+            |feed, list| feed.child(list),
+        )
         .into_any_element()
 }

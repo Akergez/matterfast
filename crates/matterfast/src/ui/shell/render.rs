@@ -81,7 +81,9 @@ impl Render for Shell {
             // does not, and gets the key as usual.
             .capture_action(cx.listener(|shell, _: &Escape, window, cx| {
                 let busy = window.has_active_dialog(cx)
-                    || shell.session().is_some_and(|ui| ui.chat.completing());
+                    || shell
+                        .session()
+                        .is_some_and(|ui| ui.chat.completing() || ui.right.completing());
                 if !busy && shell.close_front(cx) {
                     cx.stop_propagation();
                 }

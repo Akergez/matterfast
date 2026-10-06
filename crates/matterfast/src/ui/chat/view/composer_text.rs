@@ -3,7 +3,8 @@ use std::rc::Rc;
 use gpui_kit::App;
 
 use super::chat_view::ChatView;
-use crate::ui::{autocomplete, Action, Ui};
+use crate::ui::autocomplete::Composer;
+use crate::ui::{Action, Ui};
 
 impl ChatView {
     /// What is in the composer right now.
@@ -56,23 +57,9 @@ impl ChatView {
         let Some(composer) = self.composer.borrow().clone() else {
             return;
         };
-        let (text, cursor) = {
-            let composer = composer.read(cx);
-            (composer.value().to_string(), composer.cursor())
-        };
-        let query = autocomplete::token_at(&text, cursor.min(text.len()));
-        let changed = self.completions.borrow().query != query;
-        if changed {
-            {
-                let mut completions = self.completions.borrow_mut();
-                if query.is_none() {
-                    completions.close();
-                }
-                completions.query = query.clone();
-            }
-            ui.dispatch(Action::Complete(query), cx);
-        }
+        let empty = composer.read(cx).value().is_empty();
+        crate::ui::session::completion_asked(ui, Composer::Channel, &composer, cx);
         // Restoring a draft is not typing, and was returned from above.
-        ui.dispatch(Action::ComposerChanged(!text.is_empty()), cx);
+        ui.dispatch(Action::ComposerChanged(!empty), cx);
     }
 }

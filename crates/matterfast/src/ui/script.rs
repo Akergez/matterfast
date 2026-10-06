@@ -12,6 +12,8 @@
 //! - `scroll:<x>,<y>,<dy>` — positive `dy` scrolls towards older content
 //! - `key:<keystroke>` — `ctrl-k`, `escape`, `enter`
 //! - `type:<text>`
+//! - `paste:<text>` — what Ctrl+V would do in the composer that has the
+//!   keyboard, were this text on the clipboard
 //! - `shot:<name>` — runs `$MATTERFAST_SHOT_CMD <name>`
 //! - `expect:<what>=<value>` — ends the process with status 1 unless it holds
 //! - `quit`
@@ -31,6 +33,10 @@
 //! - `search-hits=<n>` — how many messages the last search found
 //! - `sidebar-width=<px>|auto`, `panel-width=<px>|auto` — what a side column
 //!   was dragged to, or `auto` for one left at its share of the window
+//! - `completing=channel|thread|no` — which box has its list of people or
+//!   emoji open
+//! - `composer=<text>`, `reply=<text>` — what is in the conversation's box
+//!   and in a thread's
 //! - `mentions=<n>` — the count the title bar is showing
 //! - `pointed=yes|no` — whether a message has had the pointer over it, which
 //!   is what gives it its bar of actions
@@ -59,6 +65,7 @@ enum Step {
     Scroll(f32, f32, f32),
     Key(String),
     Type(String),
+    Paste(String),
     Shot(String),
     Expect(String, String),
     Quit,
@@ -94,6 +101,7 @@ fn parse(script: &str) -> Vec<Step> {
                 },
                 "key" => Step::Key(rest.to_string()),
                 "type" => Step::Type(rest.to_string()),
+                "paste" => Step::Paste(rest.to_string()),
                 "shot" => Step::Shot(rest.to_string()),
                 "expect" => {
                     let (what, value) = rest.split_once('=')?;
@@ -139,6 +147,17 @@ fn pointer(window: &mut Window, position: Point<Pixels>, cx: &mut App) {
     );
 }
 
+fn type_text(text: &str, window: &mut Window, cx: &mut App) {
+    for letter in text.chars() {
+        let keystroke = Keystroke {
+            modifiers: Modifiers::default(),
+            key: letter.to_string(),
+            key_char: Some(letter.to_string()),
+        };
+        window.dispatch_keystroke(keystroke, cx);
+    }
+}
+
 /// What `expect:<what>` compares against, or `None` for a name it does not
 /// know — which fails the script too, so a misspelt check cannot pass.
 fn observe(what: &str, window: &mut Window, cx: &mut App) -> Option<String> {
@@ -171,6 +190,20 @@ fn observe(what: &str, window: &mut Window, cx: &mut App) -> Option<String> {
                 .map_or("auto".to_string(), |width| width.round().to_string())
         }
         "mentions" => ui.map_or(0, |ui| ui.mentions.get()).to_string(),
+        "completing" => match ui {
+            Some(ui) if ui.chat.completing() => "channel",
+            Some(ui) if ui.right.completing() => "thread",
+            _ => "no",
+        }
+        .to_string(),
+        // Without the space a picked name is followed by: a step's value
+        // cannot end in one.
+        "composer" => ui
+            .map(|ui| ui.chat.composer_text(cx).trim().to_string())
+            .unwrap_or_default(),
+        "reply" => ui
+            .map(|ui| ui.right.composer_text(cx).trim().to_string())
+            .unwrap_or_default(),
         "pointed" => {
             let pointed = ui.is_some_and(|ui| ui.hovered_post.borrow().is_some());
             if pointed { "yes" } else { "no" }.to_string()
@@ -272,14 +305,19 @@ fn next(handle: AnyWindowHandle, mut steps: VecDeque<Step>, cx: &mut App) {
             }
             Err(error) => tracing::warn!(%error, key, "not a keystroke"),
         },
-        Step::Type(text) => {
-            for letter in text.chars() {
-                let keystroke = Keystroke {
-                    modifiers: Modifiers::default(),
-                    key: letter.to_string(),
-                    key_char: Some(letter.to_string()),
-                };
-                window.dispatch_keystroke(keystroke, cx);
+        Step::Type(text) => type_text(text, window, cx),
+        Step::Paste(text) => {
+            // What Ctrl+V does in a composer, with the clipboard left out: a
+            // headless compositor gives a window with no real keyboard
+            // nothing to copy to. The composer is offered the paste, and
+            // text it does not take goes in as text.
+            let item = gpui_kit::ClipboardItem::new_string(text.clone());
+            let taken = super::shell::current(cx).is_some_and(|ui| {
+                super::paste_link::focused(&ui, window, cx)
+                    .is_some_and(|which| super::paste_link::pasted(&ui, which, &item, window, cx))
+            });
+            if !taken {
+                type_text(text, window, cx);
             }
         }
         Step::Shot(name) => {

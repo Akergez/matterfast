@@ -1,0 +1,33 @@
+# mode: demo
+# size: 1320x840
+#
+# Naming somebody in a thread's reply box offers the same list the
+# conversation's composer does, and Enter takes the name from it. The two
+# boxes keep their lists apart: typing in one closes the other's.
+wait:2500
+expect:channel=Development
+move:450,469
+wait:300
+click:460,469
+wait:1500
+expect:completing=no
+click:1100,808
+wait:400
+type:@le
+wait:800
+expect:completing=thread
+key:enter
+wait:800
+expect:completing=no
+expect:reply=@lena
+click:660,808
+wait:400
+type:@mi
+wait:800
+expect:completing=channel
+key:enter
+wait:800
+expect:completing=no
+expect:composer=@mikk
+expect:reply=@lena
+quit

@@ -1,0 +1,20 @@
+# mode: demo
+# size: 1320x840
+#
+# An address pasted over selected words makes a Markdown link of them; pasted
+# with nothing selected it is only an address.
+wait:2500
+click:850,808
+wait:400
+type:the notes
+wait:300
+key:ctrl-a
+wait:200
+paste:https://example.com/notes
+wait:600
+expect:composer=[the notes](https://example.com/notes)
+type: and
+paste:https://example.com/more
+wait:600
+expect:composer=[the notes](https://example.com/notes) andhttps://example.com/more
+quit

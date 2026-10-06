@@ -65,6 +65,9 @@ pub struct Ui {
     /// The candidates currently shown in the completion list, kept around
     /// so a picture landing later can redraw them without asking again.
     pub(crate) last_completions: RefCell<Vec<autocomplete::Candidate>>,
+    /// The box the outstanding completion query came from, which is where
+    /// its answer goes.
+    pub(crate) completing_in: Cell<autocomplete::Composer>,
     /// The inline players for attached video and audio, by file id.
     pub(crate) players: RefCell<HashMap<String, Rc<media::Player>>>,
     /// Videos a still has already been attempted for, so a file that gives
@@ -119,6 +122,7 @@ impl Ui {
             mention_query_pending: Cell::new(false),
             mention_query: RefCell::new(None),
             last_completions: RefCell::new(Vec::new()),
+            completing_in: Cell::new(autocomplete::Composer::Channel),
             players: RefCell::new(HashMap::new()),
             stills_tried: RefCell::new(HashSet::new()),
             lightbox: RefCell::new(None),

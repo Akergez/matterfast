@@ -56,4 +56,5 @@ mod upload;
 mod window;
 
 pub(crate) use bootstrap::bootstrap;
+pub(crate) use completion::{accept_in, completion_asked};
 pub(crate) use ui::Ui;

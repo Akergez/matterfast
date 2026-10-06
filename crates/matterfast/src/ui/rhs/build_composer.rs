@@ -18,12 +18,13 @@ pub(crate) fn build_composer(
             .placeholder("Reply…")
     });
     let weak = Rc::downgrade(ui);
-    let subscription = cx.subscribe(&composer, move |_, event: &InputEvent, cx| {
+    let subscription = cx.subscribe(&composer, move |composer, event: &InputEvent, cx| {
+        crate::keyboard::follow(composer.entity_id(), event, crate::keyboard::Purpose::Message);
         let Some(ui) = weak.upgrade() else { return };
         match event {
             InputEvent::Change => ui.later(cx, |ui, cx| ui.right.composer_changed(ui, cx)),
             InputEvent::PressEnter { shift: false, .. } => {
-                ui.later(cx, |ui, cx| ui.right.submit(ui, cx))
+                ui.later(cx, |ui, cx| ui.right.composer_submitted(ui, cx))
             }
             _ => {}
         }

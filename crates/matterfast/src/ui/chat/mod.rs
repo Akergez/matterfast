@@ -13,5 +13,5 @@ mod view;
 
 pub use render::render;
 pub use view::ChatView;
-pub(crate) use render::build_composer;
+pub(crate) use render::{build_composer, completion_keys, completion_list};
 pub(crate) use scroll_trace::scroll_trace_enabled;

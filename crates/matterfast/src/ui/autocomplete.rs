@@ -18,6 +18,16 @@ pub enum Query {
     Emoji(String),
 }
 
+/// Which of the two boxes is being completed in: the conversation's, or the
+/// reply box of a thread. Each keeps a list of its own, but only one of them
+/// has the cursor, so an answer is only ever owed to one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Composer {
+    #[default]
+    Channel,
+    Thread,
+}
+
 /// One row of the list, with everything it needs to draw itself: the list
 /// does no lookups of its own, so a repaint can never turn into a fetch.
 #[derive(Clone)]

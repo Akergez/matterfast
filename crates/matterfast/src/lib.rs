@@ -21,6 +21,7 @@ mod fonts;
 #[cfg_attr(target_os = "android", allow(dead_code))]
 mod ipc;
 pub(crate) use matterfast_markdown as markdown;
+mod keyboard;
 mod notifications;
 pub(crate) use matterfast_paths as paths;
 #[cfg_attr(not(target_os = "linux"), path = "playback_stub.rs")]

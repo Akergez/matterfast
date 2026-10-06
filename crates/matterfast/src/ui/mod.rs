@@ -33,6 +33,7 @@ mod mentions;
 mod menu_action;
 mod message;
 mod notify;
+mod paste_link;
 mod profile;
 mod rhs;
 mod script;

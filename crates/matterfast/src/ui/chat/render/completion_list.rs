@@ -1,16 +1,84 @@
 use std::rc::Rc;
 
+use gpui_kit::component::input::{Enter, Escape, IndentInline, MoveDown, MoveUp};
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Sizable};
 use gpui_kit::prelude::*;
-use gpui_kit::{div, px, AnyElement, App, SharedString};
+use gpui_kit::{div, px, AnyElement, App, Div, SharedString};
 
+use crate::ui::autocomplete::Composer;
 use crate::ui::message;
-use crate::ui::Ui;
+use crate::ui::{Action, Ui};
 
-/// The completion list, floating over the bottom of the feed just above the
-/// composer.
-pub(super) fn completion_list(ui: &Rc<Ui>, cx: &App) -> Option<AnyElement> {
-    let completions = ui.chat.completions.borrow();
+/// Gives the completion list of a box first refusal on the keys that move
+/// through it: they do that while it is open, and only reach the text when
+/// it is not. `holder` is what the text box is put in.
+pub(crate) fn completion_keys(ui: &Rc<Ui>, which: Composer, holder: Div) -> Div {
+    let open = move |ui: &Rc<Ui>| ui.completions(which).borrow().is_open();
+    holder
+        .capture_action({
+            let ui = ui.clone();
+            move |_: &MoveUp, _, cx| {
+                if open(&ui) {
+                    ui.completions(which).borrow_mut().step(-1);
+                    cx.stop_propagation();
+                    crate::ui::refresh(cx);
+                }
+            }
+        })
+        .capture_action({
+            let ui = ui.clone();
+            move |_: &MoveDown, _, cx| {
+                if open(&ui) {
+                    ui.completions(which).borrow_mut().step(1);
+                    cx.stop_propagation();
+                    crate::ui::refresh(cx);
+                }
+            }
+        })
+        // Enter picks from the list while it is up. Taken here, before the
+        // text box sees the key: left to arrive as the box's own "submitted",
+        // it had already been treated as typing.
+        .capture_action({
+            let ui = ui.clone();
+            move |enter: &Enter, _, cx| {
+                if open(&ui) && !enter.shift {
+                    cx.stop_propagation();
+                    ui.later(cx, move |ui, cx| {
+                        ui.accept_completion(which, cx);
+                    });
+                }
+            }
+        })
+        .capture_action({
+            let ui = ui.clone();
+            move |_: &IndentInline, _, cx| {
+                if open(&ui) {
+                    cx.stop_propagation();
+                    ui.later(cx, move |ui, cx| {
+                        ui.accept_completion(which, cx);
+                    });
+                }
+            }
+        })
+        .capture_action({
+            let ui = ui.clone();
+            move |_: &Escape, _, cx| {
+                if open(&ui) {
+                    ui.completions(which).borrow_mut().close();
+                    cx.stop_propagation();
+                    crate::ui::refresh(cx);
+                    // Whatever is in flight for the closed query must not
+                    // reopen the list.
+                    ui.dispatch(Action::Complete(None), cx);
+                }
+            }
+        })
+}
+
+/// The completion list of a box, floating over the bottom of what is above
+/// it: the feed for the conversation's, the replies for a thread's.
+pub(crate) fn completion_list(ui: &Rc<Ui>, which: Composer, cx: &App) -> Option<AnyElement> {
+    let completions = ui.completions(which).borrow();
     if !completions.is_open() {
         return None;
     }
@@ -21,6 +89,8 @@ pub(super) fn completion_list(ui: &Rc<Ui>, cx: &App) -> Option<AnyElement> {
         .left_3()
         .bottom_1()
         .w(px(340.))
+        // A thread's column can be narrower than the list would like to be.
+        .max_w_full()
         .max_h(px(260.))
         .overflow_y_scroll()
         .p_1()
@@ -70,8 +140,8 @@ pub(super) fn completion_list(ui: &Rc<Ui>, cx: &App) -> Option<AnyElement> {
             );
         }
         rows = rows.child(row.on_click(ui.click(move |ui, cx| {
-            ui.chat.completions.borrow_mut().selected = index;
-            ui.chat.accept_completion(ui, cx);
+            ui.completions(which).borrow_mut().selected = index;
+            ui.accept_completion(which, cx);
         })));
     }
     Some(rows.into_any_element())

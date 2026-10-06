@@ -12,7 +12,10 @@ impl Ui {
     /// picture landing later can redraw the popover without re-querying it.
     pub(crate) fn set_completions(&self, items: Vec<autocomplete::Candidate>, cx: &mut App) {
         *self.last_completions.borrow_mut() = items.clone();
-        self.chat.set_completions(items, cx);
+        match self.completing_in.get() {
+            autocomplete::Composer::Channel => self.chat.set_completions(items, cx),
+            autocomplete::Composer::Thread => self.right.set_completions(items, cx),
+        }
     }
 
     /// A picture that finished downloading after the popover opened belongs

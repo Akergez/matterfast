@@ -1,13 +1,15 @@
 use std::rc::Rc;
 
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::input::{Enter, Escape, IndentInline, MoveDown, MoveUp, Textarea};
+use gpui_kit::component::input::Textarea;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::{h_flex, Sizable, Size};
 use gpui_kit::prelude::*;
 use gpui_kit::{div, AnyElement, App};
 
+use super::completion_list::completion_keys;
 use super::paste_image::paste_image;
+use crate::ui::autocomplete::Composer;
 use crate::ui::kit::{self, Lucide};
 use crate::ui::{Action, Ui};
 
@@ -65,74 +67,21 @@ pub(super) fn composer(ui: &Rc<Ui>, cx: &App) -> AnyElement {
                 .on_click(ui.click(|ui, cx| ui.dispatch(Action::ScheduleMessage, cx))),
         )
         .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                // The completion list has first refusal on these keys: they
-                // move through it while it is open, and only reach the text
-                // when it is not.
-                .capture_action({
+            completion_keys(ui, Composer::Channel, div().flex_1().min_w_0()).child(
+                Textarea::new(&state).on_paste({
                     let ui = ui.clone();
-                    move |_: &MoveUp, _, cx| {
-                        if ui.chat.completing() {
-                            ui.chat.completions.borrow_mut().step(-1);
-                            cx.stop_propagation();
-                            crate::ui::refresh(cx);
-                        }
+                    move |item, window, cx| {
+                        paste_image(&ui, item, cx)
+                            || crate::ui::paste_link::pasted(
+                                &ui,
+                                Composer::Channel,
+                                item,
+                                window,
+                                cx,
+                            )
                     }
-                })
-                .capture_action({
-                    let ui = ui.clone();
-                    move |_: &MoveDown, _, cx| {
-                        if ui.chat.completing() {
-                            ui.chat.completions.borrow_mut().step(1);
-                            cx.stop_propagation();
-                            crate::ui::refresh(cx);
-                        }
-                    }
-                })
-                // Enter picks from the list while it is up. Taken here, before
-                // the text box sees the key: left to arrive as the box's own
-                // "submitted", it had already been treated as typing.
-                .capture_action({
-                    let ui = ui.clone();
-                    move |enter: &Enter, _, cx| {
-                        if ui.chat.completing() && !enter.shift {
-                            cx.stop_propagation();
-                            ui.later(cx, |ui, cx| {
-                                ui.chat.accept_completion(ui, cx);
-                            });
-                        }
-                    }
-                })
-                .capture_action({
-                    let ui = ui.clone();
-                    move |_: &IndentInline, _, cx| {
-                        if ui.chat.completing() {
-                            cx.stop_propagation();
-                            ui.later(cx, |ui, cx| {
-                                ui.chat.accept_completion(ui, cx);
-                            });
-                        }
-                    }
-                })
-                .capture_action({
-                    let ui = ui.clone();
-                    move |_: &Escape, _, cx| {
-                        if ui.chat.completing() {
-                            ui.chat.completions.borrow_mut().close();
-                            cx.stop_propagation();
-                            crate::ui::refresh(cx);
-                            // Whatever is in flight for the closed query must
-                            // not reopen the list.
-                            ui.dispatch(Action::Complete(None), cx);
-                        }
-                    }
-                })
-                .child(Textarea::new(&state).on_paste({
-                    let ui = ui.clone();
-                    move |item, _, cx| paste_image(&ui, item, cx)
-                })),
+                }),
+            ),
         )
         .child(
             Button::new("send")

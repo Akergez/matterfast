@@ -9,6 +9,7 @@ use super::inbox_tab::InboxTab;
 use super::panel_mode::PanelMode;
 use super::search_row::SearchRow;
 use super::thread_row::ThreadRow;
+use crate::ui::autocomplete::Completions;
 use crate::ui::WindowSlot;
 
 pub struct RightPanel {
@@ -34,9 +35,12 @@ pub struct RightPanel {
     /// was measured against.
     pub(super) search_drawn: Cell<usize>,
     /// The reply box, while there is a window to put it in.
-    pub(super) composer: RefCell<Option<Entity<TextareaState>>>,
+    pub(crate) composer: RefCell<Option<Entity<TextareaState>>>,
     /// Set while a draft is being restored, so it is not mistaken for typing.
     pub(super) restoring: Cell<bool>,
+    /// What the reply box is offering to complete, as the conversation's
+    /// composer has a list of its own.
+    pub(crate) completions: RefCell<Completions>,
 }
 
 impl RightPanel {
@@ -60,7 +64,13 @@ impl RightPanel {
             search_drawn: Cell::new(0),
             composer: RefCell::new(None),
             restoring: Cell::new(false),
+            completions: RefCell::new(Completions::default()),
         }
+    }
+
+    /// The channel the open thread lives in, empty when none is open.
+    pub(crate) fn thread_channel(&self) -> String {
+        self.thread_channel.borrow().clone()
     }
 
     pub(crate) fn attach(&self, composer: Entity<TextareaState>) {

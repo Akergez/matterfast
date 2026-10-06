@@ -100,11 +100,21 @@ impl LoginView {
         });
         let mfa = cx.new(|cx| InputState::new(window, cx).placeholder("MFA code (if enabled)"));
 
-        // Enter in any field is the same as the button.
-        let subscriptions = [&server, &login_id, &password, &mfa]
-            .into_iter()
-            .map(|field| {
-                cx.subscribe(field, |view: &mut LoginView, _, event: &InputEvent, cx| {
+        // Enter in any field is the same as the button. And each field has a
+        // keyboard that suits it, where the keyboard is on the screen: one
+        // for prose would start an address with a capital and offer to
+        // correct a password.
+        use crate::keyboard::Purpose;
+        let subscriptions = [
+            (&server, Purpose::Address),
+            (&login_id, Purpose::Login),
+            (&password, Purpose::Password),
+            (&mfa, Purpose::Plain),
+        ]
+        .into_iter()
+            .map(|(field, purpose)| {
+                cx.subscribe(field, move |view: &mut LoginView, field, event: &InputEvent, cx| {
+                    crate::keyboard::follow(field.entity_id(), event, purpose);
                     if matches!(event, InputEvent::PressEnter { .. }) {
                         view.submit(cx);
                     }

@@ -1,16 +1,108 @@
 //! The composer's `:emoji:` and `@mention` completion.
+//!
+//! There are two composers — the conversation's and a thread's reply box —
+//! and they complete the same way: each holds its own list, and what differs
+//! between them is said once, by [`autocomplete::Composer`].
 
+use std::cell::RefCell;
 use std::rc::Rc;
 
-use gpui_kit::App;
+use gpui_kit::component::input::TextareaState;
+use gpui_kit::{App, Entity};
 
 use super::ui::Ui;
 use crate::runtime;
+use crate::ui::autocomplete::{self, Completions, Composer};
 use crate::ui::constants::{COMPLETIONS, MENTION_DEBOUNCE};
 use crate::ui::mentions::{local_groups, local_mentions, mention_list};
-use crate::ui::autocomplete;
+use crate::ui::{Action, WindowSlot};
+
+/// What a box's text now asks to have completed, told to the session if it
+/// is not what was being asked a keystroke ago.
+pub(crate) fn completion_asked(
+    ui: &Rc<Ui>,
+    which: Composer,
+    composer: &Entity<TextareaState>,
+    cx: &mut App,
+) {
+    let (text, cursor) = {
+        let composer = composer.read(cx);
+        (composer.value().to_string(), composer.cursor())
+    };
+    let query = autocomplete::token_at(&text, cursor.min(text.len()));
+    let completions = ui.completions(which);
+    if completions.borrow().query == query {
+        return;
+    }
+    {
+        let mut completions = completions.borrow_mut();
+        if query.is_none() {
+            completions.close();
+        }
+        completions.query = query.clone();
+    }
+    // The answer goes to this box, and the other one is no longer being
+    // typed in: a list left open over it would belong to nothing.
+    let other = match which {
+        Composer::Channel => Composer::Thread,
+        Composer::Thread => Composer::Channel,
+    };
+    ui.completions(other).borrow_mut().close();
+    ui.completing_in.set(which);
+    ui.dispatch(Action::Complete(query), cx);
+}
+
+/// Replaces the token under the cursor of `composer` with the candidate its
+/// list has selected. `false` when the list is not open, so the key that
+/// asked means what it usually does.
+pub(crate) fn accept_in(
+    completions: &RefCell<Completions>,
+    composer: &RefCell<Option<Entity<TextareaState>>>,
+    window: &WindowSlot,
+    cx: &mut App,
+) -> bool {
+    let chosen = {
+        let completions = completions.borrow();
+        completions.is_open().then(|| completions.chosen()).flatten()
+    };
+    let Some(insert) = chosen else {
+        return false;
+    };
+    let Some(composer) = composer.borrow().clone() else {
+        return false;
+    };
+    let (text, cursor) = {
+        let composer = composer.read(cx);
+        (composer.value().to_string(), composer.cursor())
+    };
+    let (text, caret) = autocomplete::accept(&text, cursor, &insert);
+    completions.borrow_mut().close();
+    window.update(cx, move |window, cx| {
+        composer.update(cx, |composer, cx| {
+            composer.set_value(text.clone(), window, cx);
+            composer.set_selected_range(caret..caret, cx);
+        });
+    });
+    true
+}
 
 impl Ui {
+    /// The list of the box named.
+    pub(crate) fn completions(&self, which: Composer) -> &RefCell<Completions> {
+        match which {
+            Composer::Channel => &self.chat.completions,
+            Composer::Thread => &self.right.completions,
+        }
+    }
+
+    /// Picks the selected candidate in the box named; see [`accept_in`].
+    pub(crate) fn accept_completion(self: &Rc<Self>, which: Composer, cx: &mut App) -> bool {
+        match which {
+            Composer::Channel => self.chat.accept_completion(self, cx),
+            Composer::Thread => self.right.accept_completion(self, cx),
+        }
+    }
+
     /// Answers the composer's completion query.
     ///
     /// Emoji come from the built-in table, which is local and therefore
@@ -81,10 +173,20 @@ impl Ui {
             });
             let local = mention_list(local, local_groups(&st.groups, &lowered));
 
+            // Who can be named is asked of the channel being written in, and
+            // a thread opened from the inbox is not in the one on screen.
+            let channel = match self.completing_in.get() {
+                Composer::Thread => Some(self.right.thread_channel()),
+                Composer::Channel => None,
+            }
+            .filter(|channel| !channel.is_empty())
+            .or_else(|| st.current_channel.clone())
+            .unwrap_or_default();
+
             (
                 st.client.clone(),
                 st.current_team.clone().unwrap_or_default(),
-                st.current_channel.clone().unwrap_or_default(),
+                channel,
                 local,
             )
         };
