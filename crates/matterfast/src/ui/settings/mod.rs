@@ -5,25 +5,21 @@
 //! makes you commit first and look afterwards has that backwards.
 //!
 //! Themes are chosen twice, one for light and one for dark, so that "System"
-//! has a pair to switch between. More of them come from Zed's extension
-//! registry, which this dialog can browse: the list is asked for when the
-//! section is first opened and searched locally after that, so typing costs
-//! no requests. The registry is not a Mattermost server and needs no session,
-//! which is why its two calls are made from here ([`crate::zed_extensions`])
-//! rather than from `ui/mod.rs` with the rest.
+//! has a pair to switch between. The first of each list is the Material You
+//! scheme the window wears unless told otherwise; the rest come from Zed's
+//! extension registry, which this dialog can browse. The browsing is the
+//! library's (`gpui_zed_themes::Browser`): it asks the registry, installs
+//! and removes, and says when what is installed has changed, which is all
+//! this dialog needs to hear to make its two lists right again. The registry
+//! is not a Mattermost server and needs no session, which is why nothing of
+//! it goes through `ui/mod.rs` with the rest.
 
-mod browse;
 mod built_in_label;
-mod constants;
 mod dialog;
-mod downloads;
-mod found;
 mod names;
 mod new;
-mod registry;
-mod registry_rows;
 mod render;
 mod show;
-mod theme_changes;
+mod themes_changed;
 
 pub use show::show;

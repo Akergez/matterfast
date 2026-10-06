@@ -16,7 +16,6 @@
 //! repeats: a variable font is loaded as its regular face only, so nothing in
 //! it comes out bold.
 
-use std::rc::Rc;
 use std::sync::OnceLock;
 
 use gpui_kit::component::{Theme, ThemeMode};
@@ -108,10 +107,11 @@ pub fn theme_name(mode: ThemeMode) -> Option<String> {
         .filter(|name| !name.is_empty())
 }
 
-/// The name of the theme a mode wears: the chosen one, or the built-in one
-/// when nothing was chosen or the choice is gone.
+/// The name of what a mode wears: the chosen theme, or the scheme when
+/// nothing was chosen or the choice is gone.
 pub fn theme_for(mode: ThemeMode, cx: &App) -> SharedString {
-    themes::pick(mode, theme_name(mode).as_deref(), cx).name.clone()
+    themes::pick(mode, theme_name(mode).as_deref(), cx)
+        .map_or(themes::SCHEME.into(), |theme| theme.name.clone())
 }
 
 pub fn set_theme_name(mode: ThemeMode, name: &str, window: &mut Window, cx: &mut App) {
@@ -155,7 +155,9 @@ pub fn behind_the_system(cx: &App) -> bool {
 /// are installed and the themes are loaded, again once there is a window — on Linux only a window knows
 /// what the desktop's appearance is — and whenever a choice changes.
 pub fn apply(window: Option<&mut Window>, cx: &mut App) {
-    let built_in = built_in_fonts(cx);
+    // Before anything shows a theme: the fonts in force now are the ones
+    // the application brought.
+    built_in_fonts(cx);
 
     let mode = match theme_choice() {
         ThemeChoice::Light => ThemeMode::Light,
@@ -189,23 +191,26 @@ pub fn apply(window: Option<&mut Window>, cx: &mut App) {
         },
         ..Default::default()
     });
-    let wanted = themes::pick(mode, theme_name(mode).as_deref(), cx);
-    let theme = Theme::global(cx);
-    let worn = if mode.is_dark() { &theme.dark_theme } else { &theme.light_theme };
-    // Loading a mode loads its theme file, fonts and all, so the fonts go on
-    // afterwards and in an update of their own.
-    if theme.mode != mode || !Rc::ptr_eq(worn, &wanted) {
-        // `change` loads whichever theme is registered for the mode, so the
-        // one wanted is registered first.
-        let theme = Theme::global_mut(cx);
-        if mode.is_dark() {
-            theme.dark_theme = wanted;
-        } else {
-            theme.light_theme = wanted;
+    // Both modes are given what they wear, not only the one showing: the
+    // other is what a change of mode will show, here or in the library.
+    for each in [ThemeMode::Light, ThemeMode::Dark] {
+        match themes::pick(each, theme_name(each).as_deref(), cx) {
+            Some(theme) => gpui_adaptive_colors::wear(theme, cx),
+            None => gpui_adaptive_colors::wear_scheme(each, cx),
         }
+    }
+    if Theme::global(cx).mode != mode {
         Theme::change(mode, None, cx);
     }
+    // Showing a theme shows it fonts and all, so the fonts go on afterwards.
+    apply_fonts(cx);
+}
 
+/// Makes the fonts say what the settings say. Whatever shows a theme again
+/// — a change of mode, or of the colour a scheme is made from — shows it in
+/// the theme's own fonts, and this puts the chosen ones back.
+pub fn apply_fonts(cx: &mut App) {
+    let built_in = built_in_fonts(cx);
     let known = cx.text_system().all_font_names();
     // A font that was uninstalled since it was chosen is not a font; the
     // setting stays, in case it comes back, and the built-in one is used.

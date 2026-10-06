@@ -2,7 +2,7 @@
 # size: 1320x840
 #
 # A theme extension is installed from the registry, shows up in the theme
-# list, can be worn, and gives the built-in theme back when it is removed.
+# list, can be worn, and gives the scheme back when it is removed.
 # The registry is the test server's fake of Zed's (`/zed`), which serves one
 # extension holding one dark theme, "Testserver Dusk".
 wait:5000
@@ -14,14 +14,14 @@ move:870,152
 wait:300
 click:877,152
 wait:800
-expect:theme-name=Default Dark
+expect:theme-name=Adaptive Dark
 # Browse: the list is asked for, and the search box has the keyboard.
 click:862,334
 wait:2000
 type:dusk
 wait:800
 # Install, on the only row.
-click:865,460
+click:865,452
 wait:2500
 # Done, then the dark theme list, where the new theme now is.
 click:876,334
@@ -33,12 +33,13 @@ wait:600
 key:enter
 wait:900
 expect:theme-name=Testserver Dusk
-# Removing the extension takes the theme off the window with it.
+# Removing the extension takes the theme off the window with it. The row is
+# a line lower than it was: what the install had to say is above the list.
 click:862,334
 wait:800
-click:857,460
+click:857,479
 wait:2500
-expect:theme-name=Default Dark
+expect:theme-name=Adaptive Dark
 key:escape
 wait:600
 quit

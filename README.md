@@ -89,7 +89,9 @@ for a bot, a CLI, or a different front end.
   of the terms searches attachments instead, rather than adding a second box to
   find
 - **Themes**: light, dark or whatever the desktop is, with a theme of your
-  choice for each. Besides the built-in pair, themes are the Zed editor's:
+  choice for each. Out of the box the colours are a Material You scheme made
+  from the system's accent colour, and follow it as it changes. Besides that,
+  themes are the Zed editor's:
   none is shipped, the settings browse and install them from Zed's extension
   registry, and a Zed theme file dropped into
   `~/.local/share/app.akergez.Matterfast/themes/` is picked up at the

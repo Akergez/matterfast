@@ -1,21 +1,16 @@
-use std::collections::HashSet;
-use std::rc::Rc;
-
-use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::select::{SearchableVec, SelectEvent, SelectState};
 use gpui_kit::component::{IndexPath, ThemeMode};
 use gpui_kit::prelude::*;
 use gpui_kit::{Context, SharedString, Window};
+use gpui_zed_themes::{Browser, BrowserEvent};
 
 use super::built_in_label::built_in_label;
 use super::dialog::Settings;
-use super::registry::Registry;
 use crate::appearance::{self, FontRole};
 use crate::themes;
-use crate::ui::Ui;
 
 impl Settings {
-    pub(super) fn new(ui: Rc<Ui>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub(super) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let (interface_default, code_default) = appearance::built_in_fonts(cx);
         let families: Vec<SharedString> = cx
             .text_system()
@@ -88,25 +83,21 @@ impl Settings {
         let light = theme_picker(ThemeMode::Light);
         let dark = theme_picker(ThemeMode::Dark);
 
-        let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search Zed themes"));
-        subscriptions.push(cx.subscribe(&search, |_, _, event: &InputEvent, cx| {
-            if matches!(event, InputEvent::Change) {
-                cx.notify();
-            }
-        }));
+        let browser =
+            cx.new(|cx| Browser::new(themes::registry(), themes::store(), window, cx));
+        subscriptions.push(cx.subscribe_in(
+            &browser,
+            window,
+            |settings, _, _: &BrowserEvent, window, cx| settings.themes_changed(window, cx),
+        ));
 
         Settings {
-            ui,
             light,
             dark,
             interface,
             code,
             browsing: false,
-            search,
-            registry: Registry::NotAsked,
-            installed: themes::installed(),
-            busy: HashSet::new(),
-            notice: None,
+            browser,
             _subscriptions: subscriptions,
         }
     }

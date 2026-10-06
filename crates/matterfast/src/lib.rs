@@ -37,8 +37,6 @@ mod ui;
 #[cfg(any(windows, test))]
 mod url_scheme;
 mod video;
-mod zed_extensions;
-pub(crate) use matterfast_zed_theme as zed_theme;
 
 pub const APP_ID: &str = "app.akergez.Matterfast";
 
@@ -125,7 +123,9 @@ pub fn run() {
 fn start(requests: Vec<ipc::Request>, cx: &mut gpui_kit::App) {
     gpui_kit::init(cx);
     fonts::install(cx);
-    themes::load(cx);
+    // Noted before a theme is shown: these are the fonts to go back to.
+    appearance::built_in_fonts(cx);
+    themes::init(cx);
     appearance::apply(None, cx);
     runtime::install(cx);
     ui::init(cx);

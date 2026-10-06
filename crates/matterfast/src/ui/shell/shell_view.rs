@@ -34,6 +34,9 @@ impl Shell {
         cx.on_keyboard_layout_change(|cx| {
             cx.spawn(async move |cx| {
                 let _ = cx.update(|cx| {
+                    // A new wallpaper is a change of configuration too, and
+                    // the colours the phone makes of it are not announced.
+                    gpui_adaptive_colors::refresh(cx);
                     if crate::appearance::behind_the_system(cx) {
                         crate::appearance::apply(None, cx);
                         crate::ui::refresh(cx);
