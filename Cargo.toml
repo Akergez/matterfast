@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/mattermost-api", "crates/mattermost-calls", "crates/matterfast", "crates/matterfast-timefmt", "crates/matterfast-emoji", "crates/matterfast-paths", "crates/matterfast-markdown", "crates/matterfast-testserver"]
 
 [workspace.package]
-version = "1.0.7"
+version = "1.0.8"
 edition = "2021"
 rust-version = "1.95"
 license = "GPL-3.0-only"
