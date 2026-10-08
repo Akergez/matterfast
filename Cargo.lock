@@ -4908,7 +4908,7 @@ dependencies = [
 
 [[package]]
 name = "matterfast"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "android-activity",
  "android_logger",
@@ -4955,14 +4955,14 @@ dependencies = [
 
 [[package]]
 name = "matterfast-emoji"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "emojis",
 ]
 
 [[package]]
 name = "matterfast-markdown"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "matterfast-emoji",
  "pulldown-cmark",
@@ -4970,14 +4970,14 @@ dependencies = [
 
 [[package]]
 name = "matterfast-paths"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "dirs 6.0.0",
 ]
 
 [[package]]
 name = "matterfast-testserver"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "axum",
  "flate2",
@@ -4991,7 +4991,7 @@ dependencies = [
 
 [[package]]
 name = "matterfast-timefmt"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "chrono",
  "mattermost-api",
@@ -4999,7 +4999,7 @@ dependencies = [
 
 [[package]]
 name = "mattermost-api"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "futures-util",
  "rand 0.9.5",
@@ -5017,7 +5017,7 @@ dependencies = [
 
 [[package]]
 name = "mattermost-calls"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "flate2",
  "futures-util",
