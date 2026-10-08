@@ -14,6 +14,7 @@ use crate::state::AppState;
 use crate::timefmt::format_chat_time;
 use crate::ui::kit::{self, Lucide};
 use crate::ui::message::{custom_status_tooltip, emoji_element, status_is_live};
+use crate::ui::rhs::PanelMode;
 use crate::ui::{Action, Ui};
 
 /// How big a conversation's row is drawn: the face at its start, and the
@@ -23,22 +24,56 @@ use crate::ui::{Action, Ui};
 pub(crate) struct Fit {
     face: Rems,
     height: Rems,
+    /// Whether threads have rows of their own in the same list. Where they
+    /// do, an open thread is the row that is lit, and the conversation it
+    /// is in is not lit as well.
+    among_threads: bool,
+    /// How tall the two lines are, and the room left under them where the
+    /// rows around have a third. Each line has its height whether or not
+    /// there is anything on it: a row with nothing said in it would
+    /// otherwise have its name in the middle, and the names of a list would
+    /// not be evenly apart. Together they are a little under the face.
+    heading: Rems,
+    detail: Rems,
+    spare: Option<Rems>,
 }
 
 impl Fit {
     /// In the list of conversations: a face, and two lines beside it.
-    pub(crate) const LIST: Fit = Fit { face: rems(2.5), height: ROW_HEIGHT };
+    pub(crate) const LIST: Fit = Fit {
+        face: rems(2.5),
+        height: ROW_HEIGHT,
+        among_threads: false,
+        heading: rems(1.25),
+        detail: rems(1.125),
+        spare: None,
+    };
     /// In the inbox, between threads, which are three lines tall with a
     /// face to match: a conversation there stands as tall as its
     /// neighbours, so that the text of one row starts under the text of
     /// the last.
-    pub(crate) const INBOX: Fit = Fit { face: INBOX_FACE, height: INBOX_ROW };
+    pub(crate) const INBOX: Fit = Fit {
+        face: INBOX_FACE,
+        height: INBOX_ROW,
+        among_threads: true,
+        heading: INBOX_HEADING,
+        detail: INBOX_SAID,
+        spare: Some(INBOX_ANSWERS),
+    };
 }
 
+/// How tall each of the three lines of a row of the inbox is: who and where,
+/// what was said, and how many answered. Set tight, so that together they
+/// are a little shorter than the face beside them — the text does not stand
+/// out past the face at the top or the bottom.
+pub(crate) const INBOX_HEADING: Rems = rems(1.125);
+pub(crate) const INBOX_SAID: Rems = rems(1.);
+pub(crate) const INBOX_ANSWERS: Rems = rems(0.875);
+
 /// The face of a row of the inbox: as tall as the three lines beside it.
-pub(crate) const INBOX_FACE: Rems = rems(3.5);
+pub(crate) const INBOX_FACE: Rems = rems(3.125);
 /// A row of the inbox: its face, and room around it.
-pub(crate) const INBOX_ROW: Rems = rems(4.75);
+pub(crate) const INBOX_ROW: Rems = rems(4.5);
 
 pub(crate) fn channel_row(
     ui: &Rc<Ui>,
@@ -50,7 +85,9 @@ pub(crate) fn channel_row(
     let theme = cx.theme();
     let title = st.channel_title(channel);
     let unread = st.unread(&channel.id);
-    let selected = st.current_channel.as_deref() == Some(channel.id.as_str());
+    let in_thread = matches!(ui.right.mode(cx), PanelMode::Thread(_));
+    let selected = st.current_channel.as_deref() == Some(channel.id.as_str())
+        && !(fit.among_threads && in_thread);
     let teammate = channel.dm_teammate_id(&st.me.id);
 
     // A conversation with one person is that person: their face, with the
@@ -83,12 +120,17 @@ pub(crate) fn channel_row(
     };
 
     // The first line: who, and when they were last written to.
-    let mut heading = h_flex().gap_1p5().items_center().child(
+    let mut heading = h_flex()
+        .h(fit.heading)
+        .line_height(fit.heading)
+        .gap_1p5()
+        .items_center()
+        .child(
         div()
             .flex_1()
             .min_w_0()
             .truncate()
-            .when(unread.is_unread(), |label| {
+            .when(fit.among_threads || unread.is_unread(), |label| {
                 label.font_weight(FontWeight::SEMIBOLD)
             })
             .child(title),
@@ -133,7 +175,12 @@ pub(crate) fn channel_row(
             .child(format!("\u{2022} {}", said(author, text))),
         Preview::Nothing => line,
     };
-    let mut detail = h_flex().gap_1p5().items_center().child(line);
+    let mut detail = h_flex()
+        .h(fit.detail)
+        .line_height(fit.detail)
+        .gap_1p5()
+        .items_center()
+        .child(line);
 
     // A call in this channel matters more than an unread badge, so it goes
     // first and is always shown.
@@ -165,16 +212,22 @@ pub(crate) fn channel_row(
             v_flex()
                 .flex_1()
                 .min_w_0()
-                .gap_0p5()
                 .child(heading)
-                .child(detail),
+                .child(detail)
+                .when_some(fit.spare, |lines, spare| lines.child(div().h(spare))),
         );
 
     let entries = row_menu(&channel.id, st);
     let menu_ui = ui.clone();
     let channel_id = channel.id.clone();
     let select = channel.id.clone();
+    // Choosing a conversation is choosing all of it: a thread that was open
+    // beside the last thing looked at is put away, and this row is the one
+    // that is lit.
     row.on_click(ui.click(move |ui, cx| {
+        if matches!(ui.right.mode(cx), PanelMode::Thread(_)) {
+            ui.dispatch(Action::CloseRightPanel, cx);
+        }
         ui.dispatch(Action::SelectChannel(select.clone()), cx)
     }))
     // Mute it, mark it, or file it under a different category: all things

@@ -358,6 +358,7 @@ fn feed(posts: Vec<Post>) -> ChannelFeed {
         at_latest: true,
         at_oldest: true,
         last_fetched_at: last,
+        ahead: None,
     }
 }
 

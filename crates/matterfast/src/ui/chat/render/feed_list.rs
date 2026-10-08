@@ -33,9 +33,13 @@ pub(super) fn feed(ui: &Rc<Ui>, cx: &App) -> AnyElement {
     .size_full()
     .py_3();
 
-    let scrolled_up = !list_state.is_following_tail()
-        && list_state.max_offset_for_scrollbar().y > px(0.)
-        && !list_state.is_scrolled_to_end().unwrap_or(false);
+    // A block that stops short of the present is away from the newest
+    // message wherever it is scrolled to, its own end included.
+    let behind = chat.behind.get();
+    let scrolled_up = behind
+        || (!list_state.is_following_tail()
+            && list_state.max_offset_for_scrollbar().y > px(0.)
+            && !list_state.is_scrolled_to_end().unwrap_or(false));
 
     div()
         .id("feed")
@@ -72,6 +76,12 @@ pub(super) fn feed(ui: &Rc<Ui>, cx: &App) -> AnyElement {
                             .icon(Lucide::ArrowDown)
                             .tooltip("Jump to latest")
                             .on_click(ui.click(|ui, cx| {
+                                // The newest message is not in a block that
+                                // stops short of it: it has to be fetched.
+                                if ui.chat.behind.get() {
+                                    ui.return_to_present(cx);
+                                    return;
+                                }
                                 ui.chat.scroll_to_newest("jump-button");
                                 crate::ui::refresh(cx);
                             })),

@@ -2,7 +2,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use gpui_kit::{
-    px, rems, App, Bounds, ListAlignment, ListState, Pixels, Point, Rems, TouchPhase,
+    px, rems, App, Bounds, ListAlignment, ListState, Pixels, Point, Rems, TouchPhase, Window,
 };
 use mattermost_api::models::Channel;
 
@@ -45,6 +45,13 @@ pub struct ChannelSidebar {
     /// there is for the tabs, and one over the tabs themselves scrolls them.
     pub(super) body: Cell<Bounds<Pixels>>,
     tab_swipe: Cell<TabSwipe>,
+    /// How far the rows are from their place, in widths of the list: a tab
+    /// that was swiped to comes in from the side the finger left for, +1
+    /// for the right. Zero when nothing is moving.
+    slide: Cell<f32>,
+    /// When `slide` last moved, which is what its next step is measured
+    /// from.
+    slid: Cell<Option<std::time::Instant>>,
 }
 
 impl ChannelSidebar {
@@ -57,7 +64,41 @@ impl ChannelSidebar {
             inbox: Cell::new(true),
             body: Cell::new(Bounds::default()),
             tab_swipe: Cell::new(TabSwipe::Idle),
+            slide: Cell::new(0.0),
+            slid: Cell::new(None),
         }
+    }
+
+    /// Starts the rows of a tab just turned to off to one side, to come in
+    /// from there.
+    pub(super) fn slide_from(&self, side: f32, cx: &mut App) {
+        self.slide.set(side);
+        self.slid.set(None);
+        crate::ui::refresh(cx);
+    }
+
+    /// Where the rows are for this frame, a step nearer their place. Asks
+    /// for another frame until they are in it.
+    pub(super) fn advance(&self, window: &mut Window) -> f32 {
+        let mut slide = self.slide.get();
+        if slide == 0.0 {
+            return slide;
+        }
+        let now = std::time::Instant::now();
+        let elapsed = self
+            .slid
+            .replace(Some(now))
+            .map_or(1.0 / 60.0, |last| (now - last).as_secs_f32())
+            .min(0.05);
+        // Fast at first and slowing into place, as a page of the window is.
+        slide *= (-elapsed / 0.06).exp();
+        if slide.abs() < 0.004 {
+            slide = 0.0;
+            self.slid.set(None);
+        }
+        self.slide.set(slide);
+        window.request_animation_frame();
+        slide
     }
 
     /// One step of a pan across the list when it is the screen in front.

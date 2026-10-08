@@ -63,6 +63,8 @@ pub(crate) fn turn(ui: &Rc<Ui>, step: i32, cx: &mut App) {
         1 => ui.channels.set_folder(None, cx),
         folder => ui.channels.set_folder(folders.get(folder - 2).cloned(), cx),
     }
+    // The next tab comes in from the right, the one before from the left.
+    ui.channels.slide_from(if next > now { 1.0 } else { -1.0 }, cx);
 }
 
 /// The tabs over the list: the inbox first, every conversation second, then

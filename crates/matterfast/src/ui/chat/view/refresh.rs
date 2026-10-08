@@ -42,6 +42,7 @@ impl ChatView {
         let empty = crate::state::ChannelFeed::default();
         let feed = st.feeds.get(&channel_id).unwrap_or(&empty);
         let at_latest = feed.at_latest || feed.posts.is_empty();
+        self.behind.set(!at_latest);
         let title = st.channel_title(&channel);
         let items = build_feed_items(
             &feed.posts,
@@ -79,6 +80,7 @@ impl ChatView {
         } else {
             *self.showing.borrow_mut() = Some(channel_id);
             self.pagination_armed.set(true);
+            self.newer_armed.set(true);
             self.member_count.set(None);
             self.highlight.borrow_mut().take();
             let unread_at = items

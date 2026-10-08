@@ -34,6 +34,72 @@ struct Effects {
     notify_about: Option<mattermost_api::ws::Posted>,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mattermost_api::ws::Posted;
+
+    fn posted(at: Millis, root_id: &str) -> Event {
+        Event::Posted(Posted {
+            post: Post {
+                id: format!("post-{at}"),
+                channel_id: "c-dev".into(),
+                user_id: "u-lena".into(),
+                create_at: at,
+                root_id: root_id.into(),
+                ..Default::default()
+            },
+            channel_type: "O".into(),
+            channel_display_name: String::new(),
+            channel_name: String::new(),
+            sender_name: String::new(),
+            team_id: String::new(),
+            mentions: Vec::new(),
+            followers: Vec::new(),
+            should_ack: false,
+        })
+    }
+
+    #[test]
+    fn a_new_root_in_another_channel_updates_the_inbox_sort_time() {
+        let state = crate::demo::state();
+        state.borrow_mut().current_channel = Some("c-general".into());
+        {
+            let mut st = state.borrow_mut();
+            let channel = st.channels.get_mut("c-dev").unwrap();
+            channel.last_post_at = 100;
+            channel.last_root_post_at = 100;
+        }
+        let (notifier, _) = crate::notifications::Notifier::start();
+        let ui = Ui::new(state, notifier);
+        let mut fx = Effects::default();
+        ui.record_event(posted(200, ""), Some("c-general"), &mut fx);
+
+        assert_eq!(ui.state.borrow().channels["c-dev"].last_root_post_at, 200);
+        assert!(fx.redraw_sidebar);
+        assert!(!fx.touched, "the open feed did not change");
+    }
+
+    #[test]
+    fn replies_and_delayed_events_do_not_move_the_last_root_time_backwards() {
+        let state = crate::demo::state();
+        {
+            let mut st = state.borrow_mut();
+            let channel = st.channels.get_mut("c-dev").unwrap();
+            channel.last_post_at = 200;
+            channel.last_root_post_at = 200;
+        }
+        let (notifier, _) = crate::notifications::Notifier::start();
+        let ui = Ui::new(state, notifier);
+        ui.record_event(posted(300, "root"), None, &mut Effects::default());
+        ui.record_event(posted(100, ""), None, &mut Effects::default());
+
+        let st = ui.state.borrow();
+        assert_eq!(st.channels["c-dev"].last_root_post_at, 200);
+        assert_eq!(st.channels["c-dev"].last_post_at, 300);
+    }
+}
+
 impl Ui {
     pub(crate) fn apply_event(self: &Rc<Self>, event: Event, cx: &mut App) {
         // Calls traffic arrives as plugin-namespaced events and never overlaps
@@ -93,8 +159,9 @@ impl Ui {
                     channel.total_msg_count += 1;
                     if !is_reply {
                         channel.total_msg_count_root += 1;
+                        channel.last_root_post_at = channel.last_root_post_at.max(create_at);
                     }
-                    channel.last_post_at = create_at;
+                    channel.last_post_at = channel.last_post_at.max(create_at);
                 }
                 if let Some(member) = st.memberships.get_mut(&channel_id) {
                     if is_mine || viewing {
@@ -366,6 +433,11 @@ impl Ui {
             self.refresh_messages(cx);
         }
         if fx.redraw_sidebar {
+            // The inbox keeps its own ordered rows. A message in another
+            // channel does not refresh the open feed, but must reorder these.
+            if !fx.redraw_messages && !fx.touched {
+                self.right.refresh(&self.state, cx);
+            }
             self.channels.refresh(cx);
             self.refresh_title(cx);
         }

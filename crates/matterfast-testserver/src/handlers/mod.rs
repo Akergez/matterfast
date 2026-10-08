@@ -32,7 +32,9 @@ pub(crate) use my_channel_members::my_channel_members;
 pub(crate) use my_channels::my_channels;
 pub(crate) use my_team_members::my_team_members;
 pub(crate) use my_teams::my_teams;
-pub(crate) use posts::{channel_posts, create_post, post_action, post_thread, unread_posts};
+pub(crate) use posts::{
+    channel_posts, create_post, get_post, post_action, post_thread, unread_posts,
+};
 pub(crate) use reactions::{add_reaction, remove_reaction};
 pub(crate) use search::search_posts;
 pub(crate) use team_unreads::team_unreads;

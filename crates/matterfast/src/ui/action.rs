@@ -11,6 +11,9 @@ pub enum Action {
     /// front: the one the window starts with, which nobody chose. On a phone
     /// the list stays the screen.
     LoadChannel(String),
+    /// The bottom of a feed that stops short of the newest message was
+    /// reached: the page after it.
+    LoadNewer,
     Send(String),
     /// Join the current channel's call, or leave the one we are in.
     ToggleCall,

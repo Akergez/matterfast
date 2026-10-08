@@ -1,0 +1,33 @@
+# mode: server
+# size: 1320x840
+# server: MM_BOT_SECONDS=20 MM_FAVORITES=1
+#
+# A live post in a favourite must reorder the retained inbox even while
+# another channel is open. The bot's first post is in Development at 20s.
+wait:5000
+expect:session=yes
+expect:folder=inbox
+key:ctrl-k
+wait:400
+type:Lena
+wait:400
+key:enter
+wait:1500
+expect:channel=Lena Petrova
+click:850,808
+type:Newest inbox conversation
+expect:composer=Newest inbox conversation
+key:enter
+wait:1200
+expect:inbox-first=chat:cccccccccccccccccccccdmlen
+key:ctrl-k
+wait:400
+type:General
+wait:400
+key:enter
+wait:1200
+expect:channel=General
+wait:12000
+expect:channel=General
+expect:inbox-first=chat:ccccccccccccccccccccccdeve
+quit

@@ -19,7 +19,9 @@ mod row_menu;
 mod switcher;
 mod tab_swipe;
 
-pub(crate) use channel_row::{channel_row, Fit, INBOX_FACE, INBOX_ROW};
+pub(crate) use channel_row::{
+    channel_row, Fit, INBOX_ANSWERS, INBOX_FACE, INBOX_HEADING, INBOX_ROW, INBOX_SAID,
+};
 pub(crate) use folders::turn;
 pub use channel_sidebar::ChannelSidebar;
 pub use render::render;

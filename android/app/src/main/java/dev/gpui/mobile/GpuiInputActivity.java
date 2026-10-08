@@ -7,10 +7,12 @@ import android.os.Bundle;
 import android.text.Editable;
 import android.text.InputType;
 import android.text.Selection;
+import android.text.SpannableStringBuilder;
 import android.text.TextUtils;
-import android.text.TextWatcher;
 import android.util.Log;
 import android.view.KeyEvent;
+import android.view.KeyCharacterMap;
+import android.view.View;
 import android.view.ViewGroup;
 import android.view.inputmethod.BaseInputConnection;
 import android.view.inputmethod.EditorInfo;
@@ -20,7 +22,6 @@ import android.view.inputmethod.SurroundingText;
 import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputConnectionWrapper;
 import android.view.inputmethod.InputMethodManager;
-import android.widget.EditText;
 
 /** NativeActivity with a UI-thread InputConnection for multistage IMEs. */
 public class GpuiInputActivity extends NativeActivity {
@@ -130,10 +131,18 @@ public class GpuiInputActivity extends NativeActivity {
         });
     }
 
-    private final class InputProxy extends EditText {
+    // EditText reports its own selection to the IME when its buffer is
+    // cleared. Our buffer holds only the pending composition, so that would
+    // falsely report cursor 0 after every commit. Own the notifications here.
+    private final class InputProxy extends View {
         private long session;
         private int depth;
         private boolean marked;
+        private final Editable text = new SpannableStringBuilder();
+        private int type;
+        private int options;
+        private Integer extractedToken;
+        private InputConnection activeConnection;
         /**
          * What has been typed before the cursor since the box got the keyboard.
          * The widget itself is emptied after every word — the text lives in the
@@ -149,22 +158,30 @@ public class GpuiInputActivity extends NativeActivity {
 
         InputProxy() {
             super(GpuiInputActivity.this);
-            addTextChangedListener(new TextWatcher() {
-                public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
-                public void onTextChanged(CharSequence s, int start, int before, int count) {}
-                public void afterTextChanged(Editable text) {
-                    // Hardware keyboards edit the widget directly, outside its
-                    // InputConnection. IME mutations are batched by depth below.
-                    if (depth == 0) { depth++; endEdit(); }
-                }
-            });
+            setFocusable(true);
+            setFocusableInTouchMode(true);
+            Selection.setSelection(text, 0);
         }
 
+        Editable getText() { return text; }
+        int getInputType() { return type; }
+        void setInputType(int next) { type = next; }
+        void setImeOptions(int next) { options = next; }
+
+        @Override public boolean onCheckIsTextEditor() { return true; }
+
         @Override public boolean onKeyDown(int code, KeyEvent event) {
-            if (code == KeyEvent.KEYCODE_DEL && getText().length() == 0 && !marked) {
-                nativeIme(session, 3, "", 1, 0);
-                forgetCodePoints(1);
-                return true;
+            if (activeConnection != null) {
+                if (code == KeyEvent.KEYCODE_DEL) {
+                    return activeConnection.deleteSurroundingTextInCodePoints(1, 0);
+                }
+                if (code == KeyEvent.KEYCODE_ENTER) {
+                    return activeConnection.commitText("\n", 1);
+                }
+                int unicode = event.getUnicodeChar();
+                if (unicode != 0 && (unicode & KeyCharacterMap.COMBINING_ACCENT) == 0) {
+                    return activeConnection.commitText(new String(Character.toChars(unicode)), 1);
+                }
             }
             return super.onKeyDown(code, event);
         }
@@ -173,16 +190,20 @@ public class GpuiInputActivity extends NativeActivity {
             Log.d(TAG, "reset: session=" + nextSession + " atStart=" + atStart);
             depth++;
             getText().clear();
+            Selection.setSelection(text, 0);
             marked = false;
             session = nextSession;
             before.setLength(0);
             fromStart = atStart;
+            extractedToken = null;
+            activeConnection = null;
             depth = 0;
         }
 
         /** Takes the last {@code count} characters back out of {@link #before}. */
         private void forget(int count) {
             before.setLength(Math.max(0, before.length() - Math.max(0, count)));
+            reportState();
         }
 
         /** The same, counted the way a deletion by code points counts. */
@@ -190,6 +211,7 @@ public class GpuiInputActivity extends NativeActivity {
             int length = before.length();
             int kept = Math.max(0, before.codePointCount(0, length) - Math.max(0, count));
             before.setLength(before.offsetByCodePoints(0, kept));
+            reportState();
         }
 
         /** Everything known to stand before the cursor, the word being typed included. */
@@ -207,6 +229,28 @@ public class GpuiInputActivity extends NativeActivity {
         private int capsMode(int requested) {
             String context = (fromStart ? "" : "a") + beforeCursor();
             return TextUtils.getCapsMode(context, context.length(), requested);
+        }
+
+        private ExtractedText extractedText() {
+            ExtractedText extracted = new ExtractedText();
+            extracted.text = before.toString() + getText().toString();
+            extracted.startOffset = 0;
+            extracted.partialStartOffset = -1;
+            extracted.partialEndOffset = -1;
+            extracted.selectionStart = before.length() + Math.max(0, Selection.getSelectionStart(text));
+            extracted.selectionEnd = before.length() + Math.max(0, Selection.getSelectionEnd(text));
+            return extracted;
+        }
+
+        private void reportState() {
+            InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+            ExtractedText extracted = extractedText();
+            int start = BaseInputConnection.getComposingSpanStart(text);
+            int end = BaseInputConnection.getComposingSpanEnd(text);
+            imm.updateSelection(this, extracted.selectionStart, extracted.selectionEnd,
+                    start < 0 ? -1 : before.length() + start,
+                    end < 0 ? -1 : before.length() + end);
+            if (extractedToken != null) imm.updateExtractedText(this, extractedToken, extracted);
         }
 
         private void endEdit() {
@@ -228,9 +272,11 @@ public class GpuiInputActivity extends NativeActivity {
                     }
                     depth++;
                     text.clear();
+                    Selection.setSelection(text, 0);
                     depth--;
                 }
             }
+            reportState();
         }
 
         @Override public boolean onKeyPreIme(int code, KeyEvent event) {
@@ -241,8 +287,11 @@ public class GpuiInputActivity extends NativeActivity {
         }
 
         @Override public InputConnection onCreateInputConnection(EditorInfo info) {
-            InputConnection connection = super.onCreateInputConnection(info);
-            if (connection == null) return null;
+            info.inputType = type;
+            info.imeOptions = options;
+            InputConnection connection = new BaseInputConnection(this, true) {
+                @Override public Editable getEditable() { return InputProxy.this.getText(); }
+            };
             // The widget is empty, which reads as the start of a sentence
             // every time the keyboard is restarted.
             info.initialCapsMode = capsMode(info.inputType);
@@ -258,7 +307,7 @@ public class GpuiInputActivity extends NativeActivity {
             Log.d(TAG, "connection: type=" + info.inputType + " caps=" + info.initialCapsMode
                     + " before=" + known.length() + " fromStart=" + fromStart);
             final long connectionSession = session;
-            return new InputConnectionWrapper(connection, false) {
+            activeConnection = new InputConnectionWrapper(connection, false) {
                 @Override public int getCursorCapsMode(int requested) {
                     if (connectionSession != session) return 0;
                     int caps = capsMode(requested);
@@ -273,9 +322,10 @@ public class GpuiInputActivity extends NativeActivity {
                             all.length());
                 }
                 @Override public CharSequence getTextAfterCursor(int length, int flags) {
-                    // The cursor is taken to be at the end: what follows it is
-                    // not known here.
-                    return "";
+                    if (connectionSession != session) return "";
+                    int cursor = Math.max(0, Math.min(Selection.getSelectionEnd(text), text.length()));
+                    int count = Math.min(Math.max(0, length), text.length() - cursor);
+                    return text.subSequence(cursor, cursor + count).toString();
                 }
                 @Override public SurroundingText getSurroundingText(int before, int after,
                         int flags) {
@@ -292,27 +342,21 @@ public class GpuiInputActivity extends NativeActivity {
                 @Override public ExtractedText getExtractedText(ExtractedTextRequest request,
                         int flags) {
                     if (connectionSession != session) return null;
-                    CharSequence all = beforeCursor();
-                    Log.d(TAG, "getExtractedText of " + all.length());
-                    ExtractedText extracted = new ExtractedText();
-                    extracted.text = all;
-                    extracted.startOffset = 0;
-                    extracted.partialStartOffset = -1;
-                    extracted.partialEndOffset = -1;
-                    extracted.selectionStart = all.length();
-                    extracted.selectionEnd = all.length();
-                    return extracted;
+                    if ((flags & InputConnection.GET_EXTRACTED_TEXT_MONITOR) != 0) {
+                        extractedToken = request.token;
+                    }
+                    return extractedText();
                 }
                 @Override public boolean beginBatchEdit() {
                     if (connectionSession != session) return false;
                     depth++;
-                    return super.beginBatchEdit();
+                    return true;
                 }
                 @Override public boolean endBatchEdit() {
                     if (connectionSession != session) return false;
-                    boolean result = super.endBatchEdit();
-                    if (depth > 0) endEdit();
-                    return result;
+                    if (depth == 0) return false;
+                    endEdit();
+                    return depth > 0;
                 }
                 @Override public boolean setComposingText(CharSequence text, int cursor) {
                     if (connectionSession != session) return false;
@@ -322,6 +366,11 @@ public class GpuiInputActivity extends NativeActivity {
                 }
                 @Override public boolean setComposingRegion(int start, int end) {
                     if (connectionSession != session) return false;
+                    start -= before.length();
+                    end -= before.length();
+                    if (start < 0 || end < 0 || start > text.length() || end > text.length()) {
+                        return false;
+                    }
                     depth++;
                     try { return super.setComposingRegion(start, end); }
                     finally { endEdit(); }
@@ -340,6 +389,11 @@ public class GpuiInputActivity extends NativeActivity {
                 }
                 @Override public boolean setSelection(int start, int end) {
                     if (connectionSession != session) return false;
+                    start -= before.length();
+                    end -= before.length();
+                    if (start < 0 || end < 0 || start > text.length() || end > text.length()) {
+                        return false;
+                    }
                     depth++;
                     try { return super.setSelection(start, end); }
                     finally { endEdit(); }
@@ -388,6 +442,7 @@ public class GpuiInputActivity extends NativeActivity {
                     return commitText("\n", 1);
                 }
             };
+            return activeConnection;
         }
     }
 

@@ -58,7 +58,7 @@ pub(super) fn preview(channel: &Channel, st: &AppState) -> Preview {
             return Preview::Draft(draft);
         }
     }
-    let Some(post) = st.feeds.get(&channel.id).and_then(|feed| feed.posts.last()) else {
+    let Some(post) = st.feeds.get(&channel.id).and_then(|feed| feed.newest()) else {
         return Preview::Nothing;
     };
     // In a conversation of two the other person needs no naming, and a

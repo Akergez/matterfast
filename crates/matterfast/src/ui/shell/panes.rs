@@ -34,7 +34,7 @@ pub(super) struct Pane {
 }
 
 impl Render for Pane {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let ui = &self.ui;
         // The call dock sits under the channel list, and under the
         // conversation once the list is a page of its own.
@@ -50,7 +50,7 @@ impl Render for Pane {
                 let dock = (!collapsed)
                     .then(|| crate::ui::call_dock::render(ui, cx))
                     .flatten();
-                crate::ui::sidebar::render(ui, dock, cx)
+                crate::ui::sidebar::render(ui, dock, window, cx)
             }
             Which::Chat => {
                 ui.learn_unknown_mentions();

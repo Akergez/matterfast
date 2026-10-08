@@ -34,6 +34,15 @@ pub struct ChatView {
     /// Edge-trigger for history pagination. A physical approach to the top
     /// produces one request, not one request per scroll tick.
     pub(crate) pagination_armed: Rc<Cell<bool>>,
+    /// Whether what is held of the channel stops short of its newest
+    /// message: a block around a search hit, or around where reading
+    /// stopped. Then the bottom of the feed is an edge like the top, with a
+    /// page after it.
+    pub(crate) behind: Rc<Cell<bool>>,
+    /// The same edge-trigger for the page after the last message.
+    pub(crate) newer_armed: Rc<Cell<bool>>,
+    /// Set while that page is fetched.
+    pub(crate) loading_newer: Cell<bool>,
     pub(crate) typing: RefCell<Vec<String>>,
     /// `None` means connected. Anything else is shown until it is cleared.
     pub(crate) connection: RefCell<Option<String>>,
@@ -72,6 +81,9 @@ impl ChatView {
             loading: Cell::new(false),
             loading_older: Cell::new(false),
             pagination_armed: Rc::new(Cell::new(true)),
+            behind: Rc::new(Cell::new(false)),
+            newer_armed: Rc::new(Cell::new(true)),
+            loading_newer: Cell::new(false),
             typing: RefCell::new(Vec::new()),
             connection: RefCell::new(None),
             member_count: Cell::new(None),
@@ -96,6 +108,8 @@ impl ChatView {
     pub(crate) fn connect(&self, ui: &Rc<Ui>) {
         let weak = Rc::downgrade(ui);
         let armed = self.pagination_armed.clone();
+        let behind = self.behind.clone();
+        let newer_armed = self.newer_armed.clone();
         self.list.set_scroll_handler(move |event, _, cx| {
             crate::ui::frame_log::wheel();
             if scroll_trace_enabled() {
@@ -118,6 +132,20 @@ impl ChatView {
             {
                 let Some(ui) = weak.upgrade() else { return };
                 ui.dispatch(Action::LoadOlder, cx);
+            }
+            // The other end, where there is one: a block that stops short of
+            // the present has a page after its last row.
+            if !behind.get() {
+                return;
+            }
+            let rows = event.count;
+            let from_end = rows.saturating_sub(event.visible_range.end);
+            if from_end > PAGINATE_WITHIN * 4 {
+                newer_armed.set(true);
+            }
+            if from_end <= PAGINATE_WITHIN && newer_armed.replace(false) {
+                let Some(ui) = weak.upgrade() else { return };
+                ui.dispatch(Action::LoadNewer, cx);
             }
         });
     }

@@ -37,11 +37,22 @@ pub(crate) async fn channel_posts(
         .collect();
     matched.sort_by_key(|p| -p["create_at"].as_i64().unwrap_or(0));
 
-    let start = before
-        .and_then(|id| matched.iter().position(|post| post["id"] == id))
-        .map_or_else(|| page.saturating_mul(per_page), |position| position + 1)
-        .min(matched.len());
-    let end = start.saturating_add(per_page).min(matched.len());
+    // `after=<post>` is the page that follows a post, towards the present:
+    // what a client asks for to walk forward from a block of history. The
+    // list is newest first, so that page ends just short of the post.
+    let after = q
+        .get("after")
+        .and_then(|id| matched.iter().position(|post| post["id"] == id.as_str()));
+    let (start, end) = match after {
+        Some(position) => (position.saturating_sub(per_page), position),
+        None => {
+            let start = before
+                .and_then(|id| matched.iter().position(|post| post["id"] == id))
+                .map_or_else(|| page.saturating_mul(per_page), |position| position + 1)
+                .min(matched.len());
+            (start, start.saturating_add(per_page).min(matched.len()))
+        }
+    };
     let page = &matched[start..end];
     let order: Vec<String> = page
         .iter()

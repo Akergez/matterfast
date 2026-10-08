@@ -47,6 +47,11 @@ pub struct RightPanel {
 }
 
 impl RightPanel {
+    /// The inbox's retained row order, for scripted UI assertions.
+    pub(crate) fn inbox_keys(&self) -> Vec<String> {
+        self.inbox.borrow().entries.iter().map(|entry| entry.key()).collect()
+    }
+
     pub fn new(window: Rc<WindowSlot>) -> Self {
         let list = ListState::new(0, ListAlignment::Bottom, px(400.));
         list.set_follow_mode(FollowMode::Tail);

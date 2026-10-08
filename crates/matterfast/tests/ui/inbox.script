@@ -10,19 +10,29 @@ wait:2500
 expect:folder=inbox
 expect:panel=hidden
 # The direct conversation with something unread in it, last in the demo.
-move:80,393
+move:80,379
 wait:300
-click:92,393
+click:92,379
 wait:1200
 expect:channel=Lena Petrova
 expect:folder=inbox
 # The followed thread, above it.
-move:150,317
+move:150,307
 wait:300
-click:150,317
+click:150,307
 wait:1500
 expect:panel=thread
 expect:channel=Development
+shot:inbox-thread
+# Choosing a conversation is choosing all of it: the thread is put away, even
+# when the conversation is the one the thread was in.
+move:80,163
+wait:300
+click:92,163
+wait:1200
+expect:panel=hidden
+expect:channel=Development
+shot:inbox-channel
 move:115,102
 wait:300
 click:120,102

@@ -88,17 +88,21 @@ impl Ui {
                             st.users.insert(user.id.clone(), user);
                         }
                         st.apply_statuses(statuses);
-                        let feed = st.feeds.entry(channel_id).or_default();
-                        for post in ChannelFeed::from_list(&before).posts {
-                            feed.upsert(post);
-                        }
-                        for post in ChannelFeed::from_list(&after).posts {
-                            feed.upsert(post);
-                        }
-                        feed.upsert(target);
-                        // The feed no longer runs to the newest post, so the
-                        // view must not claim it does.
-                        feed.at_latest = false;
+                        // The page around the message is one block, and it
+                        // is where it is: joined to what is held if they
+                        // meet, in its place if they do not. Poured in on
+                        // top of today's page it left everything between
+                        // the two missing, with nothing to fetch it.
+                        let older = ChannelFeed::from_list(&before);
+                        let newer = ChannelFeed::from_list(&after);
+                        let (at_oldest, at_latest) = (older.at_oldest, newer.at_latest);
+                        let mut block = older.posts;
+                        block.push(target);
+                        block.extend(newer.posts);
+                        st.feeds
+                            .entry(channel_id)
+                            .or_default()
+                            .land(block, at_oldest, at_latest);
                     }
                     ui.refresh_messages(cx);
                     let ui = ui.clone();

@@ -42,7 +42,10 @@
 //! - `panel=thread|inbox|search|hidden` — what the right-hand panel shows
 //! - `folder=<name>|all` — the folder the list of conversations is narrowed to
 //! - `chats=<a>|<b>|…` — the conversations listed, in the order they are in
+//! - `inbox-first=<key>` — the first retained inbox row (`chat:<channel-id>`, etc.)
 //! - `page=list|chat` — which of the two a phone-sized window has in front
+//! - `held=<n>` — how many messages of the open channel are held
+//! - `behind=yes|no` — whether what is held stops short of the newest message
 //! - `mentions=<n>` — the count the title bar is showing
 //! - `pointed=yes|no` — whether a message has had the pointer over it, which
 //!   is what gives it its bar of actions
@@ -228,6 +231,22 @@ fn observe(what: &str, window: &mut Window, cx: &mut App) -> Option<String> {
                 titles.join("|")
             })
             .unwrap_or_default(),
+        "inbox-first" => ui
+            .and_then(|ui| ui.right.inbox_keys().into_iter().next())
+            .unwrap_or_default(),
+        "held" => ui
+            .and_then(|ui| {
+                let state = ui.state.borrow();
+                let feed = state.feeds.get(state.current_channel.as_deref()?)?;
+                Some(feed.posts.len())
+            })
+            .unwrap_or(0)
+            .to_string(),
+        "behind" => match ui.is_some_and(|ui| ui.chat.behind.get()) {
+            true => "yes",
+            false => "no",
+        }
+        .to_string(),
         "page" => match ui.is_some_and(|ui| ui.split.showing_content()) {
             true => "chat",
             false => "list",

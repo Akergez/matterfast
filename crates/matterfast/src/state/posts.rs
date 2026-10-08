@@ -47,8 +47,10 @@ impl AppState {
             }
         }
 
+        // Into the block only where the block runs to the present: see
+        // `ChannelFeed::live`.
         if let Some(feed) = self.feeds.get_mut(&post.channel_id) {
-            feed.upsert(post);
+            feed.live(post);
         }
     }
 

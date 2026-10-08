@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme};
 use gpui_kit::prelude::*;
-use gpui_kit::{canvas, div, list, px, AnyElement, App, FontWeight};
+use gpui_kit::{canvas, div, list, px, AnyElement, App, FontWeight, Window};
 
 use super::channel_row::{channel_row, Fit};
 use super::channel_sidebar::ROW_HEIGHT;
@@ -14,7 +14,12 @@ use crate::ui::{MenuAction, Ui};
 
 /// Draws the sidebar. `dock` is the call dock, which is pinned under the
 /// channel list for as long as a call runs.
-pub fn render(ui: &Rc<Ui>, dock: Option<AnyElement>, cx: &mut App) -> AnyElement {
+pub fn render(
+    ui: &Rc<Ui>,
+    dock: Option<AnyElement>,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
     let st = ui.state.borrow();
     let theme = cx.theme();
     let team_name = st
@@ -90,6 +95,8 @@ pub fn render(ui: &Rc<Ui>, dock: Option<AnyElement>, cx: &mut App) -> AnyElement
 
     let pane = v_flex()
         .size_full()
+        // Rows on their way in from a side are not drawn past the column.
+        .overflow_hidden()
         .bg(theme.sidebar)
         .text_color(theme.sidebar_foreground)
         .border_r_1()
@@ -103,9 +110,13 @@ pub fn render(ui: &Rc<Ui>, dock: Option<AnyElement>, cx: &mut App) -> AnyElement
     };
     // Where the rows are is kept, for telling a swipe across them from one
     // across the tabs.
+    // A tab that was swiped to slides in from its side.
+    let slide = ui.channels.advance(window);
+    let across = ui.channels.body.get().size.width;
     let seen = ui.clone();
     let body = v_flex()
         .relative()
+        .left(across * slide)
         .flex_1()
         .min_h_0()
         .child(

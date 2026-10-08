@@ -1,0 +1,49 @@
+# mode: server
+# size: 1320x840
+# server: MM_HISTORY=150
+#
+# Going to a search hit far back in a channel leaves the page around it and
+# nothing else: not that page on top of today's with everything between the
+# two missing. From there the bottom of the feed is an edge with a page after
+# it, as the top is one with a page before, and the button over the feed
+# fetches the newest page instead of scrolling to an end that is not the end.
+wait:6000
+key:ctrl-f
+wait:800
+type:backlog
+key:enter
+wait:3000
+# To the oldest of the hits, three pages of them down.
+scroll:1120,450,-20000
+wait:3000
+scroll:1120,450,-40000
+wait:3000
+scroll:1120,450,-40000
+wait:1500
+# The channel's name over the last hit, which is what goes to it.
+move:975,758
+wait:300
+click:975,758
+wait:4000
+expect:channel=Development
+# The first message of the channel and the thirty after it.
+expect:behind=yes
+expect:held=31
+key:escape
+wait:800
+# One scroll gets to the end of what has been measured, the next is at the
+# end of the block.
+scroll:620,450,-40000
+wait:800
+scroll:620,450,-300
+wait:3000
+expect:held=91
+expect:behind=yes
+# The button at the bottom right of the feed.
+move:1288,758
+wait:300
+click:1288,758
+wait:3000
+expect:behind=no
+expect:held=60
+quit

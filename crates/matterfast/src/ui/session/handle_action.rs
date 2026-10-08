@@ -15,12 +15,22 @@ impl Ui {
             Action::SelectTeam(team_id) => self.select_team(team_id, cx),
             Action::SelectChannel(channel_id) => self.select_channel(channel_id, cx),
             Action::LoadChannel(channel_id) => self.load_channel(channel_id, cx),
+            Action::LoadNewer => self.load_newer_page(cx),
             Action::Send(text) => {
                 // The composer is shared with editing, so what "send" means
                 // depends on which mode it is in.
-                match self.chat.editing(cx) {
-                    Some(post_id) => self.submit_edit(post_id, text, cx),
-                    None => self.send_message(text, None, cx),
+                let channel = self.state.borrow().current_channel.clone();
+                match (self.chat.editing(cx), channel) {
+                    (Some(post_id), _) => self.submit_edit(post_id, text, cx),
+                    // Written from a block of history, a message belongs
+                    // after the newest one, which is not there: the newest
+                    // page first, and the message onto the end of that.
+                    (None, Some(channel_id)) if self.chat.behind.get() => {
+                        self.load_latest(channel_id, move |ui, cx| {
+                            ui.send_message(text, None, cx);
+                        });
+                    }
+                    (None, _) => self.send_message(text, None, cx),
                 }
                 // The composer is empty now, so the draft has to go with it —
                 // and immediately, not on the debounce.

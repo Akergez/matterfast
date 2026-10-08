@@ -6,7 +6,8 @@ use axum::Router;
 use crate::app::App;
 use crate::handlers::{
     add_reaction, categories, channel_posts, client_config, create_post, emoji_by_name,
-    emoji_image, emoji_list, emoji_search, empty_array, empty_object, group_members, groups,
+    emoji_image, emoji_list, emoji_search, empty_array, empty_object, get_post, group_members,
+    groups,
     login, me, my_channel_members, my_channels, my_team_members, my_teams, post_action,
     post_thread, remove_reaction, search_posts, statuses, team_unreads, threads, unread_posts,
     user_image, users_autocomplete, users_by_ids, users_by_usernames, users_query, users_search,
@@ -50,6 +51,7 @@ pub(super) fn api() -> Router<Arc<App>> {
         .route("/channels/{channel}/posts", get(channel_posts))
         .route("/channels/members/me/view", post(view_channel))
         .route("/posts", post(create_post))
+        .route("/posts/{post}", get(get_post))
         .route("/posts/{post}/thread", get(post_thread))
         .route("/posts/{post}/actions/{action}", post(post_action))
         .route("/reactions", post(add_reaction))

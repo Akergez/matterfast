@@ -124,8 +124,12 @@ impl Ui {
                 .feeds
                 .get(&channel_id)
                 .is_some_and(|feed| !feed.at_latest);
+            // Its newest page, which joins what is held where they meet and
+            // replaces it where they do not: a block that was left months
+            // back — a search hit somebody went to — is not walked forward
+            // to today.
             if behind {
-                self.load_newer(channel_id.clone(), cx);
+                self.load_latest(channel_id.clone(), |_, _| {});
             }
         }
 
@@ -215,8 +219,13 @@ impl Ui {
                             st.users.insert(user.id.clone(), user);
                         }
                         st.apply_statuses(statuses);
+                        // Unless something got there first: a message
+                        // somebody went to in this channel fetches the page
+                        // around itself, and that one is what they asked
+                        // to see.
                         st.feeds
-                            .insert(channel_id.clone(), ChannelFeed::from_list(&posts));
+                            .entry(channel_id.clone())
+                            .or_insert_with(|| ChannelFeed::from_list(&posts));
                     }
                     ui.chat.set_loading(false, cx);
                     ui.refresh_messages(cx);
