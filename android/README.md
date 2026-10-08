@@ -16,6 +16,10 @@ example, under the same licence terms.
 
 ## Building
 
+The IME edit bridge has regression checks for suggestions, autocorrection,
+composition, deletion and emoji. Run `bash build-aux/ime-tests.sh` from the
+repository root; it needs a JDK and does not need the Android SDK or a phone.
+
 From the repository root, the library first:
 
 ```sh

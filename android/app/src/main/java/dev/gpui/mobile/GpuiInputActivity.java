@@ -131,30 +131,20 @@ public class GpuiInputActivity extends NativeActivity {
         });
     }
 
-    // EditText reports its own selection to the IME when its buffer is
-    // cleared. Our buffer holds only the pending composition, so that would
-    // falsely report cursor 0 after every commit. Own the notifications here.
+    // Keep the IME's editable text and cursor across commits. Own its
+    // notifications: an EditText used as a temporary buffer reported cursor
+    // 0 whenever it was cleared and restarted capitalization after each letter.
     private final class InputProxy extends View {
         private long session;
         private int depth;
-        private boolean marked;
         private final Editable text = new SpannableStringBuilder();
         private int type;
         private int options;
         private Integer extractedToken;
         private InputConnection activeConnection;
-        /**
-         * What has been typed before the cursor since the box got the keyboard.
-         * The widget itself is emptied after every word — the text lives in the
-         * application — so a keyboard asking it what came before was told
-         * "nothing", and could neither tell where a sentence starts nor
-         * suggest a word that follows the last one. This is the answer it gets
-         * instead. Only the end of it matters, so only the end is kept.
-         */
-        private final StringBuilder before = new StringBuilder();
-        /** Whether {@link #before} starts where the text does. */
         private boolean fromStart = true;
-        private static final int BEFORE_KEPT = 512;
+        private final ImeEdits edits = new ImeEdits(
+                (kind, value, start, end) -> nativeIme(session, kind, value, start, end));
 
         InputProxy() {
             super(GpuiInputActivity.this);
@@ -191,34 +181,19 @@ public class GpuiInputActivity extends NativeActivity {
             depth++;
             getText().clear();
             Selection.setSelection(text, 0);
-            marked = false;
+            edits.reset();
             session = nextSession;
-            before.setLength(0);
             fromStart = atStart;
             extractedToken = null;
             activeConnection = null;
             depth = 0;
         }
 
-        /** Takes the last {@code count} characters back out of {@link #before}. */
-        private void forget(int count) {
-            before.setLength(Math.max(0, before.length() - Math.max(0, count)));
-            reportState();
-        }
-
-        /** The same, counted the way a deletion by code points counts. */
-        private void forgetCodePoints(int count) {
-            int length = before.length();
-            int kept = Math.max(0, before.codePointCount(0, length) - Math.max(0, count));
-            before.setLength(before.offsetByCodePoints(0, kept));
-            reportState();
-        }
-
         /** Everything known to stand before the cursor, the word being typed included. */
         private CharSequence beforeCursor() {
             Editable text = getText();
             int cursor = Math.max(0, Math.min(Selection.getSelectionStart(text), text.length()));
-            return before.toString() + text.subSequence(0, cursor);
+            return text.subSequence(0, cursor).toString();
         }
 
         /**
@@ -233,12 +208,12 @@ public class GpuiInputActivity extends NativeActivity {
 
         private ExtractedText extractedText() {
             ExtractedText extracted = new ExtractedText();
-            extracted.text = before.toString() + getText().toString();
+            extracted.text = getText().toString();
             extracted.startOffset = 0;
             extracted.partialStartOffset = -1;
             extracted.partialEndOffset = -1;
-            extracted.selectionStart = before.length() + Math.max(0, Selection.getSelectionStart(text));
-            extracted.selectionEnd = before.length() + Math.max(0, Selection.getSelectionEnd(text));
+            extracted.selectionStart = Math.max(0, Selection.getSelectionStart(text));
+            extracted.selectionEnd = Math.max(0, Selection.getSelectionEnd(text));
             return extracted;
         }
 
@@ -248,34 +223,16 @@ public class GpuiInputActivity extends NativeActivity {
             int start = BaseInputConnection.getComposingSpanStart(text);
             int end = BaseInputConnection.getComposingSpanEnd(text);
             imm.updateSelection(this, extracted.selectionStart, extracted.selectionEnd,
-                    start < 0 ? -1 : before.length() + start,
-                    end < 0 ? -1 : before.length() + end);
+                    start, end);
             if (extractedToken != null) imm.updateExtractedText(this, extractedToken, extracted);
         }
 
         private void endEdit() {
             if (--depth != 0) return;
-            Editable text = getText();
-            boolean composing = BaseInputConnection.getComposingSpanStart(text) >= 0;
-            if (composing || marked || text.length() > 0) {
-                Log.d(TAG, (composing ? "composing " : "commit ") + text.length()
-                        + " after " + before.length());
-                nativeIme(session, composing ? 0 : 1, text.toString(),
-                        Math.max(0, Selection.getSelectionStart(text)),
-                        Math.max(0, Selection.getSelectionEnd(text)));
-                marked = composing;
-                if (!composing) {
-                    before.append(text);
-                    if (before.length() > BEFORE_KEPT) {
-                        before.delete(0, before.length() - BEFORE_KEPT);
-                        fromStart = false;
-                    }
-                    depth++;
-                    text.clear();
-                    Selection.setSelection(text, 0);
-                    depth--;
-                }
-            }
+            edits.sync(text.toString(),
+                    Math.max(0, Selection.getSelectionStart(text)),
+                    Math.max(0, Selection.getSelectionEnd(text)),
+                    BaseInputConnection.getComposingSpanStart(text));
             reportState();
         }
 
@@ -292,17 +249,15 @@ public class GpuiInputActivity extends NativeActivity {
             InputConnection connection = new BaseInputConnection(this, true) {
                 @Override public Editable getEditable() { return InputProxy.this.getText(); }
             };
-            // The widget is empty, which reads as the start of a sentence
-            // every time the keyboard is restarted.
             info.initialCapsMode = capsMode(info.inputType);
             // A keyboard reads what stands before the cursor in more ways than
             // one — here, by asking for it in pieces, for all of it around the
             // cursor, or for the whole box — and every one of them has to give
             // the same answer. One that still said "nothing" made each letter
             // the first of a sentence.
-            CharSequence known = beforeCursor();
-            info.initialSelStart = known.length();
-            info.initialSelEnd = known.length();
+            CharSequence known = text.toString();
+            info.initialSelStart = Math.max(0, Selection.getSelectionStart(text));
+            info.initialSelEnd = Math.max(0, Selection.getSelectionEnd(text));
             if (Build.VERSION.SDK_INT >= 30) info.setInitialSurroundingText(known);
             Log.d(TAG, "connection: type=" + info.inputType + " caps=" + info.initialCapsMode
                     + " before=" + known.length() + " fromStart=" + fromStart);
@@ -330,14 +285,13 @@ public class GpuiInputActivity extends NativeActivity {
                 @Override public SurroundingText getSurroundingText(int before, int after,
                         int flags) {
                     if (connectionSession != session) return null;
-                    CharSequence all = beforeCursor();
-                    int from = Math.max(0, all.length() - Math.max(0, before));
-                    CharSequence text = all.subSequence(from, all.length());
-                    Log.d(TAG, "getSurroundingText(" + before + ") of " + all.length());
-                    // Where the piece starts in the whole text is only known
-                    // while the start of the text is in sight.
-                    return new SurroundingText(text, text.length(), text.length(),
-                            fromStart ? from : -1);
+                    int start = Math.max(0, Selection.getSelectionStart(text));
+                    int end = Math.max(0, Selection.getSelectionEnd(text));
+                    int from = Math.max(0, Math.min(start, end) - Math.max(0, before));
+                    int to = Math.max(start, end)
+                            + Math.min(Math.max(0, after), text.length() - Math.max(start, end));
+                    return new SurroundingText(text.subSequence(from, to).toString(),
+                            start - from, end - from, fromStart ? from : -1);
                 }
                 @Override public ExtractedText getExtractedText(ExtractedTextRequest request,
                         int flags) {
@@ -366,8 +320,6 @@ public class GpuiInputActivity extends NativeActivity {
                 }
                 @Override public boolean setComposingRegion(int start, int end) {
                     if (connectionSession != session) return false;
-                    start -= before.length();
-                    end -= before.length();
                     if (start < 0 || end < 0 || start > text.length() || end > text.length()) {
                         return false;
                     }
@@ -389,8 +341,6 @@ public class GpuiInputActivity extends NativeActivity {
                 }
                 @Override public boolean setSelection(int start, int end) {
                     if (connectionSession != session) return false;
-                    start -= before.length();
-                    end -= before.length();
                     if (start < 0 || end < 0 || start > text.length() || end > text.length()) {
                         return false;
                     }
@@ -400,9 +350,9 @@ public class GpuiInputActivity extends NativeActivity {
                 }
                 @Override public boolean deleteSurroundingText(int before, int after) {
                     if (connectionSession != session) return false;
-                    if (getText().length() == 0 && !marked) {
+                    if (text.length() == 0) {
                         nativeIme(session, 2, "", before, after);
-                        forget(before);
+                        reportState();
                         return true;
                     }
                     depth++;
@@ -411,9 +361,9 @@ public class GpuiInputActivity extends NativeActivity {
                 }
                 @Override public boolean deleteSurroundingTextInCodePoints(int before, int after) {
                     if (connectionSession != session) return false;
-                    if (getText().length() == 0 && !marked) {
+                    if (text.length() == 0) {
                         nativeIme(session, 3, "", before, after);
-                        forgetCodePoints(before);
+                        reportState();
                         return true;
                     }
                     depth++;
