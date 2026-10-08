@@ -1,17 +1,22 @@
 # mode: server
 # size: 1320x840
 #
-# The channel list filled from a server answers clicks like the demo's does.
+# The list of conversations filled from a server answers clicks like the
+# demo's does.
 wait:5000
 expect:session=yes
-move:60,165
+expect:chats=Development|General|Lena Petrova
+click:120,102
+wait:600
+expect:folder=all
+move:60,217
 wait:300
-click:71,165
+click:71,217
 wait:2500
 expect:channel=General
-move:60,133
+move:60,157
 wait:300
-click:92,133
+click:92,157
 wait:2500
 expect:channel=Development
 quit

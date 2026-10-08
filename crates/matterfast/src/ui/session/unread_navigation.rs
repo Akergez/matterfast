@@ -12,10 +12,10 @@ impl Ui {
     pub(crate) fn step_unread(self: &Rc<Self>, forwards: bool, cx: &mut App) {
         let next = {
             let st = self.state.borrow();
+            // The order on screen: the folder that is open, newest first.
             let ordered: Vec<String> = st
-                .sidebar_groups()
+                .chat_list(self.channels.folder().as_deref())
                 .into_iter()
-                .flat_map(|(_, channels)| channels)
                 .map(|c| c.id.clone())
                 .collect();
             let unread: Vec<String> = ordered

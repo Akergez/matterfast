@@ -1,9 +1,45 @@
 # mode: demo
 # size: 400x800
 #
-# The collapsed, phone-sized layout draws and the switcher still works in it.
+# The phone-sized layout: the list of conversations with its tabs is the
+# screen the window opens on, a swipe across it goes to the tab beside the one
+# in front, a press on a conversation lays it over the list, and going back —
+# the key, or a swipe to the right — leaves it for the list again.
 wait:2500
 expect:session=yes
+expect:page=list
+expect:folder=inbox
+swipe:200,400,-160
+wait:600
+expect:folder=all
+swipe:200,400,-160
+wait:600
+expect:folder=Favourites
+swipe:200,400,160
+wait:600
+expect:folder=all
+# Before the first tab there is nothing to go to.
+swipe:200,400,160
+wait:600
+expect:folder=inbox
+swipe:200,400,160
+wait:600
+expect:folder=inbox
+expect:page=list
+swipe:200,400,-160
+wait:600
+# The second conversation of them all.
+move:200,217
+wait:300
+click:200,217
+wait:1200
+expect:channel=Design Crit
+expect:page=chat
+key:escape
+wait:800
+expect:page=list
+expect:folder=all
+# The switcher opens a conversation from the list as well.
 key:ctrl-k
 wait:600
 type:releas
@@ -11,4 +47,14 @@ wait:600
 key:enter
 wait:1200
 expect:channel=Releases
+expect:page=chat
+# Over a conversation a swipe to the right is the way back, and one to the
+# left is nothing.
+swipe:200,400,-160
+wait:600
+expect:page=chat
+swipe:200,400,200
+wait:800
+expect:page=list
+shot:phone-list
 quit

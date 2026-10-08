@@ -8,7 +8,6 @@ use super::column_width::column_width;
 use super::pretty_server::pretty_server;
 use super::shell_view::Shell;
 use crate::ui::kit::{self, Lucide};
-use crate::ui::rhs::PanelMode;
 use crate::ui::MenuAction;
 
 impl Shell {
@@ -100,8 +99,7 @@ impl Shell {
             cx,
         );
 
-        let inbox_open =
-            ui.overlay.shown() && matches!(ui.right.mode(cx), PanelMode::Inbox);
+        let inbox_open = ui.channels.showing_inbox();
         actions = actions.child(
             h_flex()
                 .id("title-inbox")

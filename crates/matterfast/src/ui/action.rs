@@ -7,6 +7,10 @@ use super::sidebar::RowAction;
 pub enum Action {
     SelectTeam(String),
     SelectChannel(String),
+    /// Makes a conversation the current one without bringing it to the
+    /// front: the one the window starts with, which nobody chose. On a phone
+    /// the list stays the screen.
+    LoadChannel(String),
     Send(String),
     /// Join the current channel's call, or leave the one we are in.
     ToggleCall,
@@ -24,6 +28,8 @@ pub enum Action {
     ReplyInThread(String),
     /// Show the mentions and threads inbox.
     OpenInbox,
+    /// Ask for the page of followed threads after the ones the inbox holds.
+    OlderThreads,
     CloseRightPanel,
     /// Toggle our own reaction: post id, emoji name.
     ToggleReaction(String, String),

@@ -33,6 +33,23 @@ impl Level {
     }
 }
 
+/// Whether the reader has asked to be told of everything written in a
+/// channel: its own setting says "all", or it leaves the question to the
+/// account and the account says so. A muted channel has asked for nothing.
+///
+/// These are the channels somebody follows message by message, which is why
+/// the inbox lists them beside the threads.
+pub fn wants_everything(me: &User, membership: Option<&ChannelMember>) -> bool {
+    if membership.is_some_and(|m| m.is_muted()) {
+        return false;
+    }
+    let level = membership
+        .and_then(|m| Level::parse(m.notify_props.get("desktop").map(String::as_str)))
+        .or_else(|| Level::parse(me.notify_props.get("desktop").map(String::as_str)))
+        .unwrap_or(Level::Mention);
+    level == Level::All
+}
+
 /// Whether this post should raise a desktop notification.
 ///
 /// `focused_channel` is the channel the window is showing *while it has focus*

@@ -29,6 +29,7 @@ impl AppState {
             feeds: HashMap::new(),
             threads: HashMap::new(),
             thread_inbox: Vec::new(),
+            thread_inbox_total: 0,
             replies: ReplyLedger::default(),
             mentions: Vec::new(),
             calls: None,

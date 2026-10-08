@@ -16,10 +16,28 @@ impl RightPanel {
     /// Rebuilds whatever the panel is currently showing from the state.
     pub fn refresh(&self, state: &SharedState, cx: &mut App) {
         let st = state.borrow();
+        // Whatever the panel shows: the inbox is drawn in the other column.
+        // Its list is told only when what it lists has changed — which rows,
+        // in which order — and then stays scrolled to where it was; what a
+        // row says is read when the row is drawn.
+        let fresh = build_inbox(&st);
+        let same = {
+            let held = self.inbox.borrow();
+            held.more == fresh.more
+                && held.entries.iter().map(|entry| entry.key()).eq(fresh
+                    .entries
+                    .iter()
+                    .map(|entry| entry.key()))
+        };
+        if !same {
+            let top = self.inbox_list.logical_scroll_top();
+            self.inbox_list.reset(fresh.rows());
+            self.inbox_list.scroll_to(top);
+        }
+        *self.inbox.borrow_mut() = fresh;
         match self.mode(cx) {
             PanelMode::Hidden => {}
             PanelMode::Thread(root_id) => self.refresh_thread(&root_id, &st),
-            PanelMode::Inbox => *self.inbox.borrow_mut() = build_inbox(&st),
             PanelMode::Search(_) => {
                 self.searching.set(st.searching);
                 self.search_more.set(st.search_more);

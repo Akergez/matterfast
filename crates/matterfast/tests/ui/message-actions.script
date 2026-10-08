@@ -4,9 +4,11 @@
 # A message gets its bar of actions when the pointer comes over it, and not
 # before: the bar is built for that one row only.
 wait:2500
-move:60,232
+click:120,102
+wait:600
+move:60,277
 wait:300
-click:72,232
+click:72,277
 wait:1200
 expect:channel=General
 expect:pointed=no

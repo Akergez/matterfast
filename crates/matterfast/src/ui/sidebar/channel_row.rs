@@ -1,59 +1,157 @@
 use std::rc::Rc;
 
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenuItem};
-use gpui_kit::component::{h_flex, ActiveTheme};
+use gpui_kit::component::{h_flex, v_flex, ActiveTheme};
 use gpui_kit::prelude::*;
-use gpui_kit::{div, px, AnyElement, App, ElementId, FontWeight};
+use gpui_kit::{div, rems, AnyElement, App, ElementId, FontWeight, Rems};
 use mattermost_api::models::{Channel, ChannelType};
 
 use super::call_badge::call_badge;
+use super::channel_sidebar::ROW_HEIGHT;
+use super::preview::{preview, Preview};
 use super::row_menu::row_menu;
 use crate::state::AppState;
+use crate::timefmt::format_chat_time;
 use crate::ui::kit::{self, Lucide};
 use crate::ui::message::{custom_status_tooltip, emoji_element, status_is_live};
 use crate::ui::{Action, Ui};
 
-pub(super) fn channel_row(ui: &Rc<Ui>, channel: &Channel, st: &AppState, cx: &App) -> AnyElement {
+/// How big a conversation's row is drawn: the face at its start, and the
+/// row itself. Both in rems, so that a row is as many lines of its own text
+/// tall at any size of text, and the face stays as tall as those lines.
+#[derive(Clone, Copy)]
+pub(crate) struct Fit {
+    face: Rems,
+    height: Rems,
+}
+
+impl Fit {
+    /// In the list of conversations: a face, and two lines beside it.
+    pub(crate) const LIST: Fit = Fit { face: rems(2.5), height: ROW_HEIGHT };
+    /// In the inbox, between threads, which are three lines tall with a
+    /// face to match: a conversation there stands as tall as its
+    /// neighbours, so that the text of one row starts under the text of
+    /// the last.
+    pub(crate) const INBOX: Fit = Fit { face: INBOX_FACE, height: INBOX_ROW };
+}
+
+/// The face of a row of the inbox: as tall as the three lines beside it.
+pub(crate) const INBOX_FACE: Rems = rems(3.5);
+/// A row of the inbox: its face, and room around it.
+pub(crate) const INBOX_ROW: Rems = rems(4.75);
+
+pub(crate) fn channel_row(
+    ui: &Rc<Ui>,
+    channel: &Channel,
+    st: &AppState,
+    fit: Fit,
+    cx: &App,
+) -> AnyElement {
     let theme = cx.theme();
     let title = st.channel_title(channel);
     let unread = st.unread(&channel.id);
     let selected = st.current_channel.as_deref() == Some(channel.id.as_str());
     let teammate = channel.dm_teammate_id(&st.me.id);
 
-    // Public channels get a literal "#", the way Mattermost writes them; a
-    // DM is a person, so it gets that person's face with the presence dot,
-    // exactly like a message row.
-    let icon: AnyElement = match (teammate, &channel.r#type) {
+    // A conversation with one person is that person: their face, with the
+    // presence dot, exactly like a message row. A channel has no face, so it
+    // gets a disc with what kind of channel it is — "#" for a public one,
+    // the way Mattermost writes them.
+    let face: AnyElement = match (teammate, &channel.r#type) {
         (Some(user_id), _) => {
-            kit::avatar_with_presence(ui, user_id, &title, 20., st.presence(user_id), cx)
+            // The picture is asked for in pixels: the rems at the size the
+            // text is set in.
+            let size = f32::from(fit.face.to_pixels(theme.font_size));
+            kit::avatar_with_presence(ui, user_id, &title, size, st.presence(user_id), cx)
         }
-        (None, ChannelType::Open) => div()
-            .w(px(20.))
-            .flex_none()
-            .text_center()
-            .text_color(theme.muted_foreground)
-            .child("#")
-            .into_any_element(),
         (None, kind) => div()
-            .w(px(20.))
+            .size(fit.face)
             .flex_none()
             .flex()
+            .items_center()
             .justify_center()
+            .rounded_full()
+            .bg(theme.muted)
             .text_color(theme.muted_foreground)
-            .child(match kind {
-                ChannelType::Private => Lucide::Lock,
-                ChannelType::Group => Lucide::Users,
-                _ => Lucide::User,
+            .map(|disc| match kind {
+                ChannelType::Open => disc.text_lg().child("#"),
+                ChannelType::Private => disc.child(Lucide::Lock),
+                ChannelType::Group => disc.child(Lucide::Users),
+                _ => disc.child(Lucide::User),
             })
             .into_any_element(),
     };
 
-    let mut row = h_flex()
+    // The first line: who, and when they were last written to.
+    let mut heading = h_flex().gap_1p5().items_center().child(
+        div()
+            .flex_1()
+            .min_w_0()
+            .truncate()
+            .when(unread.is_unread(), |label| {
+                label.font_weight(FontWeight::SEMIBOLD)
+            })
+            .child(title),
+    );
+    // A DM is a person, and their status says whether writing to them is
+    // worth doing now.
+    if let Some(status) = teammate
+        .and_then(|id| st.users.get(id))
+        .and_then(|user| user.custom_status())
+        .filter(|status| !status.emoji.is_empty() && status_is_live(status))
+    {
+        heading = heading.child(kit::with_tooltip(
+            "status",
+            emoji_element(ui, &status.emoji, 16.),
+            custom_status_tooltip(&status),
+        ));
+    }
+    heading = heading.child(
+        div()
+            .flex_none()
+            .text_xs()
+            .text_color(theme.muted_foreground)
+            .child(format_chat_time(channel.last_post_at)),
+    );
+
+    // The second: what was said last, and what is waiting.
+    let quiet = theme.muted_foreground;
+    let said = |author: Option<String>, text: String| match author {
+        Some(author) => format!("{author}: {text}"),
+        None => text,
+    };
+    let line = div().flex_1().min_w_0().truncate().text_sm();
+    let line = match preview(channel, st) {
+        Preview::Draft(text) => line
+            .text_color(quiet)
+            .child(h_flex().gap_1().child(div().text_color(theme.danger).child("Draft:")).child(text)),
+        Preview::Last { author, text } => line.text_color(quiet).child(said(author, text)),
+        // Greyer than a line that is the news, and marked: the dot says
+        // there is something newer that is not here to be read yet.
+        Preview::Stale { author, text } => line
+            .text_color(quiet.opacity(0.6))
+            .child(format!("\u{2022} {}", said(author, text))),
+        Preview::Nothing => line,
+    };
+    let mut detail = h_flex().gap_1p5().items_center().child(line);
+
+    // A call in this channel matters more than an unread badge, so it goes
+    // first and is always shown.
+    if let Some(people) = st.active_calls.get(&channel.id) {
+        detail = detail.child(call_badge(ui, people, st, cx));
+    }
+    if unread.mentions > 0 {
+        detail = detail.child(kit::mention_badge(unread.mentions, unread.urgent, cx));
+    } else if unread.is_unread() && !unread.muted {
+        detail = detail.child(kit::unread_dot(cx));
+    }
+
+    let row = h_flex()
         .id(ElementId::Name(format!("channel-{}", channel.id).into()))
         .w_full()
-        .h(px(32.))
+        .h(fit.height)
         .px_2()
-        .gap_2()
+        .gap_2p5()
         .items_center()
         .rounded_md()
         .cursor_pointer()
@@ -62,55 +160,15 @@ pub(super) fn channel_row(ui: &Rc<Ui>, channel: &Channel, st: &AppState, cx: &Ap
         // Muted channels still show mentions, but not bold-for-messages: that
         // is exactly the rule the official clients use.
         .when(unread.muted, |row| row.opacity(0.6))
-        .child(icon)
+        .child(face)
         .child(
-            div()
+            v_flex()
                 .flex_1()
                 .min_w_0()
-                .truncate()
-                .when(unread.is_unread(), |label| {
-                    label.font_weight(FontWeight::SEMIBOLD)
-                })
-                .child(title),
+                .gap_0p5()
+                .child(heading)
+                .child(detail),
         );
-
-    // A DM is a person, and their status says whether writing to them is
-    // worth doing now.
-    if let Some(status) = teammate
-        .and_then(|id| st.users.get(id))
-        .and_then(|user| user.custom_status())
-        .filter(|status| !status.emoji.is_empty() && status_is_live(status))
-    {
-        row = row.child(kit::with_tooltip(
-            "status",
-            emoji_element(ui, &status.emoji, 16.),
-            custom_status_tooltip(&status),
-        ));
-    }
-
-    // A call in this channel matters more than an unread badge, so it goes
-    // first and is always shown.
-    if let Some(people) = st.active_calls.get(&channel.id) {
-        row = row.child(call_badge(ui, people, st, cx));
-    }
-
-    // Something unsent here. Shown even on a muted channel: it is your own
-    // text waiting, not someone else's noise.
-    if st.drafts.contains_key(&channel.id) {
-        row = row.child(kit::with_tooltip(
-            "draft",
-            div()
-                .text_color(theme.muted_foreground)
-                .child(Lucide::Pencil),
-            "You have an unsent message here",
-        ));
-    }
-
-    if unread.mentions > 0 {
-        row = row.child(kit::mention_badge(unread.mentions, unread.urgent, cx));
-    } else if unread.is_unread() && !unread.muted {
-        row = row.child(kit::unread_dot(cx));
-    }
 
     let entries = row_menu(&channel.id, st);
     let menu_ui = ui.clone();

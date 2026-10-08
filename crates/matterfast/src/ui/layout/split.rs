@@ -6,14 +6,19 @@ use super::swipe::Swipe;
 
 /// The channel list and the conversation: side by side when there is room,
 /// two pages of a stack when there is not.
+///
+/// On a phone the list is the main screen, as it is in Telegram: the window
+/// opens on it, a conversation is a page laid over it, and going back takes
+/// that page away again. It is not a drawer beside the conversation.
 pub struct Split {
-    /// When collapsed, which page is in front. A chat app should land on the
-    /// conversation, not the sidebar.
+    /// When collapsed, which page is in front. The window lands on the list:
+    /// what to read is chosen there.
     show_content: Cell<bool>,
     pub(crate) collapsed: Cell<bool>,
-    /// How far the channel list has slid in over the conversation, from 0 to
-    /// 1. It trails `show_content` while it animates, and follows the finger
-    /// while one is dragging it.
+    /// How much of the window the channel list has to itself, from 0 — the
+    /// conversation covers it — to 1. It trails `show_content` while it
+    /// animates, and follows the finger while one is carrying the
+    /// conversation off.
     open: Cell<f32>,
     /// When `open` last moved by itself, which is what its next step is
     /// measured from.
@@ -27,9 +32,9 @@ pub struct Split {
 impl Default for Split {
     fn default() -> Self {
         Split {
-            show_content: Cell::new(true),
+            show_content: Cell::new(false),
             collapsed: Cell::new(false),
-            open: Cell::new(0.0),
+            open: Cell::new(1.0),
             ticked: Cell::new(None),
             swipe: Cell::new(Swipe::Idle),
             heading: Cell::new(0.0),
@@ -67,16 +72,28 @@ impl Split {
         open
     }
 
+    /// Whether the conversation is the page in front, or on its way there.
+    pub fn showing_content(&self) -> bool {
+        self.show_content.get()
+    }
+
+    /// Whether the list has the window to itself: no conversation over it,
+    /// and none sliding on or off.
+    pub fn list_in_front(&self) -> bool {
+        self.open.get() == 1.0 && !self.show_content.get()
+    }
+
     /// One step of a pan across a collapsed window. Says whether the step was
-    /// taken — it moved the channel list, and is not a scroll for anything
-    /// underneath. `width` is how wide the channel list is.
+    /// taken — it carried the conversation, and is not a scroll for anything
+    /// underneath. `width` is how wide the window is.
     pub fn swiped(&self, dx: f32, dy: f32, phase: gpui_kit::TouchPhase, width: f32) -> bool {
         use gpui_kit::TouchPhase;
         if phase == TouchPhase::Started {
-            // A pan is locked to one axis from its first step. Sideways, it
-            // is ours if there is somewhere for the list to go that way.
-            let open = self.open.get();
-            let ours = dy == 0.0 && ((dx > 0.0 && open < 1.0) || (dx < 0.0 && open > 0.0));
+            // A pan is locked to one axis from its first step. To the right
+            // over a conversation, it is ours: it is the way back to the
+            // list. There is no pan that opens a conversation — a press on
+            // its row does — and sideways over the list is for its tabs.
+            let ours = dy == 0.0 && dx > 0.0 && self.open.get() < 1.0;
             self.swipe.set(if ours { Swipe::Dragging } else { Swipe::Idle });
             self.heading.set(0.0);
         }
@@ -95,7 +112,7 @@ impl Split {
                     self.heading.set(dx);
                 }
                 if matches!(phase, TouchPhase::Ended | TouchPhase::Cancelled) {
-                    // A flick goes where it was heading; a list that was
+                    // A flick goes where it was heading; a page that was
                     // carried and set down goes to whichever end is nearer.
                     let heading = self.heading.get();
                     let show_list = if heading.abs() > 1.5 { heading > 0.0 } else { open > 0.5 };

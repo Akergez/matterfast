@@ -27,7 +27,7 @@ impl Shell {
                     // Selecting it again would be a no-op, so start from
                     // nowhere and let the ordinary path draw it.
                     ui.state.borrow_mut().current_channel = None;
-                    ui.dispatch(Action::SelectChannel(id), cx);
+                    ui.dispatch(Action::LoadChannel(id), cx);
                 }
             });
             return;

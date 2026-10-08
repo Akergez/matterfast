@@ -14,6 +14,7 @@ impl Ui {
         match action {
             Action::SelectTeam(team_id) => self.select_team(team_id, cx),
             Action::SelectChannel(channel_id) => self.select_channel(channel_id, cx),
+            Action::LoadChannel(channel_id) => self.load_channel(channel_id, cx),
             Action::Send(text) => {
                 // The composer is shared with editing, so what "send" means
                 // depends on which mode it is in.
@@ -41,6 +42,7 @@ impl Ui {
                 }
             }
             Action::OpenInbox => self.open_inbox(cx),
+            Action::OlderThreads => self.load_older_threads(cx),
             Action::CloseRightPanel => {
                 self.right.set_mode(PanelMode::Hidden, cx);
                 self.overlay.set_show_sidebar(false, cx);

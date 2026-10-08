@@ -4,6 +4,7 @@
 //! places noted below, and everything shown to a person is in their own zone.
 
 mod expiry_phrase;
+mod format_chat_time;
 mod format_day;
 mod format_relative;
 mod format_time;
@@ -17,6 +18,7 @@ mod test_support;
 mod unique;
 
 pub use expiry_phrase::expiry_phrase;
+pub use format_chat_time::format_chat_time;
 pub use format_day::format_day;
 pub use format_relative::format_relative;
 pub use format_time::format_time;

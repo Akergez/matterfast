@@ -18,6 +18,14 @@ impl AppState {
         self.thread_inbox.iter().filter(|t| t.is_unread()).count() as i64
     }
 
+    /// What the inbox has waiting, as one number for the thing that opens it:
+    /// the recent mentions or the unread threads, whichever is more, and the
+    /// reactions nobody has looked at.
+    pub fn inbox_waiting(&self) -> i64 {
+        let named = self.mentions.len().min(99) as i64;
+        named.max(self.unread_threads().max(0)) + self.reaction_unread
+    }
+
     /// Total mentions across the current team — what a tray badge would show.
     pub fn total_mentions(&self) -> i64 {
         self.channels

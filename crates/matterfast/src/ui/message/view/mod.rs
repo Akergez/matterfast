@@ -7,6 +7,7 @@ mod element_id;
 mod embed_preview;
 mod emoji_element;
 mod hover_actions;
+mod in_view;
 mod inline_gif;
 mod link_preview;
 mod markdown_view;

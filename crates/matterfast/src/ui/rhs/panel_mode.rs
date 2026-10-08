@@ -3,8 +3,6 @@ pub enum PanelMode {
     Hidden,
     /// Viewing the thread rooted at this post id.
     Thread(String),
-    /// Mentions and unread threads.
-    Inbox,
     /// Results for a search, held so a redraw does not lose them.
     Search(String),
 }

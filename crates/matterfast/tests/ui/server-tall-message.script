@@ -1,0 +1,24 @@
+# mode: server
+# size: 1320x840
+#
+# A message taller than the window still has its bar of actions within
+# reach: the top of the message is scrolled away, and the bar is at the top
+# of what is in view instead. Its reply button opens the thread.
+wait:5000
+expect:session=yes
+click:850,808
+wait:400
+type:Line one of a very tall message that has to be taller than the window is, which takes a good many lines. Line two of a very tall message that has to be taller than the window is, which takes a good many lines. Line three of a very tall message that has to be taller than the window is, which takes a good many lines. Line four of a very tall message that has to be taller than the window is, which takes a good many lines. Line five of a very tall message that has to be taller than the window is, which takes a good many lines. Line six of a very tall message that has to be taller than the window is, which takes a good many lines. Line seven of a very tall message that has to be taller than the window is, which takes a good many lines. Line eight of a very tall message that has to be taller than the window is, which takes a good many lines. Line nine of a very tall message that has to be taller than the window is, which takes a good many lines. Line ten of a very tall message that has to be taller than the window is, which takes a good many lines. Line eleven of a very tall message that has to be taller than the window is, which takes a good many lines. Line twelve of a very tall message that has to be taller than the window is, which takes a good many lines. Line thirteen of a very tall message that has to be taller than the window is, which takes a good many lines. Line fourteen of a very tall message that has to be taller than the window is, which takes a good many lines. Line fifteen of a very tall message that has to be taller than the window is, which takes a good many lines. Line sixteen of a very tall message that has to be taller than the window is, which takes a good many lines. Line seventeen of a very tall message that has to be taller than the window is, which takes a good many lines. Line eighteen of a very tall message that has to be taller than the window is, which takes a good many lines. Line nineteen of a very tall message that has to be taller than the window is, which takes a good many lines. Line twenty of a very tall message that has to be taller than the window is, which takes a good many lines. Line twenty one of a very tall message that has to be taller than the window is, which takes a good many lines. Line twenty two of a very tall message that has to be taller than the window is, which takes a good many lines. Line twenty three of a very tall message that has to be taller than the window is, which takes a good many lines. Line twenty four of a very tall message that has to be taller than the window is, which takes a good many lines. Line twenty five of a very tall message that has to be taller than the window is, which takes a good many lines. Line twenty six of a very tall message that has to be taller than the window is, which takes a good many lines. Line twenty seven of a very tall message that has to be taller than the window is, which takes a good many lines. Line twenty eight of a very tall message that has to be taller than the window is, which takes a good many lines. Line twenty nine of a very tall message that has to be taller than the window is, which takes a good many lines. Line thirty of a very tall message that has to be taller than the window is, which takes a good many lines. The end.
+wait:600
+key:enter
+wait:2000
+expect:panel=hidden
+move:700,500
+wait:600
+expect:pointed=yes
+move:1267,103
+wait:300
+click:1267,103
+wait:1500
+expect:panel=thread
+quit

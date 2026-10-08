@@ -1,82 +1,88 @@
 use std::rc::Rc;
 
-use gpui_kit::component::tab::{Tab, TabBar};
-use gpui_kit::component::{h_flex, v_flex};
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::{h_flex, Sizable};
 use gpui_kit::prelude::*;
-use gpui_kit::{div, AnyElement, App};
+use gpui_kit::{div, list, AnyElement, App};
 
+use super::inbox::Entry;
 use super::inbox_row_view::inbox_row_view;
-use super::inbox_tab::InboxTab;
 use crate::ui::kit::{self, Lucide};
-use crate::ui::Ui;
+use crate::ui::{Action, Ui};
 
-pub(super) fn inbox_view(ui: &Rc<Ui>, cx: &App) -> AnyElement {
-    let panel = &ui.right;
-    let inbox = panel.inbox.borrow();
-    let tab = panel.tab.get();
-    let (rows, empty) = match tab {
-        InboxTab::Mentions => (
-            &inbox.mentions,
-            (
-                Lucide::AtSign,
-                "No recent mentions",
-                "Messages that name you show up here.",
-            ),
-        ),
-        InboxTab::Threads => (
-            &inbox.threads,
-            (
-                Lucide::MessagesSquare,
-                "No threads yet",
-                "Threads you follow appear here.",
-            ),
-        ),
-        InboxTab::Saved => (
-            &inbox.saved,
-            (
-                Lucide::Bookmark,
-                "Nothing saved",
-                "Save a message from its menu and it waits here.",
-            ),
-        ),
-    };
+/// The inbox: everything the reader is being spoken to in, or follows, as
+/// one list with the newest first — threads, messages that name them, what
+/// they saved, and the conversations they follow as a whole. It is drawn in
+/// the column of conversations, as the first of its tabs; what it lists is
+/// kept here with the thread it opens ([`build_inbox`](super::build_inbox)).
+///
+/// Only the rows in view are built: see `RightPanel::inbox_list`.
+pub(crate) fn inbox_view(ui: &Rc<Ui>, cx: &App) -> AnyElement {
+    if ui.right.inbox.borrow().entries.is_empty() {
+        return div()
+            .flex_1()
+            .min_h_0()
+            .child(kit::empty_state(
+                Lucide::Inbox,
+                "Nothing waiting",
+                "Threads you are in, messages that name you and the channels you follow show up here.",
+                cx,
+            ))
+            .into_any_element();
+    }
 
-    let tabs = TabBar::new("inbox-tabs")
-        .segmented()
-        .selected_index(match tab {
-            InboxTab::Mentions => 0,
-            InboxTab::Threads => 1,
-            InboxTab::Saved => 2,
-        })
-        .child(Tab::new().label("Mentions"))
-        .child(Tab::new().label("Threads"))
-        .child(Tab::new().label("Saved"))
-        .on_click({
-            let ui = ui.clone();
-            move |index: &usize, _, cx| {
-                ui.right.tab.set(match index {
-                    1 => InboxTab::Threads,
-                    2 => InboxTab::Saved,
-                    _ => InboxTab::Mentions,
-                });
-                crate::ui::refresh(cx);
+    let row_ui = ui.clone();
+    let rows = list(ui.right.inbox_list.clone(), move |index, _, cx| {
+        let began = std::time::Instant::now();
+        let inbox = row_ui.right.inbox.borrow();
+        let row = match inbox.entries.get(index) {
+            Some(Entry::Post(row)) => Some(inbox_row_view(&row_ui, index, row, cx)),
+            Some(Entry::Chat(id)) => {
+                let st = row_ui.state.borrow();
+                st.channels
+                    .get(id)
+                    .map(|channel| {
+                        let fit = crate::ui::sidebar::Fit::INBOX;
+                        crate::ui::sidebar::channel_row(&row_ui, channel, &st, fit, cx)
+                    })
             }
-        });
+            // Past the entries is the one row that asks for more of them:
+            // the server keeps the followed threads and hands them over a
+            // page at a time, newest first, and the rest are a press away
+            // rather than fetched in case somebody scrolls that far.
+            None if inbox.more && index == inbox.entries.len() => Some(
+                h_flex()
+                    .justify_center()
+                    .py_2()
+                    .child(
+                        Button::new("older-threads")
+                            .small()
+                            .ghost()
+                            .label("Older threads")
+                            .on_click(
+                                row_ui.click(|ui, cx| ui.dispatch(Action::OlderThreads, cx)),
+                            ),
+                    )
+                    .into_any_element(),
+            ),
+            None => None,
+        };
+        crate::ui::frame_log::row(crate::ui::Part::Sidebar, began);
+        // A row the inbox no longer has is gone from the list one frame
+        // later.
+        div()
+            .w_full()
+            .children(row)
+            .into_any_element()
+    })
+    .size_full();
 
-    let body: AnyElement = if rows.is_empty() {
-        kit::empty_state(empty.0, empty.1, empty.2, cx)
-    } else {
-        let mut column = v_flex().id("inbox-rows").size_full().p_1p5().gap_0p5();
-        for (index, row) in rows.iter().enumerate() {
-            column = column.child(inbox_row_view(ui, index, row, cx));
-        }
-        column.overflow_y_scroll().into_any_element()
-    };
-
-    v_flex()
+    div()
+        .id("inbox-rows")
         .flex_1()
         .min_h_0()
-        .child(h_flex().flex_none().justify_center().py_2().child(tabs))
-        .child(div().flex_1().min_h_0().child(body))
+        .px_1p5()
+        .pt_1()
+        .child(rows)
         .into_any_element()
 }

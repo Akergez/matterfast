@@ -49,12 +49,13 @@ impl Ui {
     }
 
     /// A thread is a place you read alongside the conversation, so it earns a
-    /// static column when there is room. The inbox is a stack you glance at and
-    /// dismiss, so it always overlays — pushing the conversation aside for it
-    /// would be a heavier gesture than the content deserves.
+    /// static column when there is room. Search results are a stack you
+    /// glance at and dismiss, so they always overlay — pushing the
+    /// conversation aside for them would be a heavier gesture than the
+    /// content deserves.
     pub(crate) fn refresh_panel_mode(&self, cx: &mut App) {
-        let overlays = self.narrow.get()
-            || matches!(self.right.mode(cx), PanelMode::Inbox | PanelMode::Search(_));
+        let overlays =
+            self.narrow.get() || matches!(self.right.mode(cx), PanelMode::Search(_));
         self.overlay.set_collapsed(overlays, cx);
     }
 }

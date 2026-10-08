@@ -1548,6 +1548,26 @@ impl Client {
         .await
     }
 
+    /// The page of followed threads after the thread `before`, which is by
+    /// its root's id: the list is the newest first, so these are older.
+    pub async fn my_threads_before(
+        &self,
+        team_id: &str,
+        before: &str,
+        per_page: u32,
+    ) -> Result<UserThreads> {
+        self.get_q(
+            &format!("/users/me/teams/{team_id}/threads"),
+            &[
+                ("before", before.to_string()),
+                ("per_page", per_page.min(PER_PAGE_MAX).to_string()),
+                ("extended", "true".to_string()),
+            ],
+            "threads",
+        )
+        .await
+    }
+
     /// Marks a thread read up to `timestamp` (ms).
     pub async fn mark_thread_read(
         &self,

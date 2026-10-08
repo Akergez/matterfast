@@ -39,6 +39,9 @@ pub struct AppState {
     pub threads: HashMap<String, ChannelFeed>,
     /// The collapsed-reply-threads inbox for the current team.
     pub thread_inbox: Vec<UserThread>,
+    /// How many threads the reader follows in all, as the server counts
+    /// them: `thread_inbox` holds the newest of those, a page at a time.
+    pub thread_inbox_total: i64,
     pub replies: ReplyLedger,
     /// Recent posts that name us, newest first.
     pub mentions: Vec<Post>,

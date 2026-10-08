@@ -12,6 +12,7 @@ use super::element_id::eid;
 use super::embed_preview::embed_preview;
 use super::emoji_element::emoji_element;
 use super::hover_actions::hover_actions;
+use super::in_view::in_view;
 use super::markdown_view::markdown;
 use super::reaction_strip::reaction_strip;
 use super::thread_footer::thread_footer;
@@ -217,7 +218,9 @@ pub fn row(
                     .right_3()
                     .invisible()
                     .group_hover("message", |style| style.visible())
-                    .child(frame_log::timed("actions", actions)),
+                    // At the top of the message, or of what is in view of
+                    // it when its top has been scrolled away.
+                    .child(in_view(frame_log::timed("actions", actions))),
             )
         })
         .into_any_element()

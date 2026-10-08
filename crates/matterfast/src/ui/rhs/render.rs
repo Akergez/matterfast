@@ -5,7 +5,6 @@ use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Sizable};
 use gpui_kit::prelude::*;
 use gpui_kit::{div, px, AnyElement, App, FontWeight};
 
-use super::inbox_view::inbox_view;
 use super::panel_mode::PanelMode;
 use super::search_view::search_view;
 use super::thread_view::thread_view;
@@ -19,7 +18,6 @@ pub fn render(ui: &Rc<Ui>, cx: &mut App) -> Option<AnyElement> {
     let (title, subtitle) = match &mode {
         PanelMode::Hidden => return None,
         PanelMode::Thread(_) => ("Thread", panel.thread_channel.borrow().clone()),
-        PanelMode::Inbox => ("Inbox", String::new()),
         PanelMode::Search(terms) => ("Search", terms.clone()),
     };
 
@@ -80,7 +78,6 @@ pub fn render(ui: &Rc<Ui>, cx: &mut App) -> Option<AnyElement> {
 
     let body = match mode {
         PanelMode::Thread(_) => thread_view(ui, cx),
-        PanelMode::Inbox => inbox_view(ui, cx),
         PanelMode::Search(_) => search_view(ui, cx),
         PanelMode::Hidden => return None,
     };

@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 use gpui_kit::App;
+use mattermost_api::models::UserThread;
 
 use super::hydrate::hydrate_authors;
 use super::ui::Ui;
@@ -13,7 +14,89 @@ use crate::timefmt::now_ms;
 use crate::ui::constants::{FOCUS_ON_ARRIVAL, INBOX_PAGE};
 use crate::ui::rhs::PanelMode;
 
+/// The followed threads to hold after the newest page of them was asked for
+/// again: that page, and after it whatever older pages had been fetched
+/// before. Asking again must not throw away what somebody scrolled down to.
+///
+/// A thread that is in both is the fresh one's. A held thread that is not on
+/// the page and is newer than the page's last was unfollowed, or the page
+/// would have had it; it goes.
+fn newest_with_older(page: Vec<UserThread>, held: Vec<UserThread>) -> Vec<UserThread> {
+    let when = |thread: &UserThread| thread.last_reply_at.max(thread.post.create_at);
+    let Some(oldest) = page.last().map(when) else {
+        return page;
+    };
+    let fresh: HashSet<String> = page.iter().map(|thread| thread.id.clone()).collect();
+    let mut threads = page;
+    threads.extend(
+        held.into_iter()
+            .filter(|thread| !fresh.contains(&thread.id) && when(thread) <= oldest),
+    );
+    threads
+}
+
 impl Ui {
+    /// Asks for the followed threads after the ones held: the server keeps
+    /// the list newest first and hands it over a page at a time.
+    pub(crate) fn load_older_threads(self: &Rc<Self>, cx: &mut App) {
+        let (client, team_id, before) = {
+            let st = self.state.borrow();
+            let (Some(team), Some(last)) = (st.current_team.clone(), st.thread_inbox.last())
+            else {
+                return;
+            };
+            (st.client.clone(), team, last.id.clone())
+        };
+        let ui = self.clone();
+        runtime::spawn(
+            async move {
+                let threads = client
+                    .my_threads_before(&team_id, &before, INBOX_PAGE)
+                    .await?;
+                let ids: Vec<String> = threads
+                    .threads
+                    .iter()
+                    .map(|thread| thread.post.user_id.clone())
+                    .filter(|id| !id.is_empty())
+                    .collect::<HashSet<_>>()
+                    .into_iter()
+                    .collect();
+                let authors = match ids.is_empty() {
+                    true => Vec::new(),
+                    false => client.users_by_ids(&ids).await.unwrap_or_default(),
+                };
+                Ok::<_, mattermost_api::Error>((threads, authors))
+            },
+            move |result, cx| {
+                let Ok((threads, authors)) = result else {
+                    return;
+                };
+                {
+                    let mut st = ui.state.borrow_mut();
+                    for user in authors {
+                        st.users.insert(user.id.clone(), user);
+                    }
+                    st.thread_inbox_total = threads.total;
+                    let held: HashSet<String> =
+                        st.thread_inbox.iter().map(|thread| thread.id.clone()).collect();
+                    let older: Vec<UserThread> = threads
+                        .threads
+                        .into_iter()
+                        .filter(|thread| !held.contains(&thread.id))
+                        .collect();
+                    // A page with nothing new in it is the end, whatever the
+                    // count says: the button must not be there to press again.
+                    if older.is_empty() {
+                        st.thread_inbox_total = st.thread_inbox.len() as i64;
+                    }
+                    st.thread_inbox.extend(older);
+                }
+                ui.refresh_messages(cx);
+            },
+        );
+        let _ = cx;
+    }
+
     pub(crate) fn open_thread(self: &Rc<Self>, root_id: String, cx: &mut App) {
         // Flush the previous thread's reply before the box is reused.
         self.save_thread_draft(cx);
@@ -135,19 +218,18 @@ impl Ui {
         );
     }
 
+    /// Puts the inbox in front of the conversations, or — asked for a second
+    /// time — takes it away again: the button in the title bar and the
+    /// shortcut go both ways, as they did when the inbox was a panel.
     pub(crate) fn open_inbox(self: &Rc<Self>, cx: &mut App) {
-        self.right.set_mode(PanelMode::Inbox, cx);
-        self.refresh_panel_mode(cx);
-        self.overlay.set_show_sidebar(true, cx);
-
-        // Land on whichever tab has something to show: unread threads with no
-        // mentions would otherwise open onto an empty list.
-        let st = self.state.borrow();
-        let threads_first = st.mentions.is_empty() && st.unread_threads() > 0;
-        drop(st);
-        if threads_first {
-            self.right.show_threads_tab(cx);
+        if self.channels.showing_inbox() {
+            self.channels.show_inbox(false, cx);
+            return;
         }
+        self.channels.show_inbox(true, cx);
+        // On a phone the list it is a tab of is a page of its own, and has
+        // to be the one in front.
+        self.split.set_show_content(false, cx);
 
         self.refresh_messages(cx);
         self.load_inbox(cx);
@@ -220,7 +302,9 @@ impl Ui {
                         st.mentions = results.posts.ordered().cloned().collect();
                     }
                     if let Some(threads) = threads {
-                        st.thread_inbox = threads.threads;
+                        st.thread_inbox_total = threads.total;
+                        let held = std::mem::take(&mut st.thread_inbox);
+                        st.thread_inbox = newest_with_older(threads.threads, held);
                     }
                     // Filed under their own channels, so the saved tab and the
                     // conversation agree about what a post says.

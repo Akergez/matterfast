@@ -20,6 +20,7 @@ mod presence;
 mod reactions;
 mod reply_ledger;
 mod shared_state;
+mod chat_list;
 mod sidebar_groups;
 mod typing;
 mod unread;

@@ -70,9 +70,8 @@ impl Ui {
         let (client, crt, wanted) = {
             let st = self.state.borrow();
             let wanted: Vec<String> = st
-                .sidebar_groups()
+                .chat_list(None)
                 .into_iter()
-                .flat_map(|(_, channels)| channels)
                 .map(|c| c.id.clone())
                 .filter(|id| st.unread(id).is_unread() && !st.feeds.contains_key(id))
                 .take(PRELOAD)

@@ -5,9 +5,11 @@
 # conversation that holds one takes it off the count.
 wait:2500
 expect:mentions=1
-move:80,331
+click:120,102
+wait:600
+move:80,397
 wait:300
-click:92,331
+click:92,397
 wait:1200
 expect:channel=Lena Petrova
 expect:mentions=0

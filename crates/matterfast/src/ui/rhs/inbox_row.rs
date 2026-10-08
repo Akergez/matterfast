@@ -13,5 +13,8 @@ pub(super) struct InboxRow {
     pub(super) at: Millis,
     /// (replies, unread replies, unread mentions), for a followed thread.
     pub(super) counts: Option<(i64, i64, i64)>,
+    /// Whether the reader saved this message: said on the row, because that
+    /// and not its age is why it is here.
+    pub(super) saved: bool,
     pub(super) target: Target,
 }

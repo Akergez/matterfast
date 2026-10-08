@@ -10,6 +10,8 @@
 //! - `click:<x>,<y>`, `rclick:<x>,<y>`, `move:<x>,<y>`
 //! - `drag:<x>,<y>,<to-x>,<to-y>` — press, carry, let go
 //! - `scroll:<x>,<y>,<dy>` — positive `dy` scrolls towards older content
+//! - `swipe:<x>,<y>,<dx>` — a finger carried sideways from there, to the
+//!   left for a negative `dx`; only a phone-sized window does anything with it
 //! - `key:<keystroke>` — `ctrl-k`, `escape`, `enter`
 //! - `type:<text>`
 //! - `paste:<text>` — what Ctrl+V would do in the composer that has the
@@ -37,6 +39,10 @@
 //!   emoji open
 //! - `composer=<text>`, `reply=<text>` — what is in the conversation's box
 //!   and in a thread's
+//! - `panel=thread|inbox|search|hidden` — what the right-hand panel shows
+//! - `folder=<name>|all` — the folder the list of conversations is narrowed to
+//! - `chats=<a>|<b>|…` — the conversations listed, in the order they are in
+//! - `page=list|chat` — which of the two a phone-sized window has in front
 //! - `mentions=<n>` — the count the title bar is showing
 //! - `pointed=yes|no` — whether a message has had the pointer over it, which
 //!   is what gives it its bar of actions
@@ -63,6 +69,7 @@ enum Step {
     Move(f32, f32),
     Drag(f32, f32, f32, f32),
     Scroll(f32, f32, f32),
+    Swipe(f32, f32, f32),
     Key(String),
     Type(String),
     Paste(String),
@@ -99,6 +106,10 @@ fn parse(script: &str) -> Vec<Step> {
                     [x, y, dy] => Step::Scroll(x, y, dy),
                     _ => return None,
                 },
+                "swipe" => match numbers(rest)?[..] {
+                    [x, y, dx] => Step::Swipe(x, y, dx),
+                    _ => return None,
+                },
                 "key" => Step::Key(rest.to_string()),
                 "type" => Step::Type(rest.to_string()),
                 "paste" => Step::Paste(rest.to_string()),
@@ -115,6 +126,13 @@ fn parse(script: &str) -> Vec<Step> {
             })
         })
         .collect()
+}
+
+/// Whether a script is what is driving the window. What only a finger can
+/// do — a swipe — is let through on a desktop for one.
+pub fn playing() -> bool {
+    static PLAYING: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *PLAYING.get_or_init(|| std::env::var_os("MATTERFAST_SCRIPT").is_some())
 }
 
 /// Plays `MATTERFAST_SCRIPT` into `window`, if there is one to play.
@@ -190,6 +208,37 @@ fn observe(what: &str, window: &mut Window, cx: &mut App) -> Option<String> {
                 .map_or("auto".to_string(), |width| width.round().to_string())
         }
         "mentions" => ui.map_or(0, |ui| ui.mentions.get()).to_string(),
+        "folder" if ui.as_ref().is_some_and(|ui| ui.channels.showing_inbox()) => {
+            "inbox".to_string()
+        }
+        "folder" => ui
+            .and_then(|ui| {
+                let open = ui.channels.folder()?;
+                let state = ui.state.borrow();
+                let folder = state.folders().into_iter().find(|folder| folder.id == open)?;
+                Some(folder.display_name.clone())
+            })
+            .unwrap_or_else(|| "all".to_string()),
+        "chats" => ui
+            .map(|ui| {
+                let state = ui.state.borrow();
+                let chats = state.chat_list(ui.channels.folder().as_deref());
+                let titles: Vec<String> =
+                    chats.into_iter().map(|chat| state.channel_title(chat)).collect();
+                titles.join("|")
+            })
+            .unwrap_or_default(),
+        "page" => match ui.is_some_and(|ui| ui.split.showing_content()) {
+            true => "chat",
+            false => "list",
+        }
+        .to_string(),
+        "panel" => match ui.map(|ui| ui.right.mode(cx)) {
+            Some(crate::ui::rhs::PanelMode::Thread(_)) => "thread",
+            Some(crate::ui::rhs::PanelMode::Search(_)) => "search",
+            Some(crate::ui::rhs::PanelMode::Hidden) | None => "hidden",
+        }
+        .to_string(),
         "completing" => match ui {
             Some(ui) if ui.chat.completing() => "channel",
             Some(ui) if ui.right.completing() => "thread",
@@ -298,6 +347,27 @@ fn next(handle: AnyWindowHandle, mut steps: VecDeque<Step>, cx: &mut App) {
                 }),
                 cx,
             );
+        }
+        Step::Swipe(x, y, dx) => {
+            // A finger put down, carried sideways in two steps and lifted,
+            // as a touch screen reports it.
+            pointer(window, at(*x, *y), cx);
+            let steps = [
+                (TouchPhase::Started, *dx / 2.),
+                (TouchPhase::Moved, *dx / 2.),
+                (TouchPhase::Ended, 0.),
+            ];
+            for (touch_phase, dx) in steps {
+                window.dispatch_event(
+                    PlatformInput::ScrollWheel(ScrollWheelEvent {
+                        position: at(*x, *y),
+                        delta: ScrollDelta::Pixels(point(px(dx), px(0.))),
+                        modifiers: Modifiers::default(),
+                        touch_phase,
+                    }),
+                    cx,
+                );
+            }
         }
         Step::Key(key) => match Keystroke::parse(key) {
             Ok(keystroke) => {

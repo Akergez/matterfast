@@ -1,0 +1,46 @@
+# mode: demo
+# size: 1320x840
+#
+# The inbox is the first tab of the list of conversations and what the window
+# opens on. A folder's tab takes it away and its own brings it back; the
+# button in the title bar goes both ways. Nothing of it is in the right-hand
+# panel. A conversation in it opens like one in the list, and a thread in it
+# opens the thread beside its conversation.
+wait:2500
+expect:folder=inbox
+expect:panel=hidden
+# The direct conversation with something unread in it, last in the demo.
+move:80,393
+wait:300
+click:92,393
+wait:1200
+expect:channel=Lena Petrova
+expect:folder=inbox
+# The followed thread, above it.
+move:150,317
+wait:300
+click:150,317
+wait:1500
+expect:panel=thread
+expect:channel=Development
+move:115,102
+wait:300
+click:120,102
+wait:800
+expect:folder=all
+move:40,102
+wait:300
+click:48,102
+wait:800
+expect:folder=inbox
+# Pressed while it is in front, the tab stays: it is not a switch.
+click:48,102
+wait:600
+expect:folder=inbox
+click:1304,16
+wait:1000
+expect:folder=all
+click:1304,16
+wait:1000
+expect:folder=inbox
+quit

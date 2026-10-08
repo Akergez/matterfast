@@ -4,9 +4,11 @@
 # A mention of somebody else is a link in the text and a mention of the reader
 # is a pill; pressing either one opens that person's profile.
 wait:2500
-move:60,232
+click:120,102
+wait:600
+move:60,277
 wait:300
-click:72,232
+click:72,277
 wait:1200
 expect:channel=General
 expect:dialog=closed

@@ -5,7 +5,6 @@ use gpui_kit::component::input::TextareaState;
 use gpui_kit::{point, px, App, Entity, FollowMode, ListAlignment, ListState, ScrollHandle};
 
 use super::inbox::Inbox;
-use super::inbox_tab::InboxTab;
 use super::panel_mode::PanelMode;
 use super::search_row::SearchRow;
 use super::thread_row::ThreadRow;
@@ -22,8 +21,12 @@ pub struct RightPanel {
     pub(super) thread_loaded: Cell<bool>,
     pub(super) list: ListState,
     pub(super) following: Cell<bool>,
-    pub(super) tab: Cell<InboxTab>,
     pub(super) inbox: RefCell<Inbox>,
+    /// Which rows of the inbox are on screen, and how tall the ones seen so
+    /// far were. A reader who follows every channel has hundreds of rows in
+    /// it, and building all of them for every frame of a scroll is what made
+    /// scrolling it crawl: only the few in view are built.
+    pub(super) inbox_list: ListState,
     pub(super) search: RefCell<Vec<SearchRow>>,
     pub(super) searching: Cell<bool>,
     /// Whether the server may have hits past the ones listed.
@@ -55,8 +58,8 @@ impl RightPanel {
             thread_loaded: Cell::new(false),
             list,
             following: Cell::new(false),
-            tab: Cell::new(InboxTab::default()),
             inbox: RefCell::new(Inbox::default()),
+            inbox_list: ListState::new(0, ListAlignment::Top, px(320.)),
             search: RefCell::new(Vec::new()),
             searching: Cell::new(false),
             search_more: Cell::new(false),
@@ -103,13 +106,6 @@ impl RightPanel {
         if self.following.replace(following) != following {
             crate::ui::refresh(cx);
         }
-    }
-
-    /// Switches the inbox to its threads tab — used when it opens with unread
-    /// threads and no mentions, which would otherwise land on an empty list.
-    pub fn show_threads_tab(&self, cx: &mut App) {
-        self.tab.set(InboxTab::Threads);
-        crate::ui::refresh(cx);
     }
 
     /// A new search starts at its newest hit, wherever the last one was left.

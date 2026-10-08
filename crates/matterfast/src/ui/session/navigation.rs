@@ -48,11 +48,7 @@ impl Ui {
                             st.memberships.insert(m.channel_id.clone(), m);
                         }
                         st.categories = categories;
-                        st.sidebar_groups()
-                            .into_iter()
-                            .flat_map(|(_, cs)| cs)
-                            .next()
-                            .map(|c| c.id.clone())
+                        st.chat_list(None).first().map(|c| c.id.clone())
                     };
                     ui.refresh_all(cx);
                     ui.load_inbox(cx);
@@ -61,7 +57,7 @@ impl Ui {
                     ui.load_custom_emoji(cx);
                     ui.load_groups(cx);
                     if let Some(id) = first {
-                        ui.dispatch(Action::SelectChannel(id), cx);
+                        ui.dispatch(Action::LoadChannel(id), cx);
                     }
                 }
                 Err(e) => ui.toast(&format!("Could not load that team: {e}"), cx),
@@ -69,8 +65,15 @@ impl Ui {
         );
     }
 
+    /// Opens a conversation somebody chose: on a phone it comes to the front,
+    /// over the list.
     pub(crate) fn select_channel(self: &Rc<Self>, channel_id: String, cx: &mut App) {
         self.split.set_show_content(true, cx);
+        self.load_channel(channel_id, cx);
+    }
+
+    /// Makes a conversation the current one, wherever it is drawn.
+    pub(crate) fn load_channel(self: &Rc<Self>, channel_id: String, cx: &mut App) {
         self.capture_scroll_anchor(cx);
         // Flush the outgoing channel's draft *before* the composer is pointed
         // at a new one, or the text would be filed under the wrong channel.

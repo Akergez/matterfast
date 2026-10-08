@@ -2,16 +2,21 @@ package dev.gpui.mobile;
 
 import android.app.NativeActivity;
 import android.content.pm.PackageManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.text.Editable;
 import android.text.InputType;
 import android.text.Selection;
 import android.text.TextUtils;
 import android.text.TextWatcher;
+import android.util.Log;
 import android.view.KeyEvent;
 import android.view.ViewGroup;
 import android.view.inputmethod.BaseInputConnection;
 import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.ExtractedText;
+import android.view.inputmethod.ExtractedTextRequest;
+import android.view.inputmethod.SurroundingText;
 import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputConnectionWrapper;
 import android.view.inputmethod.InputMethodManager;
@@ -19,6 +24,11 @@ import android.widget.EditText;
 
 /** NativeActivity with a UI-thread InputConnection for multistage IMEs. */
 public class GpuiInputActivity extends NativeActivity {
+    /**
+     * What the keyboard asks and is told, in the log: there is no other way to
+     * see it, and keyboards differ in what they ask. Sizes only, never the text.
+     */
+    private static final String TAG = "GpuiIme";
     private InputProxy input;
     /** What the platform layer last asked the keyboard to be. */
     private int shownType;
@@ -69,6 +79,7 @@ public class GpuiInputActivity extends NativeActivity {
      */
     public void gpuiKeyboardHint(int nextHint) {
         runOnUiThread(() -> {
+            Log.d(TAG, "hint: " + hint + " -> " + nextHint);
             if (hint == nextHint) return;
             hint = nextHint;
             if (input == null || !input.hasFocus() || shownType != 0) return;
@@ -159,6 +170,7 @@ public class GpuiInputActivity extends NativeActivity {
         }
 
         void reset(long nextSession, boolean atStart) {
+            Log.d(TAG, "reset: session=" + nextSession + " atStart=" + atStart);
             depth++;
             getText().clear();
             marked = false;
@@ -202,6 +214,8 @@ public class GpuiInputActivity extends NativeActivity {
             Editable text = getText();
             boolean composing = BaseInputConnection.getComposingSpanStart(text) >= 0;
             if (composing || marked || text.length() > 0) {
+                Log.d(TAG, (composing ? "composing " : "commit ") + text.length()
+                        + " after " + before.length());
                 nativeIme(session, composing ? 0 : 1, text.toString(),
                         Math.max(0, Selection.getSelectionStart(text)),
                         Math.max(0, Selection.getSelectionEnd(text)));
@@ -232,17 +246,62 @@ public class GpuiInputActivity extends NativeActivity {
             // The widget is empty, which reads as the start of a sentence
             // every time the keyboard is restarted.
             info.initialCapsMode = capsMode(info.inputType);
+            // A keyboard reads what stands before the cursor in more ways than
+            // one — here, by asking for it in pieces, for all of it around the
+            // cursor, or for the whole box — and every one of them has to give
+            // the same answer. One that still said "nothing" made each letter
+            // the first of a sentence.
+            CharSequence known = beforeCursor();
+            info.initialSelStart = known.length();
+            info.initialSelEnd = known.length();
+            if (Build.VERSION.SDK_INT >= 30) info.setInitialSurroundingText(known);
+            Log.d(TAG, "connection: type=" + info.inputType + " caps=" + info.initialCapsMode
+                    + " before=" + known.length() + " fromStart=" + fromStart);
             final long connectionSession = session;
             return new InputConnectionWrapper(connection, false) {
                 @Override public int getCursorCapsMode(int requested) {
                     if (connectionSession != session) return 0;
-                    return capsMode(requested);
+                    int caps = capsMode(requested);
+                    Log.d(TAG, "getCursorCapsMode -> " + caps);
+                    return caps;
                 }
                 @Override public CharSequence getTextBeforeCursor(int length, int flags) {
                     if (connectionSession != session) return "";
                     CharSequence all = beforeCursor();
+                    Log.d(TAG, "getTextBeforeCursor(" + length + ") of " + all.length());
                     return all.subSequence(Math.max(0, all.length() - Math.max(0, length)),
                             all.length());
+                }
+                @Override public CharSequence getTextAfterCursor(int length, int flags) {
+                    // The cursor is taken to be at the end: what follows it is
+                    // not known here.
+                    return "";
+                }
+                @Override public SurroundingText getSurroundingText(int before, int after,
+                        int flags) {
+                    if (connectionSession != session) return null;
+                    CharSequence all = beforeCursor();
+                    int from = Math.max(0, all.length() - Math.max(0, before));
+                    CharSequence text = all.subSequence(from, all.length());
+                    Log.d(TAG, "getSurroundingText(" + before + ") of " + all.length());
+                    // Where the piece starts in the whole text is only known
+                    // while the start of the text is in sight.
+                    return new SurroundingText(text, text.length(), text.length(),
+                            fromStart ? from : -1);
+                }
+                @Override public ExtractedText getExtractedText(ExtractedTextRequest request,
+                        int flags) {
+                    if (connectionSession != session) return null;
+                    CharSequence all = beforeCursor();
+                    Log.d(TAG, "getExtractedText of " + all.length());
+                    ExtractedText extracted = new ExtractedText();
+                    extracted.text = all;
+                    extracted.startOffset = 0;
+                    extracted.partialStartOffset = -1;
+                    extracted.partialEndOffset = -1;
+                    extracted.selectionStart = all.length();
+                    extracted.selectionEnd = all.length();
+                    return extracted;
                 }
                 @Override public boolean beginBatchEdit() {
                     if (connectionSession != session) return false;

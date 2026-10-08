@@ -1,31 +1,50 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use gpui_kit::{px, App, ListAlignment, ListState};
-use mattermost_api::models::{Channel, SidebarCategory};
+use gpui_kit::{
+    px, rems, App, Bounds, ListAlignment, ListState, Pixels, Point, Rems, TouchPhase,
+};
+use mattermost_api::models::Channel;
 
-/// How tall a channel's row is; a category's heading is measured.
-pub(super) const ROW_HEIGHT: f32 = 32.;
+use super::tab_swipe::TabSwipe;
+
+/// How far across the list a swipe has to go to turn a tab, as a share of
+/// its width: further than a finger drifts while scrolling, and well short
+/// of a stretch.
+const SWIPE_REACH: f32 = 0.15;
+
+/// How tall a conversation's row is: a face, and two lines beside it. In
+/// rems, like everything a row is made of: it is as tall as its text needs,
+/// at whatever size the text is set.
+pub(super) const ROW_HEIGHT: Rems = rems(3.75);
 
 /// How far past the edges of the list rows are kept drawn, so a flick of the
 /// wheel does not outrun them.
 const OVERDRAW: f32 = 320.;
 
-/// One line of the channel list, by the id of what it shows. The rest is read
-/// from the state when the line is drawn.
-#[derive(Clone, PartialEq)]
-pub(super) enum Row {
-    Category(String),
-    Channel(String),
-}
-
-/// The channel list, pane one.
+/// The list of conversations, pane one.
 pub struct ChannelSidebar {
-    /// Which rows are on screen, and how tall the ones seen so far were: a
-    /// server can have hundreds of channels, and only the few in view are
-    /// built for a frame.
+    /// Which rows are on screen: a server can have hundreds of channels, and
+    /// only the few in view are built for a frame.
     pub(super) list: ListState,
-    rows: RefCell<Rc<Vec<Row>>>,
+    /// The conversations in the order drawn, by id. The rest is read from
+    /// the state when a row is drawn.
+    rows: RefCell<Rc<Vec<String>>>,
+    /// The size of text the list was last told its rows' height for: a row
+    /// is so many rems tall, and the list counts in pixels.
+    rem: Cell<Pixels>,
+    /// The folder the list is narrowed to — a sidebar category's id — or
+    /// nothing for every conversation.
+    folder: RefCell<Option<String>>,
+    /// Whether the inbox is in front instead of a list of conversations: it
+    /// is the first tab, before the folders, and what the column shows until
+    /// somebody chooses otherwise — what is waiting on the reader is what
+    /// they opened the window for.
+    inbox: Cell<bool>,
+    /// Where the rows under the tabs are in the window: a swipe that starts
+    /// there is for the tabs, and one over the tabs themselves scrolls them.
+    pub(super) body: Cell<Bounds<Pixels>>,
+    tab_swipe: Cell<TabSwipe>,
 }
 
 impl ChannelSidebar {
@@ -33,6 +52,45 @@ impl ChannelSidebar {
         ChannelSidebar {
             list: ListState::new(0, ListAlignment::Top, px(OVERDRAW)),
             rows: RefCell::new(Rc::new(Vec::new())),
+            rem: Cell::new(px(0.)),
+            folder: RefCell::new(None),
+            inbox: Cell::new(true),
+            body: Cell::new(Bounds::default()),
+            tab_swipe: Cell::new(TabSwipe::Idle),
+        }
+    }
+
+    /// One step of a pan across the list when it is the screen in front.
+    /// Says whether the step was taken — it is a swipe between tabs and not
+    /// a scroll — and which way to turn, if this step is the one that turns.
+    /// `width` is how wide the list is.
+    pub(crate) fn swiped(
+        &self,
+        dx: f32,
+        dy: f32,
+        phase: TouchPhase,
+        position: Point<Pixels>,
+        width: f32,
+    ) -> (bool, Option<i32>) {
+        let started = phase == TouchPhase::Started;
+        if started && !self.body.get().contains(&position) {
+            self.tab_swipe.set(TabSwipe::Idle);
+            return (false, None);
+        }
+        let (swipe, turn) = self.tab_swipe.get().pan(dx, dy, started, width * SWIPE_REACH);
+        self.tab_swipe.set(swipe);
+        (swipe.taken(), turn)
+    }
+
+    pub(crate) fn showing_inbox(&self) -> bool {
+        self.inbox.get()
+    }
+
+    /// Puts the inbox in front, or takes it away again and leaves the folder
+    /// that was open before it.
+    pub(crate) fn show_inbox(&self, show: bool, cx: &mut App) {
+        if self.inbox.replace(show) != show {
+            crate::ui::refresh(cx);
         }
     }
 
@@ -43,38 +101,41 @@ impl ChannelSidebar {
         crate::ui::refresh(cx);
     }
 
-    /// The lines to draw for these groups. Nearly every frame they are the
-    /// ones already held, and nothing is copied; when they are not, the list
-    /// is told, and stays scrolled to where it was.
-    pub(super) fn rows(&self, groups: &[(&SidebarCategory, Vec<&Channel>)]) -> Rc<Vec<Row>> {
-        let wanted = || {
-            groups.iter().flat_map(|(category, channels)| {
-                std::iter::once((true, category.id.as_str()))
-                    .chain(channels.iter().map(|channel| (false, channel.id.as_str())))
-            })
-        };
+    pub(crate) fn folder(&self) -> Option<String> {
+        self.folder.borrow().clone()
+    }
+
+    /// Opens a folder, or every conversation, from the top: the place the
+    /// last list was scrolled to means nothing in this one.
+    pub(crate) fn set_folder(&self, folder: Option<String>, cx: &mut App) {
+        // Choosing a folder is also leaving the inbox, even for the folder
+        // that was open underneath it.
+        self.show_inbox(false, cx);
+        if *self.folder.borrow() == folder {
+            return;
+        }
+        *self.folder.borrow_mut() = folder;
+        *self.rows.borrow_mut() = Rc::new(Vec::new());
+        self.list.reset(0);
+        crate::ui::refresh(cx);
+    }
+
+    /// The rows to draw for these conversations. Nearly every frame they are
+    /// the ones already held, and nothing is copied; when they are not — a
+    /// message moved a conversation to the top — the list is told, and stays
+    /// scrolled to where it was. So it is when the text changed size (`rem`)
+    /// and every row with it.
+    pub(super) fn rows(&self, chats: &[&Channel], rem: Pixels) -> Rc<Vec<String>> {
         let held = self.rows.borrow().clone();
-        let same = held
-            .iter()
-            .map(|row| match row {
-                Row::Category(id) => (true, id.as_str()),
-                Row::Channel(id) => (false, id.as_str()),
-            })
-            .eq(wanted());
-        if same {
+        let same = held.iter().map(String::as_str).eq(chats.iter().map(|chat| chat.id.as_str()));
+        if same && self.rem.replace(rem) == rem {
             return held;
         }
-        let rows: Rc<Vec<Row>> = Rc::new(
-            wanted()
-                .map(|(heading, id)| match heading {
-                    true => Row::Category(id.to_string()),
-                    false => Row::Channel(id.to_string()),
-                })
-                .collect(),
-        );
+        self.rem.set(rem);
+        let rows: Rc<Vec<String>> = Rc::new(chats.iter().map(|chat| chat.id.clone()).collect());
         let top = self.list.logical_scroll_top();
         self.list
-            .reset_with_uniform_height(rows.len(), px(ROW_HEIGHT));
+            .reset_with_uniform_height(rows.len(), ROW_HEIGHT.to_pixels(rem));
         self.list.scroll_to(top);
         *self.rows.borrow_mut() = rows.clone();
         rows

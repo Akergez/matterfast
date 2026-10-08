@@ -82,6 +82,12 @@ impl Shell {
             ui.dispatch(Action::CloseRightPanel, cx);
             return true;
         }
+        // On a phone a conversation is a page over the list of them, and
+        // going back leaves it for the list.
+        if ui.split.collapsed.get() && ui.split.showing_content() {
+            ui.split.set_show_content(false, cx);
+            return true;
+        }
         false
     }
 }

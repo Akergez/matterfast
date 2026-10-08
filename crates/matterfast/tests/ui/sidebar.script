@@ -1,18 +1,27 @@
 # mode: demo
 # size: 1320x840
 #
-# Clicking a row in the channel list opens that channel: a public channel,
-# then a direct message, whose title is the other person's name.
+# The list of conversations is one list, in the order of the server's
+# categories and not of who was written to last, and clicking a row opens
+# that conversation: a public channel, then a direct message, whose title is
+# the other person's name.
 wait:2500
 expect:channel=Development
-move:60,232
+# The window opens on the inbox; the list of conversations is the next tab.
+move:115,102
 wait:300
-click:72,232
+click:120,102
+wait:600
+expect:folder=all
+expect:chats=Development|Design Crit|General|Releases|Lena Petrova|Mikk Tamm
+move:60,277
+wait:300
+click:72,277
 wait:1200
 expect:channel=General
-move:80,331
+move:80,397
 wait:300
-click:92,331
+click:92,397
 wait:1200
 expect:channel=Lena Petrova
 quit

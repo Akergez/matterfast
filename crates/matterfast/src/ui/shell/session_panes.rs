@@ -32,14 +32,10 @@ pub(super) fn session(
     ui.narrow.set(narrow);
 
     // A thread is a place you read alongside the conversation, so it earns a
-    // static column when there is room. The inbox is a stack you glance at
-    // and dismiss, so it always overlays — pushing the conversation aside for
-    // it would be a heavier gesture than the content deserves.
-    let overlays = narrow
-        || matches!(
-            ui.right.mode(cx),
-            PanelMode::Inbox | PanelMode::Search(_)
-        );
+    // static column when there is room. Search results are a stack you glance
+    // at and dismiss, so they always overlay — pushing the conversation aside
+    // for them would be a heavier gesture than the content deserves.
+    let overlays = narrow || matches!(ui.right.mode(cx), PanelMode::Search(_));
     let panel = (ui.overlay.shown() && !matches!(ui.right.mode(cx), PanelMode::Hidden))
         .then(|| columns.right());
 
@@ -77,39 +73,35 @@ pub(super) fn session(
     });
 
     if collapsed {
-        // The conversation, and the channel list as a drawer that slides in
-        // over it from the left. The dock would come and go with the drawer,
-        // so here it belongs under the conversation.
-        let drawer = (width * 0.86).min(360.0);
+        // The list of conversations is the screen, the whole width of it,
+        // and a conversation is a page that comes in over it from the right
+        // and goes back the same way. Neither is built while the other has
+        // the window to itself. The dock would come and go with the list, so
+        // here it belongs under the conversation.
         let open = ui.split.advance(window);
-        panes = panes.child(div().size_full().child(columns.chat()));
         if open > 0.0 {
-            panes = panes
-                .child(
-                    div()
-                        .id("drawer-scrim")
-                        .absolute()
-                        .inset_0()
-                        .bg(gpui_kit::black().opacity(0.45 * open))
-                        .occlude()
-                        .on_click(ui.click(|ui, cx| ui.split.set_show_content(true, cx))),
-                )
-                .child(
-                    div()
-                        .absolute()
-                        .top_0()
-                        .bottom_0()
-                        .left(px((open - 1.0) * drawer))
-                        .w(px(drawer))
-                        .shadow_lg()
-                        .occlude()
-                        .child(columns.sidebar()),
-                );
+            panes = panes.child(div().size_full().child(columns.sidebar()));
         }
-        // A phone has no edge to click: the list is pulled out by a swipe
-        // to the right and pushed back by one to the left. Anything laid
-        // over the conversation keeps its own swipes.
-        if cfg!(target_os = "android") && !ui.overlay.shown() && !window.has_active_dialog(cx) {
+        if open < 1.0 {
+            panes = panes.child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left(px(open * width))
+                    .w(px(width))
+                    .shadow_lg()
+                    .occlude()
+                    .child(columns.chat()),
+            );
+        }
+        // A phone has no edge to click. Over a conversation a swipe to the
+        // right carries it off and leaves the list; over the list a swipe
+        // goes to the tab beside the one in front. Anything laid over either
+        // keeps its own swipes. A script may swipe on any system: it is how
+        // this is tested where there is no finger.
+        let swipes = cfg!(target_os = "android") || crate::ui::script::playing();
+        if swipes && !ui.overlay.shown() && !window.has_active_dialog(cx) {
             let ui = ui.clone();
             panes = panes.child(
                 canvas(
@@ -121,9 +113,26 @@ pub(super) fn session(
                             }
                             let delta = event.delta.pixel_delta(px(1.));
                             let (dx, dy) = (f32::from(delta.x), f32::from(delta.y));
-                            if ui.split.swiped(dx, dy, event.touch_phase, drawer) {
+                            if ui.split.swiped(dx, dy, event.touch_phase, width) {
                                 cx.stop_propagation();
                                 window.refresh();
+                                return;
+                            }
+                            if !ui.split.list_in_front() {
+                                return;
+                            }
+                            let (taken, turn) = ui.channels.swiped(
+                                dx,
+                                dy,
+                                event.touch_phase,
+                                event.position,
+                                width,
+                            );
+                            if let Some(step) = turn {
+                                crate::ui::sidebar::turn(&ui, step, cx);
+                            }
+                            if taken {
+                                cx.stop_propagation();
                             }
                         });
                     },

@@ -27,12 +27,7 @@ pub(super) fn header(ui: &Rc<Ui>, narrow: bool, cx: &mut App) -> AnyElement {
         .as_ref()
         .map(|c| subtitle(&c.header, chat.member_count.get()))
         .unwrap_or_default();
-    let inbox_count = (st
-        .mentions
-        .len()
-        .min(99)
-        .max(st.unread_threads().max(0) as usize) as i64)
-        + st.reaction_unread;
+    let inbox_count = st.inbox_waiting();
     drop(st);
 
     let theme = cx.theme();

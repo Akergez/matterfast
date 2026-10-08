@@ -140,6 +140,32 @@ pub fn state() -> SharedState {
         ]),
     );
 
+    // When each conversation was last written in, which is what the list of
+    // them is ordered by: the ones with a feed at their last message, the
+    // rest spread over the week before, so that the list has an order, a
+    // time, a weekday and a date in it.
+    const DAY: Millis = 86_400_000;
+    for (id, written) in [
+        ("c-dm-lena", BASE - 600_000),
+        ("c-releases", BASE - DAY),
+        ("c-design", BASE - 3 * DAY),
+        ("c-dm-mikk", BASE - 9 * DAY),
+    ] {
+        if let Some(channel) = st.channels.get_mut(id) {
+            channel.last_post_at = written;
+        }
+    }
+    let last_posts: Vec<(String, Millis)> = st
+        .feeds
+        .iter()
+        .filter_map(|(id, feed)| Some((id.clone(), feed.posts.last()?.create_at)))
+        .collect();
+    for (id, written) in last_posts {
+        if let Some(channel) = st.channels.get_mut(&id) {
+            channel.last_post_at = written;
+        }
+    }
+
     // A thread hanging off p-5, so the right-hand panel has something real to
     // show, and an inbox with one mention and one followed thread.
     st.threads.insert(

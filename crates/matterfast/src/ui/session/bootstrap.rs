@@ -129,7 +129,7 @@ pub(crate) fn bootstrap(
                         st.current_channel = None;
                     }
                 }
-                ui.dispatch(Action::SelectChannel(id), cx);
+                ui.dispatch(Action::LoadChannel(id), cx);
             }
 
             connect_live_updates(&ui, ws_url, token);

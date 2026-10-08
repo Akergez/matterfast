@@ -6,6 +6,7 @@ use gpui_kit::{div, AnyElement, App, FontWeight};
 
 use super::inbox_row::InboxRow;
 use super::target::Target;
+use crate::ui::sidebar::{INBOX_FACE, INBOX_ROW};
 use crate::timefmt::format_relative;
 use crate::ui::kit;
 use crate::ui::{message, Action, Ui};
@@ -33,6 +34,16 @@ pub(super) fn inbox_row_view(ui: &Rc<Ui>, index: usize, row: &InboxRow, cx: &App
                     .text_color(muted)
                     .child(row.channel.clone()),
             )
+            // Why an old message is in a list of new things.
+            .when(row.saved, |heading| {
+                heading.child(
+                    div()
+                        .flex_none()
+                        .text_xs()
+                        .text_color(muted)
+                        .child(kit::Lucide::Bookmark),
+                )
+            })
             .child(
                 div()
                     .flex_none()
@@ -41,41 +52,55 @@ pub(super) fn inbox_row_view(ui: &Rc<Ui>, index: usize, row: &InboxRow, cx: &App
                     .child(format_relative(row.at)),
             ),
     );
-    body = body.child(div().line_clamp(2).child(row.preview.clone()));
+    // One line of what was said: the row is something to recognise a thread
+    // by, and the thread is a press away.
+    body = body.child(div().truncate().text_sm().child(row.preview.clone()));
 
-    if let Some((replies, unread_replies, unread_mentions)) = row.counts {
-        let mut footer = h_flex().gap_1p5().items_center().child(
-            div()
-                .text_xs()
-                .text_color(muted)
-                .child(format!(
-                    "{replies} {}",
-                    message::plural(replies, "reply", "replies")
-                )),
-        );
-        if unread_mentions > 0 {
-            footer = footer.child(kit::mention_badge(unread_mentions, false, cx));
-        } else if unread_replies > 0 {
-            footer = footer.child(kit::with_tooltip(
-                "unread",
-                kit::unread_dot(cx),
-                "Unread replies",
-            ));
+    // The third line is there for every row, so that all of them are one
+    // height and the face beside them is as tall as they are. Only a
+    // followed thread comes with its numbers; of the others it is known
+    // what they are.
+    let (replies, unread_replies, unread_mentions) = row.counts.unwrap_or_default();
+    let answers = match (&row.target, row.counts) {
+        (_, Some(_)) if replies > 0 => {
+            format!("{replies} {}", message::plural(replies, "reply", "replies"))
         }
-        body = body.child(footer);
+        (Target::Thread { .. }, None) => "A reply in a thread".to_string(),
+        _ => "No replies".to_string(),
+    };
+    let mut footer = h_flex()
+        .gap_1p5()
+        .items_center()
+        .child(div().text_xs().text_color(muted).child(answers));
+    if unread_mentions > 0 {
+        footer = footer.child(kit::mention_badge(unread_mentions, false, cx));
+    } else if unread_replies > 0 {
+        footer = footer.child(kit::with_tooltip(
+            "unread",
+            kit::unread_dot(cx),
+            "Unread replies",
+        ));
     }
+    body = body.child(footer);
 
     let target = row.target.clone();
     h_flex()
         .id(("inbox-row", index))
         .w_full()
-        .items_start()
+        .h(INBOX_ROW)
+        .items_center()
         .gap_2p5()
-        .p_2()
+        .px_2()
         .rounded_md()
         .cursor_pointer()
         .hover(|style| style.bg(theme.list_hover))
-        .child(kit::avatar(ui, &row.user_id, &row.author, 32.))
+        // As tall as the three lines beside it, at the size they are set in.
+        .child(kit::avatar(
+            ui,
+            &row.user_id,
+            &row.author,
+            f32::from(INBOX_FACE.to_pixels(theme.font_size)),
+        ))
         .child(body)
         // The whole entry is one target.
         .on_click(ui.click(move |ui, cx| {
@@ -89,7 +114,14 @@ pub(super) fn inbox_row_view(ui: &Rc<Ui>, index: usize, row: &InboxRow, cx: &App
                         channel_id,
                         post_id,
                     } => Action::JumpToPost(channel_id, post_id),
-                    Target::Followed(root_id) => Action::OpenThread(root_id),
+                    // A thread whose channel is not known — the server left
+                    // it out — still opens, beside what is on screen.
+                    Target::Followed { channel_id, root_id } if channel_id.is_empty() => {
+                        Action::OpenThread(root_id)
+                    }
+                    Target::Followed { channel_id, root_id } => {
+                        Action::OpenPost(channel_id, root_id)
+                    }
                 },
                 cx,
             )
