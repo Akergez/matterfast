@@ -10,8 +10,13 @@ use crate::ui::chat::scroll_trace::scroll_trace_enabled;
 use crate::ui::{Action, Ui, WindowSlot};
 
 /// How far past the visible rows the list keeps things laid out, so a flick
-/// of the wheel lands on rows that already exist.
-const OVERDRAW: gpui_kit::Pixels = px(600.);
+/// of the wheel lands on rows that already exist. Touch devices keep a smaller
+/// reserve: measuring offscreen messages also starts their image requests.
+const OVERDRAW: gpui_kit::Pixels = px(if cfg!(target_os = "android") {
+    120.
+} else {
+    600.
+});
 
 /// Rows from the top at which the page before this one is asked for.
 const PAGINATE_WITHIN: usize = 4;

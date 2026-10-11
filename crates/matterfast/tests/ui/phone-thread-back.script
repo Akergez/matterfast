@@ -1,0 +1,21 @@
+# mode: server
+# size: 400x800
+# Closing a thread retains the moving page and reveals the main list.
+wait:5000
+expect:folder=inbox
+expect:sidebar-body-top=48
+click:120,290
+wait:1500
+expect:panel=thread
+shot:phone-thread-open
+key:escape
+wait:40
+expect:panel-sliding=true
+shot:phone-thread-back-sliding
+wait:700
+expect:panel=hidden
+expect:panel-sliding=false
+expect:page=list
+expect:sidebar-body-top=48
+shot:phone-thread-back-list
+quit

@@ -1,47 +1,45 @@
-/// What a pan across the list of conversations is to its tabs.
-///
-/// On a phone the list is the main screen and a swipe across it goes to the
-/// tab beside the one in front, as in Telegram. A swipe turns one tab however
-/// far it goes: the tabs are not carried by the finger, so there is nothing
-/// to show for a second one, and a flick would otherwise run through them all.
+/// A category gesture keeps its displacement until the finger is lifted.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(super) enum TabSwipe {
-    /// Somebody else's: the list being scrolled.
     #[default]
     Idle,
-    /// Sideways, and this far so far.
     Tracking(f32),
-    /// It has turned its tab, or was let go short of one; what is left of it
-    /// — the momentum — is nobody's.
     Done,
 }
 
 impl TabSwipe {
-    /// One step of a pan: where that leaves the swipe, and the tab to go to,
-    /// as so many places along, if this step was the one that got there.
-    /// `reach` is how far a swipe has to go to count.
-    pub(super) fn pan(self, dx: f32, dy: f32, started: bool, reach: f32) -> (TabSwipe, Option<i32>) {
-        // A pan is locked to one axis from its first step.
-        let swipe = match started {
-            true if dy == 0.0 && dx != 0.0 => TabSwipe::Tracking(0.0),
-            true => TabSwipe::Idle,
-            false => self,
+    pub(super) fn pan(self, dx: f32, dy: f32, started: bool, initial: f32) -> Self {
+        let swipe = if started {
+            if dx.abs() > dy.abs() {
+                Self::Tracking(initial)
+            } else {
+                Self::Idle
+            }
+        } else {
+            self
         };
-        let TabSwipe::Tracking(so_far) = swipe else {
-            return (swipe, None);
-        };
-        let so_far = so_far + dx;
-        if so_far.abs() < reach {
-            return (TabSwipe::Tracking(so_far), None);
+        match swipe {
+            Self::Tracking(offset) => Self::Tracking(offset + dx),
+            other => other,
         }
-        // The finger pulls the next tab in from the side it is going away
-        // from: to the left is on to the next one.
-        (TabSwipe::Done, Some(if so_far < 0.0 { 1 } else { -1 }))
     }
 
-    /// Whether the pan is the tabs' and not a scroll for what is underneath.
+    pub(super) fn release(self, cancelled: bool) -> (Self, Option<i32>) {
+        match self {
+            Self::Tracking(offset) => {
+                let turn = (!cancelled && offset.abs() >= 0.3).then_some(if offset < 0.0 {
+                    1
+                } else {
+                    -1
+                });
+                (Self::Done, turn)
+            }
+            other => (other, None),
+        }
+    }
+
     pub(super) fn taken(self) -> bool {
-        self != TabSwipe::Idle
+        self != Self::Idle
     }
 }
 
@@ -56,36 +54,48 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_swipe_to_the_left_goes_on_one_tab_once_it_has_gone_far_enough() {
-        let (swipe, turn) = TabSwipe::Idle.pan(-20.0, 0.0, true, 50.0);
-        assert_eq!((swipe, turn), (TabSwipe::Tracking(-20.0), None));
-        let (swipe, turn) = swipe.pan(-40.0, 0.0, false, 50.0);
-        assert_eq!((swipe, turn), (TabSwipe::Done, Some(1)));
+    fn displacement_follows_the_finger_and_can_reverse_before_release() {
+        let swipe = TabSwipe::Idle.pan(-0.4, 0.0, true, 0.0);
+        assert_eq!(swipe, TabSwipe::Tracking(-0.4));
+        let swipe = swipe.pan(0.3, 0.0, false, 0.0);
+        assert!(matches!(swipe, TabSwipe::Tracking(offset) if (offset + 0.1).abs() < 0.001));
+        assert_eq!(swipe.release(false), (TabSwipe::Done, None));
     }
 
     #[test]
-    fn a_swipe_to_the_right_goes_back_one() {
-        let (swipe, _) = TabSwipe::Idle.pan(30.0, 0.0, true, 50.0);
-        assert_eq!(swipe.pan(30.0, 0.0, false, 50.0), (TabSwipe::Done, Some(-1)));
+    fn turns_only_on_release() {
+        assert_eq!(
+            TabSwipe::Tracking(-0.4).release(false),
+            (TabSwipe::Done, Some(1))
+        );
+        assert_eq!(
+            TabSwipe::Tracking(0.4).release(false),
+            (TabSwipe::Done, Some(-1))
+        );
     }
 
     #[test]
-    fn a_swipe_turns_one_tab_however_far_it_goes() {
-        let (swipe, _) = TabSwipe::Idle.pan(-80.0, 0.0, true, 50.0);
-        assert_eq!(swipe, TabSwipe::Done);
-        // The rest of it, and its momentum, is taken and does nothing.
-        let (swipe, turn) = swipe.pan(-300.0, 0.0, false, 50.0);
-        assert_eq!((swipe, turn), (TabSwipe::Done, None));
-        assert!(swipe.taken());
+    fn cancellation_returns_to_the_original_category() {
+        assert_eq!(
+            TabSwipe::Tracking(-0.8).release(true),
+            (TabSwipe::Done, None)
+        );
     }
 
     #[test]
-    fn a_scroll_of_the_list_is_not_a_swipe() {
-        let (swipe, turn) = TabSwipe::Done.pan(0.0, -12.0, true, 50.0);
-        assert_eq!((swipe, turn), (TabSwipe::Idle, None));
+    fn vertical_scroll_stays_vertical_and_momentum_cannot_turn_a_tab() {
+        let swipe = TabSwipe::Done.pan(0.01, -0.1, true, 0.0);
+        assert_eq!(swipe.pan(-0.9, 0.0, false, 0.0), TabSwipe::Idle);
         assert!(!swipe.taken());
-        // Drifting sideways later in the same pan does not make it one.
-        assert_eq!(swipe.pan(-90.0, 0.0, false, 50.0), (TabSwipe::Idle, None));
+        assert_eq!(TabSwipe::Done.pan(-0.9, 0.0, false, 0.0), TabSwipe::Done);
+    }
+
+    #[test]
+    fn an_interrupted_settle_continues_at_its_current_position() {
+        assert_eq!(
+            TabSwipe::Done.pan(-0.1, 0.0, true, 0.5),
+            TabSwipe::Tracking(0.4)
+        );
     }
 
     #[test]

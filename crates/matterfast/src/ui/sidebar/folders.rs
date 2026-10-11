@@ -63,8 +63,6 @@ pub(crate) fn turn(ui: &Rc<Ui>, step: i32, cx: &mut App) {
         1 => ui.channels.set_folder(None, cx),
         folder => ui.channels.set_folder(folders.get(folder - 2).cloned(), cx),
     }
-    // The next tab comes in from the right, the one before from the left.
-    ui.channels.slide_from(if next > now { 1.0 } else { -1.0 }, cx);
 }
 
 /// The tabs over the list: the inbox first, every conversation second, then
@@ -116,14 +114,10 @@ pub(super) fn folders(ui: &Rc<Ui>, st: &AppState, cx: &App) -> AnyElement {
 
     let mut row = h_flex()
         .id("folders")
-        .flex_none()
-        .w_full()
-        .px_2()
-        .py_1p5()
+        .flex_1()
+        .min_w_0()
         .gap_1()
         .overflow_x_scroll()
-        .border_b_1()
-        .border_color(theme.sidebar_border)
         .child(
             // What is waiting in it is a count of its own: mentions and
             // threads, not conversations. Pressed while it is in front it

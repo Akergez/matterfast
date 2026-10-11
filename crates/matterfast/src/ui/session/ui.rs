@@ -56,6 +56,9 @@ pub struct Ui {
     pub(crate) completion_generation: Cell<u64>,
     /// Set while a redraw for freshly-landed pictures is already booked.
     pub(crate) avatar_redraw_pending: Cell<bool>,
+    /// Whether the pending picture batch includes profile pictures, which
+    /// also appear in the channel list and completion candidates.
+    pub(crate) avatar_users_pending: Cell<bool>,
     /// Set while a debounced `@mention` network lookup is scheduled; further
     /// keystrokes just overwrite `mention_query` instead of scheduling again.
     pub(crate) mention_query_pending: Cell<bool>,
@@ -119,6 +122,7 @@ impl Ui {
             typing_sent_recently: Cell::new(false),
             completion_generation: Cell::new(0),
             avatar_redraw_pending: Cell::new(false),
+            avatar_users_pending: Cell::new(false),
             mention_query_pending: Cell::new(false),
             mention_query: RefCell::new(None),
             last_completions: RefCell::new(Vec::new()),
@@ -138,17 +142,28 @@ impl Ui {
         // as a burst and one frame is as good as twenty.
         avatars.connect_loaded({
             let weak = Rc::downgrade(&ui);
-            move |key, cx| {
+            move |key, _| {
                 let Some(ui) = weak.upgrade() else { return };
                 if !key.contains(':') {
-                    ui.refresh_completion_avatars(cx);
+                    ui.avatar_users_pending.set(true);
                 }
                 if ui.avatar_redraw_pending.replace(true) {
                     return;
                 }
                 runtime::after(AVATAR_REDRAW_WAIT, move |cx| {
                     ui.avatar_redraw_pending.set(false);
-                    crate::ui::refresh(cx);
+                    let users = ui.avatar_users_pending.replace(false);
+                    if users {
+                        ui.refresh_completion_avatars(cx);
+                    }
+                    // Attachments and emoji live in messages. The sidebar
+                    // needs them only while it shows the inbox; faces also
+                    // appear in its conversation rows. Preserve the shell
+                    // and unrelated cached views for this cosmetic update.
+                    if users || ui.channels.showing_inbox() {
+                        crate::ui::redraw(&[crate::ui::Part::Sidebar], cx);
+                    }
+                    crate::ui::redraw(&[crate::ui::Part::Chat, crate::ui::Part::Right], cx);
                 });
             }
         });

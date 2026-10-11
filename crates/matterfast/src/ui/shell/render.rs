@@ -2,13 +2,14 @@ use gpui_kit::component::input::Escape;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{v_flex, ActiveTheme, Sizable, WindowExt};
 use gpui_kit::prelude::*;
-use gpui_kit::{div, px, Context, Window};
+use gpui_kit::{div, px, Context, Focusable, Window};
 
 use super::actions::{
     ClosePanel, FocusSearch, NewChannel, NextUnread, OpenInbox, OpenSettings, PreviousUnread,
     QuickSwitch, CONTEXT,
 };
 use super::choose_server::choose_server;
+use super::constants::SIDEBAR_PAGE_BELOW;
 use super::session_panes::session;
 use super::shell_view::Shell;
 use super::stage::Stage;
@@ -27,7 +28,41 @@ impl Render for Shell {
             );
         }
 
-        let title_bar = self.title_bar(window, cx);
+        let phone_session = self.session().is_some()
+            && f32::from(window.viewport_size().width) < SIDEBAR_PAGE_BELOW;
+        let phone_panel = phone_session && self.session().is_some_and(|ui| {
+            ui.overlay.shown()
+                && !matches!(ui.right.mode(cx), crate::ui::rhs::PanelMode::Hidden)
+        });
+        if self.phone_panel_shown != phone_panel {
+            self.phone_panel_shown = phone_panel;
+            if phone_panel {
+                self.phone_panel_restore_focus = window.focused(cx);
+                let reply_focused = self.session().is_some_and(|ui| {
+                    ui.right.composer.borrow().as_ref().is_some_and(|reply| {
+                        reply.read(cx).focus_handle(cx).contains_focused(window, cx)
+                    })
+                });
+                // The covered search/composer leaves the focus tree with its
+                // page. Keep Escape on the shell unless the visible reply
+                // box already owns focus. This runs only on page transitions.
+                if !reply_focused {
+                    window.focus(&self.focus, cx);
+                } else {
+                    // The reply will itself disappear on close, so it cannot
+                    // be the restore target for the covered page.
+                    self.phone_panel_restore_focus = Some(self.focus.clone());
+                }
+            } else {
+                let restore = self.phone_panel_restore_focus.take();
+                if self.session().is_some() {
+                    if let Some(focus) = restore {
+                        window.focus(&focus, cx);
+                    }
+                }
+            }
+        }
+        let title_bar = (!phone_session).then(|| self.title_bar(window, cx));
         let (bars_top, bars_bottom) = system_bars();
         let body = match &self.stage {
             Stage::Loading => div()
@@ -91,7 +126,9 @@ impl Render for Shell {
             // Under the status bar, in the title bar's colour so that the two
             // read as one.
             .child(div().flex_none().h(px(bars_top)).w_full().bg(theme.sidebar))
-            .child(crate::ui::frame_log::timed("title", title_bar))
+            .when_some(title_bar, |shell, title| {
+                shell.child(crate::ui::frame_log::timed("title", title))
+            })
             .child(div().flex_1().min_h_0().w_full().child(body))
             .pb(px(bars_bottom))
             .when(crate::ui::frame_log::enabled(), |shell| {

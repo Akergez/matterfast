@@ -24,6 +24,7 @@ pub struct SearchBox {
     /// that waits for them never opens in a window that was focused from a
     /// shortcut before the desktop said so.
     pub(super) focused: Cell<bool>,
+    compact_expanded: Cell<bool>,
 }
 
 impl SearchBox {
@@ -35,6 +36,7 @@ impl SearchBox {
             rows: RefCell::new(Vec::new()),
             selected: Cell::new(None),
             focused: Cell::new(false),
+            compact_expanded: Cell::new(false),
         }
     }
 
@@ -43,17 +45,33 @@ impl SearchBox {
     }
 
     pub(crate) fn detach(&self) {
+        self.compact_expanded.set(false);
         self.input.borrow_mut().take();
         self.close();
     }
 
     /// Puts the cursor in the box.
     pub fn focus(&self, cx: &mut App) {
+        self.compact_expanded.set(true);
+        self.focused.set(false);
         let Some(input) = self.input.borrow().clone() else {
             return;
         };
         self.window.update(cx, move |window, cx| {
             input.update(cx, |input, cx| input.focus(window, cx));
+        });
+    }
+
+    pub(crate) fn compact_expanded(&self) -> bool {
+        self.compact_expanded.get()
+    }
+
+    pub(crate) fn collapse_compact(&self, cx: &mut App) {
+        self.compact_expanded.set(false);
+        self.focused.set(false);
+        self.close();
+        cx.defer(move |cx| {
+            crate::ui::shell::focus(cx);
         });
     }
 
@@ -63,7 +81,11 @@ impl SearchBox {
         if !self.is_open() {
             return Vec::new();
         }
-        self.rows.borrow().iter().map(|row| row.label.clone()).collect()
+        self.rows
+            .borrow()
+            .iter()
+            .map(|row| row.label.clone())
+            .collect()
     }
 
     /// What is in the box.

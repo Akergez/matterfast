@@ -1,4 +1,5 @@
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use gpui_kit::{
@@ -8,11 +9,6 @@ use mattermost_api::models::Channel;
 
 use super::tab_swipe::TabSwipe;
 
-/// How far across the list a swipe has to go to turn a tab, as a share of
-/// its width: further than a finger drifts while scrolling, and well short
-/// of a stretch.
-const SWIPE_REACH: f32 = 0.15;
-
 /// How tall a conversation's row is: a face, and two lines beside it. In
 /// rems, like everything a row is made of: it is as tall as its text needs,
 /// at whatever size the text is set.
@@ -20,19 +16,11 @@ pub(super) const ROW_HEIGHT: Rems = rems(3.75);
 
 /// How far past the edges of the list rows are kept drawn, so a flick of the
 /// wheel does not outrun them.
-const OVERDRAW: f32 = 320.;
+const OVERDRAW: f32 = if cfg!(target_os = "android") { 120. } else { 320. };
 
 /// The list of conversations, pane one.
 pub struct ChannelSidebar {
-    /// Which rows are on screen: a server can have hundreds of channels, and
-    /// only the few in view are built for a frame.
-    pub(super) list: ListState,
-    /// The conversations in the order drawn, by id. The rest is read from
-    /// the state when a row is drawn.
-    rows: RefCell<Rc<Vec<String>>>,
-    /// The size of text the list was last told its rows' height for: a row
-    /// is so many rems tall, and the list counts in pixels.
-    rem: Cell<Pixels>,
+    pages: RefCell<HashMap<Option<String>, ChannelPage>>,
     /// The folder the list is narrowed to — a sidebar category's id — or
     /// nothing for every conversation.
     folder: RefCell<Option<String>>,
@@ -45,6 +33,7 @@ pub struct ChannelSidebar {
     /// there is for the tabs, and one over the tabs themselves scrolls them.
     pub(super) body: Cell<Bounds<Pixels>>,
     tab_swipe: Cell<TabSwipe>,
+    tab_order: Cell<(usize, usize)>,
     /// How far the rows are from their place, in widths of the list: a tab
     /// that was swiped to comes in from the side the finger left for, +1
     /// for the right. Zero when nothing is moving.
@@ -57,31 +46,22 @@ pub struct ChannelSidebar {
 impl ChannelSidebar {
     pub fn new() -> Self {
         ChannelSidebar {
-            list: ListState::new(0, ListAlignment::Top, px(OVERDRAW)),
-            rows: RefCell::new(Rc::new(Vec::new())),
-            rem: Cell::new(px(0.)),
+            pages: RefCell::new(HashMap::new()),
             folder: RefCell::new(None),
             inbox: Cell::new(true),
             body: Cell::new(Bounds::default()),
             tab_swipe: Cell::new(TabSwipe::Idle),
+            tab_order: Cell::new((0, 2)),
             slide: Cell::new(0.0),
             slid: Cell::new(None),
         }
-    }
-
-    /// Starts the rows of a tab just turned to off to one side, to come in
-    /// from there.
-    pub(super) fn slide_from(&self, side: f32, cx: &mut App) {
-        self.slide.set(side);
-        self.slid.set(None);
-        crate::ui::refresh(cx);
     }
 
     /// Where the rows are for this frame, a step nearer their place. Asks
     /// for another frame until they are in it.
     pub(super) fn advance(&self, window: &mut Window) -> f32 {
         let mut slide = self.slide.get();
-        if slide == 0.0 {
+        if slide == 0.0 || matches!(self.tab_swipe.get(), TabSwipe::Tracking(_)) {
             return slide;
         }
         let now = std::time::Instant::now();
@@ -111,16 +91,60 @@ impl ChannelSidebar {
         dy: f32,
         phase: TouchPhase,
         position: Point<Pixels>,
-        width: f32,
     ) -> (bool, Option<i32>) {
         let started = phase == TouchPhase::Started;
         if started && !self.body.get().contains(&position) {
             self.tab_swipe.set(TabSwipe::Idle);
             return (false, None);
         }
-        let (swipe, turn) = self.tab_swipe.get().pan(dx, dy, started, width * SWIPE_REACH);
+        let width = f32::from(self.body.get().size.width);
+        if width <= 0.0 {
+            return (false, None);
+        }
+        let swipe = self
+            .tab_swipe
+            .get()
+            .pan(dx / width, dy / width, started, self.slide.get());
+        let mut turn = None;
+        let swipe = if let TabSwipe::Tracking(offset) = swipe {
+            let (now, count) = self.tab_order();
+            let minimum = if now + 1 < count { -1.0 } else { 0.0 };
+            let maximum = if now > 0 { 1.0 } else { 0.0 };
+            let offset = offset.clamp(minimum, maximum);
+            self.slide.set(offset);
+            if matches!(phase, TouchPhase::Ended | TouchPhase::Cancelled) {
+                let (swipe, next) =
+                    TabSwipe::Tracking(offset).release(phase == TouchPhase::Cancelled);
+                turn = next;
+                // Rebase onto the chosen page without changing either page's position.
+                self.slide.set(offset + next.unwrap_or(0) as f32);
+                self.slid.set(None);
+                swipe
+            } else {
+                TabSwipe::Tracking(offset)
+            }
+        } else {
+            swipe
+        };
         self.tab_swipe.set(swipe);
         (swipe.taken(), turn)
+    }
+
+    /// The tab order is supplied by the sidebar before dispatching a gesture.
+    pub(super) fn set_tab_order(&self, now: usize, count: usize) {
+        self.tab_order.set((now, count));
+    }
+
+    fn tab_order(&self) -> (usize, usize) {
+        self.tab_order.get()
+    }
+
+    pub(crate) fn swipe_offset(&self) -> f32 {
+        self.slide.get() * f32::from(self.body.get().size.width)
+    }
+
+    pub(crate) fn body_top(&self) -> f32 {
+        f32::from(self.body.get().origin.y)
     }
 
     pub(crate) fn showing_inbox(&self) -> bool {
@@ -146,8 +170,7 @@ impl ChannelSidebar {
         self.folder.borrow().clone()
     }
 
-    /// Opens a folder, or every conversation, from the top: the place the
-    /// last list was scrolled to means nothing in this one.
+    /// Opens a folder or every conversation, retaining each list's scroll position.
     pub(crate) fn set_folder(&self, folder: Option<String>, cx: &mut App) {
         // Choosing a folder is also leaving the inbox, even for the folder
         // that was open underneath it.
@@ -156,29 +179,42 @@ impl ChannelSidebar {
             return;
         }
         *self.folder.borrow_mut() = folder;
-        *self.rows.borrow_mut() = Rc::new(Vec::new());
-        self.list.reset(0);
+
         crate::ui::refresh(cx);
     }
 
-    /// The rows to draw for these conversations. Nearly every frame they are
-    /// the ones already held, and nothing is copied; when they are not — a
-    /// message moved a conversation to the top — the list is told, and stays
-    /// scrolled to where it was. So it is when the text changed size (`rem`)
-    /// and every row with it.
-    pub(super) fn rows(&self, chats: &[&Channel], rem: Pixels) -> Rc<Vec<String>> {
-        let held = self.rows.borrow().clone();
-        let same = held.iter().map(String::as_str).eq(chats.iter().map(|chat| chat.id.as_str()));
-        if same && self.rem.replace(rem) == rem {
-            return held;
+    /// Each category keeps its own list while two pages are visible during a drag.
+    pub(super) fn rows(
+        &self,
+        folder: Option<String>,
+        chats: &[&Channel],
+        rem: Pixels,
+    ) -> (ListState, Rc<Vec<String>>) {
+        let mut pages = self.pages.borrow_mut();
+        let page = pages.entry(folder).or_insert_with(|| ChannelPage {
+            list: ListState::new(0, ListAlignment::Top, px(OVERDRAW)),
+            rows: Rc::new(Vec::new()),
+            rem: px(0.0),
+        });
+        let same = page
+            .rows
+            .iter()
+            .map(String::as_str)
+            .eq(chats.iter().map(|chat| chat.id.as_str()));
+        if !same || page.rem != rem {
+            let top = page.list.logical_scroll_top();
+            page.rows = Rc::new(chats.iter().map(|chat| chat.id.clone()).collect());
+            page.rem = rem;
+            page.list
+                .reset_with_uniform_height(page.rows.len(), ROW_HEIGHT.to_pixels(rem));
+            page.list.scroll_to(top);
         }
-        self.rem.set(rem);
-        let rows: Rc<Vec<String>> = Rc::new(chats.iter().map(|chat| chat.id.clone()).collect());
-        let top = self.list.logical_scroll_top();
-        self.list
-            .reset_with_uniform_height(rows.len(), ROW_HEIGHT.to_pixels(rem));
-        self.list.scroll_to(top);
-        *self.rows.borrow_mut() = rows.clone();
-        rows
+        (page.list.clone(), page.rows.clone())
     }
+}
+
+struct ChannelPage {
+    list: ListState,
+    rows: Rc<Vec<String>>,
+    rem: Pixels,
 }

@@ -72,6 +72,13 @@ pub(super) fn header(ui: &Rc<Ui>, narrow: bool, cx: &mut App) -> AnyElement {
             }),
     );
 
+    if narrow {
+        bar = bar.child(
+            kit::icon_button("phone-search", Lucide::Search, "Search messages")
+                .on_click(ui.click(|ui, cx| ui.menu_action(MenuAction::FocusSearch, cx))),
+        );
+    }
+
     // The inbox button carries its own count, the way a mail client's does:
     // the number is the reason to click it.
     bar = bar.child(

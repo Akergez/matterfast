@@ -21,9 +21,9 @@ pub(crate) fn build(
             // to the server, and searching per character would be a request
             // per character.
             InputEvent::PressEnter { .. } => ui.later(cx, |ui, cx| ui.search_box.submit(ui, cx)),
-            // Where the cursor is, is read off the window when the box is
-            // drawn: see `SearchBox::focused`.
-            InputEvent::Focus | InputEvent::Blur => {}
+            // The field can live inside a cached sidebar pane. Redraw its
+            // owner so `render` reads the actual window focus and updates hints.
+            InputEvent::Focus | InputEvent::Blur => crate::ui::refresh(cx),
         }
     });
     (input, subscription)

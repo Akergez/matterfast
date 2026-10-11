@@ -1,0 +1,79 @@
+# mode: demo
+# size: 400x800
+# A held finger carries both pages, with no autonomous motion or early turn.
+wait:2500
+expect:folder=inbox
+expect:sidebar-body-top=48
+pan:start,200,400,-160,0
+wait:200
+expect:folder=inbox
+expect:category-offset=-160
+shot:phone-pager-held
+wait:300
+expect:category-offset=-160
+pan:move,200,400,100,0
+wait:100
+expect:category-offset=-60
+expect:folder=inbox
+pan:end,200,400,0,0
+wait:600
+expect:folder=inbox
+expect:category-offset=0
+pan:start,200,400,-160,0
+wait:100
+expect:folder=inbox
+pan:cancel,200,400,0,0
+wait:600
+expect:folder=inbox
+expect:category-offset=0
+pan:start,200,400,-160,0
+wait:100
+pan:end,200,400,0,0
+wait:600
+expect:folder=all
+expect:category-offset=0
+# A vertical scroll with sideways drift cannot turn a category.
+pan:start,200,400,-2,-20
+pan:move,200,400,-180,0
+pan:end,200,400,0,0
+wait:400
+expect:folder=all
+expect:category-offset=0
+# Raw Android contacts go through GPUI's recognizer into the same pager.
+touch:start,240,400
+wait:60
+touch:move,80,400
+wait:150
+expect:folder=all
+expect:category-offset=-160
+touch:move,180,400
+wait:150
+expect:category-offset=-60
+touch:move,340,400
+wait:150
+expect:folder=all
+expect:category-offset=100
+touch:cancel,340,400
+wait:500
+expect:folder=all
+expect:category-offset=0
+# Search opens with a tap in the single page header.
+click:342,24
+wait:500
+expect:search-hints=from:|in:|before:|after:|on:|file:
+key:escape
+shot:phone-single-header
+key:ctrl-k
+wait:500
+type:releas
+wait:400
+key:enter
+wait:800
+expect:page=chat
+shot:phone-chat-single-header
+# The chat header's search button takes us to the field on the list page.
+click:276,24
+wait:700
+expect:page=list
+expect:search-hints=from:|in:|before:|after:|on:|file:
+quit

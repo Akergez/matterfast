@@ -8,20 +8,20 @@
 wait:2500
 expect:channel=Development
 # The window opens on the inbox; the list of conversations is the next tab.
-move:115,102
+move:155,58
 wait:300
-click:120,102
+click:160,58
 wait:600
 expect:folder=all
 expect:chats=Development|Design Crit|General|Releases|Lena Petrova|Mikk Tamm
-move:60,277
+move:60,237
 wait:300
-click:72,277
+click:72,237
 wait:1200
 expect:channel=General
-move:80,397
+move:80,357
 wait:300
-click:92,397
+click:92,357
 wait:1200
 expect:channel=Lena Petrova
 quit

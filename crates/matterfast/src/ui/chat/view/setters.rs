@@ -54,7 +54,7 @@ impl ChatView {
     /// Answers an outstanding completion query.
     pub fn set_completions(&self, items: Vec<Candidate>, cx: &mut App) {
         self.completions.borrow_mut().set(items);
-        crate::ui::refresh(cx);
+        crate::ui::redraw(&[crate::ui::Part::Chat], cx);
     }
 
     pub fn set_calls_available(&self, available: bool, reason: Option<&str>, cx: &mut App) {

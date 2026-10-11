@@ -6,17 +6,17 @@
 wait:5000
 expect:session=yes
 expect:chats=Development|General|Lena Petrova
-click:120,102
+click:160,58
 wait:600
 expect:folder=all
-move:60,217
+move:60,177
 wait:300
-click:71,217
+click:71,177
 wait:2500
 expect:channel=General
-move:60,157
+move:60,117
 wait:300
-click:92,157
+click:92,117
 wait:2500
 expect:channel=Development
 quit

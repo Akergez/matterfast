@@ -6,21 +6,24 @@
 # gives every conversation back.
 wait:2500
 expect:folder=inbox
-move:280,102
+pan:start,160,58,-220,0
+pan:end,160,58,0,0
 wait:300
-click:285,102
+shot:single-header-folder-tabs
+click:135,58
 wait:800
 expect:folder=Channels
 expect:chats=Design Crit|General|Releases
 # The first row of the folder is not the first row of everything.
-move:60,157
+move:60,117
 wait:300
-click:72,157
+click:72,117
 wait:1200
 expect:channel=Design Crit
-move:115,102
+pan:start,160,58,220,0
+pan:end,160,58,0,0
 wait:300
-click:120,102
+click:160,58
 wait:800
 expect:folder=all
 expect:chats=Development|Design Crit|General|Releases|Lena Petrova|Mikk Tamm

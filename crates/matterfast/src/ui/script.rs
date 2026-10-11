@@ -12,6 +12,8 @@
 //! - `scroll:<x>,<y>,<dy>` — positive `dy` scrolls towards older content
 //! - `swipe:<x>,<y>,<dx>` — a finger carried sideways from there, to the
 //!   left for a negative `dx`; only a phone-sized window does anything with it
+//! - `touch:<start|move|end|cancel>,<x>,<y>` — a raw contact, as Android reports it
+//! - `pan:<start|move|end|cancel>,<x>,<y>,<dx>,<dy>` — one touch event
 //! - `key:<keystroke>` — `ctrl-k`, `escape`, `enter`
 //! - `type:<text>`
 //! - `paste:<text>` — what Ctrl+V would do in the composer that has the
@@ -60,7 +62,7 @@ use gpui_kit::component::{ActiveTheme as _, WindowExt as _};
 use gpui_kit::{
     point, px, AnyWindowHandle, App, Keystroke, Modifiers, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, Pixels, PlatformInput, Point, ScrollDelta, ScrollWheelEvent,
-    TouchPhase, Window,
+    TouchEvent, TouchId, TouchPhase, Window,
 };
 
 use crate::runtime;
@@ -73,6 +75,8 @@ enum Step {
     Drag(f32, f32, f32, f32),
     Scroll(f32, f32, f32),
     Swipe(f32, f32, f32),
+    Pan(f32, f32, f32, f32, TouchPhase),
+    Touch(f32, f32, TouchPhase),
     Key(String),
     Type(String),
     Paste(String),
@@ -113,6 +117,34 @@ fn parse(script: &str) -> Vec<Step> {
                     [x, y, dx] => Step::Swipe(x, y, dx),
                     _ => return None,
                 },
+                "touch" => {
+                    let (phase, values) = rest.split_once(',')?;
+                    let phase = match phase {
+                        "start" => TouchPhase::Started,
+                        "move" => TouchPhase::Moved,
+                        "end" => TouchPhase::Ended,
+                        "cancel" => TouchPhase::Cancelled,
+                        _ => return None,
+                    };
+                    match numbers(values)?[..] {
+                        [x, y] => Step::Touch(x, y, phase),
+                        _ => return None,
+                    }
+                }
+                "pan" => {
+                    let (phase, values) = rest.split_once(',')?;
+                    let phase = match phase {
+                        "start" => TouchPhase::Started,
+                        "move" => TouchPhase::Moved,
+                        "end" => TouchPhase::Ended,
+                        "cancel" => TouchPhase::Cancelled,
+                        _ => return None,
+                    };
+                    match numbers(values)?[..] {
+                        [x, y, dx, dy] => Step::Pan(x, y, dx, dy, phase),
+                        _ => return None,
+                    }
+                }
                 "key" => Step::Key(rest.to_string()),
                 "type" => Step::Type(rest.to_string()),
                 "paste" => Step::Paste(rest.to_string()),
@@ -195,6 +227,9 @@ fn observe(what: &str, window: &mut Window, cx: &mut App) -> Option<String> {
         "dialog" => if window.has_active_dialog(cx) { "open" } else { "closed" }.to_string(),
         "theme" => if cx.theme().mode.is_dark() { "dark" } else { "light" }.to_string(),
         "theme-name" => cx.theme().theme_name().to_string(),
+        "category-offset" => ui.map(|ui| ui.channels.swipe_offset().round() as i32).unwrap_or(0).to_string(),
+        "sidebar-body-top" => ui.map(|ui| ui.channels.body_top().round() as i32).unwrap_or(0).to_string(),
+        "panel-sliding" => ui.is_some_and(|ui| !ui.overlay.shown() && ui.overlay.visible() > 0.0).to_string(),
         "search" => ui.map(|ui| ui.search_box.text(cx)).unwrap_or_default(),
         "search-hints" => ui.map(|ui| ui.search_box.offered().join("|")).unwrap_or_default(),
         "search-hits" => ui
@@ -365,6 +400,26 @@ fn next(handle: AnyWindowHandle, mut steps: VecDeque<Step>, cx: &mut App) {
                     touch_phase: TouchPhase::Moved,
                 }),
                 cx,
+            );
+        }
+        Step::Touch(x, y, phase) => {
+            window.dispatch_event(PlatformInput::Touch(TouchEvent {
+                id: TouchId(1),
+                phase: *phase,
+                position: at(*x, *y),
+                predicted_position: None,
+                force: None,
+            }), cx);
+        }
+        Step::Pan(x, y, dx, dy, touch_phase) => {
+            pointer(window, at(*x, *y), cx);
+            window.dispatch_event(
+                PlatformInput::ScrollWheel(ScrollWheelEvent {
+                    position: at(*x, *y),
+                    delta: ScrollDelta::Pixels(point(px(*dx), px(*dy))),
+                    modifiers: Modifiers::default(),
+                    touch_phase: *touch_phase,
+                }), cx,
             );
         }
         Step::Swipe(x, y, dx) => {

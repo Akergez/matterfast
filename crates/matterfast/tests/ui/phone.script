@@ -29,9 +29,9 @@ expect:page=list
 swipe:200,400,-160
 wait:600
 # The second conversation of them all.
-move:200,217
+move:200,145
 wait:300
-click:200,217
+click:200,145
 wait:1200
 expect:channel=Design Crit
 expect:page=chat

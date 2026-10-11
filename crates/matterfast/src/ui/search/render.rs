@@ -75,7 +75,11 @@ pub fn render(ui: &Rc<Ui>, width: f32, window: &Window, cx: &mut App) -> AnyElem
         .capture_action({
             let ui = ui.clone();
             move |_: &Escape, _, cx| {
-                if ui.search_box.is_open() {
+                if ui.split.collapsed.get() {
+                    ui.search_box.collapse_compact(cx);
+                    cx.stop_propagation();
+                    ui.channels.refresh(cx);
+                } else if ui.search_box.is_open() {
                     ui.search_box.close();
                     cx.stop_propagation();
                     crate::ui::refresh(cx);

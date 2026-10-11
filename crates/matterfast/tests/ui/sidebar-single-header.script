@@ -1,0 +1,31 @@
+# mode: server
+# size: 400x800
+# The inbox has one 48px header, including tabs and account/menu actions.
+wait:5000
+expect:session=yes
+expect:folder=inbox
+expect:sidebar-body-top=48
+shot:single-header-phone
+click:342,24
+wait:700
+expect:search-hints=from:|in:|before:|after:|on:|file:
+expect:sidebar-body-top=48
+shot:single-header-search
+key:escape
+wait:600
+expect:search-hints=
+expect:sidebar-body-top=48
+swipe:200,400,-160
+wait:600
+expect:folder=all
+click:100,79
+wait:1200
+expect:page=chat
+expect:channel=Development
+key:ctrl-f
+wait:600
+expect:page=list
+expect:search-hints=from:|in:|before:|after:|on:|file:
+expect:sidebar-body-top=48
+shot:single-header-search-shortcut
+quit

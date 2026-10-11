@@ -9,6 +9,8 @@ use crate::ui::{Action, MenuAction, Ui};
 pub struct Shell {
     pub(super) stage: Stage,
     pub(super) focus: FocusHandle,
+    pub(super) phone_panel_shown: bool,
+    pub(super) phone_panel_restore_focus: Option<FocusHandle>,
     /// What a sign-in failure during startup has to say; shown on the form.
     pub(super) notice: RefCell<Option<String>>,
     /// The composers and the search box of the current session, kept alive
@@ -50,6 +52,8 @@ impl Shell {
             _appearance: appearance,
             stage: Stage::Loading,
             focus: cx.focus_handle(),
+            phone_panel_shown: false,
+            phone_panel_restore_focus: None,
             notice: RefCell::new(None),
             session_subscriptions: Vec::new(),
         }

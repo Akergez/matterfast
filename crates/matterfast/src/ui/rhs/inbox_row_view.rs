@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme};
 use gpui_kit::prelude::*;
-use gpui_kit::{div, AnyElement, App, FontWeight};
+use gpui_kit::{div, px, AnyElement, App, FontWeight};
 
 use super::inbox_row::InboxRow;
 use super::panel_mode::PanelMode;
@@ -11,7 +11,7 @@ use crate::ui::sidebar::{
     INBOX_ANSWERS as ANSWERS, INBOX_FACE, INBOX_HEADING as HEADING, INBOX_ROW, INBOX_SAID as SAID,
 };
 use crate::timefmt::format_relative;
-use crate::ui::kit;
+use crate::ui::{channel_avatar, kit};
 use crate::ui::{message, Action, Ui};
 
 pub(super) fn inbox_row_view(ui: &Rc<Ui>, index: usize, row: &InboxRow, cx: &App) -> AnyElement {
@@ -30,9 +30,10 @@ pub(super) fn inbox_row_view(ui: &Rc<Ui>, index: usize, row: &InboxRow, cx: &App
             .items_center()
             .child(
                 div()
-                    .flex_none()
+                    .min_w_0()
+                    .truncate()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child(row.author.clone()),
+                    .child(row.channel.clone()),
             )
             .child(
                 div()
@@ -41,7 +42,7 @@ pub(super) fn inbox_row_view(ui: &Rc<Ui>, index: usize, row: &InboxRow, cx: &App
                     .truncate()
                     .text_xs()
                     .text_color(muted)
-                    .child(row.channel.clone()),
+                    .child(row.author.clone()),
             )
             // Why an old message is in a list of new things.
             .when(row.saved, |heading| {
@@ -69,8 +70,7 @@ pub(super) fn inbox_row_view(ui: &Rc<Ui>, index: usize, row: &InboxRow, cx: &App
             .line_height(SAID)
             .truncate()
             .text_sm()
-            // Quieter than who said it: the name is what the row is found
-            // by.
+            // The source is the primary identity; the preview is secondary.
             .text_color(muted)
             .child(row.preview.clone()),
     );
@@ -126,13 +126,40 @@ pub(super) fn inbox_row_view(ui: &Rc<Ui>, index: usize, row: &InboxRow, cx: &App
         .cursor_pointer()
         .when(selected, |row| row.bg(theme.sidebar_accent))
         .when(!selected, |row| row.hover(|style| style.bg(theme.list_hover)))
-        // A little taller than the three lines beside it.
-        .child(kit::avatar(
-            ui,
-            &row.user_id,
-            &row.author,
-            f32::from(INBOX_FACE.to_pixels(theme.font_size)),
-        ))
+        .child({
+            let size = f32::from(INBOX_FACE.to_pixels(theme.font_size));
+            let channel_id = match &row.target {
+                Target::Thread { channel_id, .. }
+                | Target::Message { channel_id, .. }
+                | Target::Followed { channel_id, .. } => channel_id,
+            };
+            let st = ui.state.borrow();
+            let face = match st.channel(channel_id) {
+                Some(channel) => channel_avatar::avatar(ui, channel, &st, size * 0.8, cx),
+                None => channel_avatar::named(&row.channel, size * 0.8).into_any_element(),
+            };
+            // Both faces fit inside the existing column: channel at the top
+            // left, author overlapping its lower right corner.
+            div()
+                .relative()
+                .size(px(size))
+                .flex_none()
+                .child(face)
+                .child(
+                    div()
+                        .absolute()
+                        .right_0()
+                        .bottom_0()
+                        .p_0p5()
+                        .rounded_full()
+                        .bg(if selected {
+                            theme.sidebar_accent
+                        } else {
+                            theme.sidebar
+                        })
+                        .child(kit::avatar(ui, &row.user_id, &row.author, size * 0.48)),
+                )
+        })
         .child(body)
         // The whole entry is one target.
         .on_click(ui.click(move |ui, cx| {

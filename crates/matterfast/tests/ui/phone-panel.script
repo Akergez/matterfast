@@ -1,0 +1,37 @@
+# mode: server
+# size: 400x800
+# A full-screen panel removes the covered phone pages from the element tree.
+# Closing it and reopening the conversation must preserve its composer.
+wait:5000
+expect:session=yes
+swipe:200,400,-160
+wait:600
+expect:folder=all
+click:100,79
+wait:1500
+expect:channel=Development
+expect:page=chat
+click:180,764
+type:unsent draft
+wait:400
+expect:composer=unsent draft
+key:ctrl-f
+wait:700
+expect:page=list
+type:from:lena fix
+wait:600
+key:enter
+wait:2500
+expect:panel=search
+expect:search-hits=1
+key:escape
+wait:700
+expect:panel=hidden
+expect:page=list
+expect:composer=unsent draft
+click:100,79
+wait:1200
+expect:page=chat
+expect:channel=Development
+expect:composer=unsent draft
+quit

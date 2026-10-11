@@ -54,7 +54,11 @@ impl Ui {
             Action::OpenInbox => self.open_inbox(cx),
             Action::OlderThreads => self.load_older_threads(cx),
             Action::CloseRightPanel => {
-                self.right.set_mode(PanelMode::Hidden, cx);
+                if self.split.collapsed.get() {
+                    self.split.reveal_list(cx);
+                } else {
+                    self.right.set_mode(PanelMode::Hidden, cx);
+                }
                 self.overlay.set_show_sidebar(false, cx);
             }
             Action::ToggleReaction(post_id, emoji) => self.toggle_reaction(post_id, emoji, cx),

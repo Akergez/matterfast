@@ -4,7 +4,7 @@ use gpui_kit::component::menu::{ContextMenuExt, PopupMenuItem};
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme};
 use gpui_kit::prelude::*;
 use gpui_kit::{div, rems, AnyElement, App, ElementId, FontWeight, Rems};
-use mattermost_api::models::{Channel, ChannelType};
+use mattermost_api::models::Channel;
 
 use super::call_badge::call_badge;
 use super::channel_sidebar::ROW_HEIGHT;
@@ -12,7 +12,8 @@ use super::preview::{preview, Preview};
 use super::row_menu::row_menu;
 use crate::state::AppState;
 use crate::timefmt::format_chat_time;
-use crate::ui::kit::{self, Lucide};
+use crate::ui::channel_avatar;
+use crate::ui::kit;
 use crate::ui::message::{custom_status_tooltip, emoji_element, status_is_live};
 use crate::ui::rhs::PanelMode;
 use crate::ui::{Action, Ui};
@@ -90,34 +91,13 @@ pub(crate) fn channel_row(
         && !(fit.among_threads && in_thread);
     let teammate = channel.dm_teammate_id(&st.me.id);
 
-    // A conversation with one person is that person: their face, with the
-    // presence dot, exactly like a message row. A channel has no face, so it
-    // gets a disc with what kind of channel it is — "#" for a public one,
-    // the way Mattermost writes them.
-    let face: AnyElement = match (teammate, &channel.r#type) {
-        (Some(user_id), _) => {
-            // The picture is asked for in pixels: the rems at the size the
-            // text is set in.
-            let size = f32::from(fit.face.to_pixels(theme.font_size));
-            kit::avatar_with_presence(ui, user_id, &title, size, st.presence(user_id), cx)
-        }
-        (None, kind) => div()
-            .size(fit.face)
-            .flex_none()
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded_full()
-            .bg(theme.muted)
-            .text_color(theme.muted_foreground)
-            .map(|disc| match kind {
-                ChannelType::Open => disc.text_lg().child("#"),
-                ChannelType::Private => disc.child(Lucide::Lock),
-                ChannelType::Group => disc.child(Lucide::Users),
-                _ => disc.child(Lucide::User),
-            })
-            .into_any_element(),
-    };
+    let face = channel_avatar::avatar(
+        ui,
+        channel,
+        st,
+        f32::from(fit.face.to_pixels(theme.font_size)),
+        cx,
+    );
 
     // The first line: who, and when they were last written to.
     let mut heading = h_flex()

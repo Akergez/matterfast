@@ -17,6 +17,7 @@ mod account;
 mod action;
 mod autocomplete;
 mod call_dock;
+mod channel_avatar;
 pub(crate) mod channel_icon;
 mod chat;
 mod constants;

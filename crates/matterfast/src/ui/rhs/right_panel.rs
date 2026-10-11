@@ -53,7 +53,15 @@ impl RightPanel {
     }
 
     pub fn new(window: Rc<WindowSlot>) -> Self {
-        let list = ListState::new(0, ListAlignment::Bottom, px(400.));
+        let list = ListState::new(
+            0,
+            ListAlignment::Bottom,
+            px(if cfg!(target_os = "android") {
+                120.
+            } else {
+                400.
+            }),
+        );
         list.set_follow_mode(FollowMode::Tail);
         RightPanel {
             window,
@@ -64,7 +72,15 @@ impl RightPanel {
             list,
             following: Cell::new(false),
             inbox: RefCell::new(Inbox::default()),
-            inbox_list: ListState::new(0, ListAlignment::Top, px(320.)),
+            inbox_list: ListState::new(
+                0,
+                ListAlignment::Top,
+                px(if cfg!(target_os = "android") {
+                    120.
+                } else {
+                    320.
+                }),
+            ),
             search: RefCell::new(Vec::new()),
             searching: Cell::new(false),
             search_more: Cell::new(false),

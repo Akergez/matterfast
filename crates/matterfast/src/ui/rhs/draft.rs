@@ -82,7 +82,7 @@ impl RightPanel {
     /// Answers the reply box's outstanding completion query.
     pub(crate) fn set_completions(&self, items: Vec<Candidate>, cx: &mut App) {
         self.completions.borrow_mut().set(items);
-        crate::ui::refresh(cx);
+        crate::ui::redraw(&[crate::ui::Part::Right], cx);
     }
 
     /// Whether the completion list is up, and so has first refusal on keys.

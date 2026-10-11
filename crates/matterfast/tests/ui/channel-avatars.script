@@ -1,0 +1,28 @@
+# mode: demo
+# size: 1320x840
+# Channel initials and overlapping thread faces in both themes.
+wait:2500
+expect:folder=inbox
+expect:sidebar-body-top=82
+shot:avatars-inbox-light
+key:ctrl-,
+wait:1200
+click:877,152
+wait:800
+expect:theme=dark
+key:escape
+wait:600
+shot:avatars-inbox-dark
+click:160,58
+wait:600
+expect:folder=all
+shot:avatars-channels-dark
+key:ctrl-k
+wait:600
+type:design
+wait:600
+shot:avatars-switcher
+key:enter
+wait:1200
+expect:channel=Design Crit
+quit

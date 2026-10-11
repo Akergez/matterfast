@@ -42,3 +42,4 @@ pub use matterfast::current;
 pub use panes::{redraw, refresh, Part};
 pub use present::{handle_request, present};
 pub use signed_out::signed_out;
+pub(crate) use with_shell::focus;

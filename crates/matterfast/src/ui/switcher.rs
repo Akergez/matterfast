@@ -96,11 +96,15 @@ impl Render for View {
                     .cursor_pointer()
                     .when(index == self.selected, |row| row.bg(theme.accent))
                     .hover(|style| style.bg(theme.list_hover))
-                    .child(
-                        div()
+                    .child(match &entry.target {
+                        Target::Channel(_) => {
+                            super::channel_avatar::named(&entry.title, 24.).into_any_element()
+                        }
+                        Target::User(_) => div()
                             .text_color(theme.muted_foreground)
-                            .child(entry.icon.clone()),
-                    )
+                            .child(entry.icon.clone())
+                            .into_any_element(),
+                    })
                     .child(div().flex_1().min_w_0().truncate().child(entry.title.clone()))
                     .when(!entry.subtitle.is_empty(), |row| {
                         row.child(

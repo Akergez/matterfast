@@ -130,4 +130,13 @@ impl Split {
             crate::ui::refresh(cx);
         }
     }
+
+    /// A dismissed full-screen panel reveals the list beneath its own slide.
+    pub(crate) fn reveal_list(&self, cx: &mut App) {
+        self.show_content.set(false);
+        self.open.set(1.0);
+        self.ticked.set(None);
+        self.swipe.set(Swipe::Idle);
+        crate::ui::refresh(cx);
+    }
 }

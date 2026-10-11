@@ -19,7 +19,13 @@ impl Ui {
             MenuAction::ChannelBookmarks => self.channel_bookmarks(cx),
             MenuAction::BrowseTeams => self.browse_teams(cx),
             MenuAction::NewCategory => self.new_category(cx),
-            MenuAction::FocusSearch => self.search_box.focus(cx),
+            MenuAction::FocusSearch => {
+                if self.split.collapsed.get() {
+                    self.split.set_show_content(false, cx);
+                }
+                self.search_box.focus(cx);
+                self.channels.refresh(cx);
+            }
             MenuAction::OpenInbox => self.open_inbox(cx),
             MenuAction::NextUnread => self.step_unread(true, cx),
             MenuAction::PreviousUnread => self.step_unread(false, cx),

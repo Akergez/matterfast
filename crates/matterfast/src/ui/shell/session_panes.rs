@@ -30,13 +30,24 @@ pub(super) fn session(
     let narrow = width < STATIC_PANEL_MIN_WIDTH;
     ui.split.collapsed.set(collapsed);
     ui.narrow.set(narrow);
+    let panel_visible = if collapsed { ui.overlay.advance(window) } else { 0.0 };
+    if !ui.overlay.shown() && panel_visible == 0.0
+        && !matches!(ui.right.mode(cx), PanelMode::Hidden)
+    {
+        ui.later(cx, |ui, cx| {
+            if !ui.overlay.shown() && ui.overlay.visible() == 0.0 {
+                ui.right.set_mode(PanelMode::Hidden, cx);
+            }
+        });
+    }
 
     // A thread is a place you read alongside the conversation, so it earns a
     // static column when there is room. Search results are a stack you glance
     // at and dismiss, so they always overlay — pushing the conversation aside
     // for them would be a heavier gesture than the content deserves.
     let overlays = narrow || matches!(ui.right.mode(cx), PanelMode::Search(_));
-    let panel = (ui.overlay.shown() && !matches!(ui.right.mode(cx), PanelMode::Hidden))
+    let panel = ((ui.overlay.shown() || panel_visible > 0.0)
+        && !matches!(ui.right.mode(cx), PanelMode::Hidden))
         .then(|| columns.right());
 
     // On a phone the panel is a page: a strip of conversation left showing
@@ -72,7 +83,9 @@ pub(super) fn session(
         }
     });
 
-    if collapsed {
+    // The opaque panel fills the phone. Covered pages retain their views and
+    // scroll states, but stay out of the tree so their lists are not measured.
+    if collapsed && panel.is_none() {
         // The list of conversations is the screen, the whole width of it,
         // and a conversation is a page that comes in over it from the right
         // and goes back the same way. Neither is built while the other has
@@ -90,7 +103,7 @@ pub(super) fn session(
                     .bottom_0()
                     .left(px(open * width))
                     .w(px(width))
-                    .shadow_lg()
+                    .when(open > 0.0, |page| page.shadow_lg())
                     .occlude()
                     .child(columns.chat()),
             );
@@ -126,12 +139,12 @@ pub(super) fn session(
                                 dy,
                                 event.touch_phase,
                                 event.position,
-                                width,
                             );
                             if let Some(step) = turn {
                                 crate::ui::sidebar::turn(&ui, step, cx);
                             }
                             if taken {
+                                window.refresh();
                                 cx.stop_propagation();
                             }
                         });
@@ -141,7 +154,9 @@ pub(super) fn session(
                 .size_0(),
             );
         }
-    } else {
+    } else if collapsed && panel_visible < 1.0 {
+        panes = panes.child(div().size_full().child(columns.sidebar()));
+    } else if !collapsed {
         panes = panes
             .child(
                 div()
@@ -159,9 +174,9 @@ pub(super) fn session(
                 .absolute()
                 .top_0()
                 .bottom_0()
-                .right_0()
+                .right(px(if collapsed { -(1.0 - panel_visible) * width } else { 0.0 }))
                 .w(px(panel_width))
-                .shadow_lg()
+                .when(!collapsed, |panel| panel.shadow_lg())
                 .occlude()
                 .child(panel)
                 .into_any_element()
