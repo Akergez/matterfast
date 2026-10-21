@@ -12,6 +12,7 @@ mod my_channels;
 mod my_team_members;
 mod my_teams;
 mod posts;
+mod preferences;
 mod reactions;
 mod search;
 mod team_unreads;
@@ -24,7 +25,7 @@ mod zed;
 pub(crate) use categories::categories;
 pub(crate) use client_config::client_config;
 pub(crate) use emoji::{emoji_by_name, emoji_image, emoji_list, emoji_search};
-pub(crate) use empty::{empty_array, empty_object};
+pub(crate) use empty::empty_object;
 pub(crate) use groups::{group_members, groups};
 pub(crate) use login::login;
 pub(crate) use me::me;
@@ -35,6 +36,7 @@ pub(crate) use my_teams::my_teams;
 pub(crate) use posts::{
     channel_posts, create_post, get_post, post_action, post_thread, unread_posts,
 };
+pub(crate) use preferences::{my_preferences, save_preferences};
 pub(crate) use reactions::{add_reaction, remove_reaction};
 pub(crate) use search::search_posts;
 pub(crate) use team_unreads::team_unreads;

@@ -19,6 +19,7 @@ mod column_width;
 mod constants;
 mod divider;
 mod init;
+mod link_menu;
 mod matterfast;
 mod open_window;
 mod panes;
@@ -38,6 +39,7 @@ mod window_size;
 mod with_shell;
 
 pub use init::init;
+pub(crate) use link_menu::{is_open as link_menu_open, open as open_link_menu};
 pub use matterfast::current;
 pub use panes::{redraw, refresh, Part};
 pub use present::{handle_request, present};

@@ -14,6 +14,7 @@ use super::emoji_element::emoji_element;
 use super::hover_actions::hover_actions;
 use super::in_view::in_view;
 use super::markdown_view::markdown;
+use super::post_sheet::long_press_area;
 use super::reaction_strip::reaction_strip;
 use super::thread_footer::thread_footer;
 use crate::timefmt::format_time;
@@ -195,6 +196,10 @@ pub fn row(
         .when(options.highlight, |row| row.bg(theme.accent))
         // An unconfirmed send stays dimmed until the server echoes it back.
         .when(post.is_pending(), |row| row.opacity(0.55))
+        // First, so that it lies under what the row holds.
+        .when(!post.is_pending(), |row| {
+            row.child(long_press_area(ui, &post.id, options.show_thread_footer))
+        })
         .child(frame_log::timed("avatar", leading))
         .child(content)
         // The toolkit reports this for a row that scrolls under a pointer

@@ -141,6 +141,23 @@ impl Ui {
             .apply_reaction(&reaction, !currently_mine);
         self.refresh_messages(cx);
 
+        // What was reacted with joins the quick row, here and in the other
+        // clients, which read the same preference. Taking one back is not a
+        // use of it.
+        if !currently_mine {
+            let recent = self.state.borrow_mut().use_emoji(&emoji);
+            let client = client.clone();
+            let me = me.clone();
+            runtime::spawn(
+                async move { client.save_preferences(&me, &[recent]).await },
+                |result, _| {
+                    if let Err(error) = result {
+                        tracing::warn!(%error, "could not remember the emoji");
+                    }
+                },
+            );
+        }
+
         let ui = self.clone();
         let request_post = post_id.clone();
         let request_emoji = emoji.clone();

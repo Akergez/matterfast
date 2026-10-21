@@ -23,6 +23,8 @@ mod ipc;
 pub(crate) use matterfast_markdown as markdown;
 mod keyboard;
 mod notifications;
+#[cfg(target_os = "android")]
+mod open_file;
 pub(crate) use matterfast_paths as paths;
 #[cfg_attr(not(target_os = "linux"), path = "playback_stub.rs")]
 mod playback;

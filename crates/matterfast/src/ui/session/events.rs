@@ -348,8 +348,13 @@ impl Ui {
             | Event::ChannelDeleted { .. }
             | Event::ChannelMemberUpdated { .. }
             | Event::DirectAdded { .. }
-            | Event::PreferencesChanged(_)
             | Event::SidebarCategoriesInvalidated { .. } => fx.reload_sidebar = true,
+            // Held as well, for what reads them on the spot — the quick row
+            // of reactions another client just added to, for one.
+            Event::PreferencesChanged(changed) => {
+                st.set_preferences(&changed);
+                fx.reload_sidebar = true;
+            }
             // Someone joining a channel only matters to the list when the
             // someone is us.
             Event::UserAdded { user_id, .. } | Event::UserRemoved { user_id, .. }

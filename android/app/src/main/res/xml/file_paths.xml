@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!--
+  What Files.java may hand to another application: the downloaded
+  attachments, and nothing else of the private directory. `files-path` is
+  that directory; the cache inside it is where `XDG_CACHE_HOME` points
+  (lib.rs), and the rest is `open_file.rs`'s.
+-->
+<paths>
+    <files-path name="downloads" path="cache/app.akergez.Matterfast/downloads/" />
+</paths>

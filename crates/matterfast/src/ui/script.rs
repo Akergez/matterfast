@@ -51,6 +51,10 @@
 //! - `mentions=<n>` — the count the title bar is showing
 //! - `pointed=yes|no` — whether a message has had the pointer over it, which
 //!   is what gives it its bar of actions
+//! - `quick-reactions=<a|b|…>` — the row of reactions one press away, in order
+//! - `sheet=open|closed` — whether a sheet (a message's actions on a phone)
+//!   is up
+//! - `link-menu=open|closed` — whether a right click on a link opened its menu
 //!
 //! Coordinates are divided by `MATTERFAST_SCRIPT_SCALE`, so they can be read
 //! straight off a screenshot taken on a scaled display.
@@ -311,6 +315,11 @@ fn observe(what: &str, window: &mut Window, cx: &mut App) -> Option<String> {
             let pointed = ui.is_some_and(|ui| ui.hovered_post.borrow().is_some());
             if pointed { "yes" } else { "no" }.to_string()
         }
+        "quick-reactions" => ui
+            .map(|ui| ui.state.borrow().quick_reactions().join("|"))
+            .unwrap_or_default(),
+        "sheet" =>if window.has_active_sheet(cx) { "open" } else { "closed" }.to_string(),
+        "link-menu" =>if super::shell::link_menu_open(cx) { "open" } else { "closed" }.to_string(),
         _ => return None,
     })
 }

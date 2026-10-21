@@ -11,7 +11,7 @@ use kit::Lucide;
 /// What the "…" menu offers for a post. Editing and deleting are only offered
 /// on your own posts — the server would refuse anyway, and an option that
 /// always fails is worse than no option.
-fn post_menu_entries(post: &Post, mine: bool) -> Vec<(&'static str, PostAction)> {
+pub(super) fn post_menu_entries(post: &Post, mine: bool) -> Vec<(&'static str, PostAction)> {
     let mut entries = vec![
         ("Copy text", PostAction::CopyText),
         ("Copy link", PostAction::CopyLink),

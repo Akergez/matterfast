@@ -63,6 +63,7 @@ impl Render for Shell {
             }
         }
         let title_bar = (!phone_session).then(|| self.title_bar(window, cx));
+        let link_menu = self.link_menu_layer(window);
         let (bars_top, bars_bottom) = system_bars();
         let body = match &self.stage {
             Stage::Loading => div()
@@ -131,6 +132,7 @@ impl Render for Shell {
             })
             .child(div().flex_1().min_h_0().w_full().child(body))
             .pb(px(bars_bottom))
+            .when_some(link_menu, |shell, menu| shell.child(menu))
             .when(crate::ui::frame_log::enabled(), |shell| {
                 shell.child(crate::ui::frame_log::end())
             })

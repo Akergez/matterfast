@@ -53,4 +53,4 @@ pub(crate) use action::Action;
 pub(crate) use layout::{Divider, WindowSlot};
 pub(crate) use menu_action::MenuAction;
 pub(crate) use session::{bootstrap, Ui};
-pub(crate) use shell::{redraw, refresh, Part};
+pub(crate) use shell::{open_link_menu, redraw, refresh, Part};

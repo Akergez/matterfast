@@ -1,14 +1,15 @@
 use std::sync::Arc;
 
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, post, put};
 use axum::Router;
 
 use crate::app::App;
 use crate::handlers::{
     add_reaction, categories, channel_posts, client_config, create_post, emoji_by_name,
-    emoji_image, emoji_list, emoji_search, empty_array, empty_object, get_post, group_members,
+    emoji_image, emoji_list, emoji_search, empty_object, get_post, group_members,
     groups,
-    login, me, my_channel_members, my_channels, my_team_members, my_teams, post_action,
+    login, me, my_channel_members, my_channels, my_preferences, my_team_members, my_teams,
+    post_action, save_preferences,
     post_thread, remove_reaction, search_posts, statuses, team_unreads, threads, unread_posts,
     user_image, users_autocomplete, users_by_ids, users_by_usernames, users_query, users_search,
     view_channel, websocket,
@@ -22,7 +23,8 @@ pub(super) fn api() -> Router<Arc<App>> {
         .route("/config/client", get(client_config))
         .route("/license/client", get(empty_object))
         .route("/users/me", get(me))
-        .route("/users/me/preferences", get(empty_array))
+        .route("/users/me/preferences", get(my_preferences))
+        .route("/users/{user}/preferences", put(save_preferences))
         .route("/users/me/teams", get(my_teams))
         .route("/users/me/teams/members", get(my_team_members))
         .route("/users/me/teams/unread", get(team_unreads))

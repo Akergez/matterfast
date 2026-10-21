@@ -18,6 +18,7 @@ mod new;
 mod posts;
 mod presence;
 mod reactions;
+mod recent_emoji;
 mod reply_ledger;
 mod shared_state;
 mod chat_list;

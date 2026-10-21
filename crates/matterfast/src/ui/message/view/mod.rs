@@ -13,6 +13,7 @@ mod link_preview;
 mod markdown_view;
 mod mention;
 mod post_menu;
+mod post_sheet;
 mod preview_card;
 mod reaction_strip;
 mod row;

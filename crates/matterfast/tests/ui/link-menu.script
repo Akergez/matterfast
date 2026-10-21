@@ -1,0 +1,20 @@
+# mode: demo
+# size: 1320x840
+#
+# A right click on a link in a message asks what to do with it rather than
+# opening it, and Escape puts the question away. A right click beside the
+# link opens nothing.
+wait:2500
+expect:link-menu=closed
+rclick:600,330
+wait:400
+expect:link-menu=closed
+rclick:460,357
+wait:400
+expect:link-menu=open
+shot:link-menu
+key:escape
+wait:300
+expect:link-menu=closed
+expect:channel=Development
+quit

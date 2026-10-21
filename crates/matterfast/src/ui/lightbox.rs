@@ -20,11 +20,11 @@ use mattermost_api::models::FileInfo;
 
 use super::kit::{self, Lucide};
 use super::Ui;
-use crate::runtime;
 
 /// One image being looked at.
 pub struct Open {
     name: String,
+    mime: String,
     picture: Arc<RenderImage>,
     /// The file as the server holds it: what Copy puts on the clipboard and
     /// Save writes, so neither is a re-encoding of what was uploaded.
@@ -44,6 +44,7 @@ pub fn show(
 ) {
     let previous = ui.lightbox.borrow_mut().replace(Open {
         name: file.name.clone(),
+        mime: file.mime_type.clone(),
         picture,
         bytes: Arc::new(bytes),
     });
@@ -104,34 +105,15 @@ fn copy(ui: &Rc<Ui>, cx: &mut App) {
 }
 
 fn save(ui: &Rc<Ui>, cx: &mut App) {
-    let Some((name, bytes)) = ui
+    let Some((name, mime, bytes)) = ui
         .lightbox
         .borrow()
         .as_ref()
-        .map(|open| (open.name.clone(), open.bytes.clone()))
+        .map(|open| (open.name.clone(), open.mime.clone(), open.bytes.clone()))
     else {
         return;
     };
-    let directory = dirs::download_dir()
-        .or_else(dirs::home_dir)
-        .unwrap_or_else(|| std::path::PathBuf::from("/"));
-    let chosen = cx.prompt_for_new_path(&directory, Some(&name));
-    let ui = ui.clone();
-    cx.spawn(async move |cx| {
-        let Ok(Ok(Some(path))) = chosen.await else {
-            return;
-        };
-        cx.update(|_| {
-            runtime::spawn(
-                async move { tokio::fs::write(&path, bytes.as_ref()).await },
-                move |result, cx| match result {
-                    Ok(()) => ui.toast("Saved.", cx),
-                    Err(e) => ui.toast(&format!("Could not save it: {e}"), cx),
-                },
-            );
-        });
-    })
-    .detach();
+    ui.save_as(&name, &mime, async move { Ok(bytes.as_ref().clone()) }, cx);
 }
 
 /// Draws the lightbox over everything, or nothing when it is not open.

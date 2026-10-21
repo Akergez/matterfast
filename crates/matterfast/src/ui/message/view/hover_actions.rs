@@ -24,8 +24,9 @@ pub(super) fn hover_actions(
 ) -> AnyElement {
     let post_id = post.id.clone();
 
-    // The eight most-used sit in the popover, because most reactions are one
-    // of them; the full table is one more click away.
+    // The latest used sit in the popover, because most reactions are one of
+    // them; the full table is one more click away.
+    let quick_reactions = ui.state.borrow().quick_reactions();
     let react = Popover::new("react")
         .trigger(kit::icon_button("react-button", Lucide::FaceSlightlySmilingPlus, "Add reaction"))
         .content({
@@ -36,8 +37,8 @@ pub(super) fn hover_actions(
                 // with the choice rather than waiting for a click elsewhere.
                 let popover = cx.entity();
                 let mut quick = h_flex().gap_0p5();
-                for (index, name) in emoji::QUICK_REACTIONS.iter().enumerate() {
-                    let name = (*name).to_string();
+                for (index, name) in quick_reactions.iter().enumerate() {
+                    let name = name.clone();
                     let post_id = post_id.clone();
                     quick = quick.child(
                         Button::new(("quick", index))

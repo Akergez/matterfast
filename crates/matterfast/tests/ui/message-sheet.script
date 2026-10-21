@@ -1,0 +1,30 @@
+# mode: demo
+# size: 400x800
+#
+# A finger has no hover, so on a phone a message's actions — reacting,
+# replying, the "…" menu — come up in a sheet on a long press. A short tap
+# brings up nothing.
+wait:2500
+move:200,110
+click:200,110
+wait:1200
+expect:channel=Development
+expect:page=chat
+touch:start,200,600
+touch:end,200,600
+wait:1000
+expect:sheet=closed
+touch:start,200,600
+wait:1000
+touch:end,200,600
+wait:600
+expect:sheet=open
+shot:message-sheet
+# Reply is the first entry: it opens the thread and puts the sheet away.
+expect:panel=hidden
+touch:start,50,494
+touch:end,50,494
+wait:1000
+expect:sheet=closed
+expect:panel=thread
+quit

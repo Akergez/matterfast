@@ -1,19 +1,26 @@
 use gpui_kit::component::text::{MarkdownExtensions, TextView};
-use gpui_kit::{App, ClickEvent, ElementId, SharedString, Window};
+use gpui_kit::{App, ClickEvent, ElementId, MouseButton, SharedString, Window};
 
 use super::custom_emoji::CustomEmoji;
 use super::mention::Mention;
 
-/// A clicked link in a message body.
+/// A clicked link in a message body. The right button asks what to do with
+/// it instead of doing it.
 ///
 /// The text view insists on a handler it can share between threads, so this
 /// cannot capture the session; it looks it up instead.
-fn link_clicked(url: &SharedString, _: &ClickEvent, _: &mut Window, cx: &mut App) {
+fn link_clicked(url: &SharedString, event: &ClickEvent, _: &mut Window, cx: &mut App) {
     let Some(ui) = crate::ui::current(cx) else {
         return;
     };
     let url = url.to_string();
-    ui.later(cx, move |ui, cx| ui.follow_link(&url, cx));
+    match event {
+        ClickEvent::Mouse(click) if click.up.button == MouseButton::Right => {
+            let position = click.up.position;
+            ui.later(cx, move |_, cx| crate::ui::open_link_menu(url, position, cx));
+        }
+        _ => ui.later(cx, move |ui, cx| ui.follow_link(&url, cx)),
+    }
 }
 
 /// Markdown as an element. `id` has to be stable across redraws: the view

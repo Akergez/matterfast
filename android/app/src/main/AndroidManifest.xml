@@ -121,6 +121,20 @@
             android:theme="@android:style/Theme.Translucent.NoTitleBar"
         />
 
+        <!-- Downloaded attachments, handed to whatever opens them
+             (Files.java). -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true"
+        >
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths"
+            />
+        </provider>
+
         <!-- None of the system's kinds fits a chat client that holds its own
              connection instead of being woken by Google's push service. -->
         <service

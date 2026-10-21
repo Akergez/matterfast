@@ -1,0 +1,41 @@
+# mode: server
+# size: 1320x840
+#
+# The row of quick reactions puts the latest used first: one reacted with
+# from further along it moves to the front, and one picked from the whole
+# table joins it. The row is read from the preference the server keeps, so
+# the browser and the phone offer the same.
+wait:5000
+click:160,58
+wait:600
+move:60,177
+wait:300
+click:71,177
+wait:2500
+expect:channel=General
+expect:quick-reactions=+1|-1|smile|tada|eyes|heart|rocket|white_check_mark
+# The sheet a long press opens has the row first.
+touch:start,500,759
+wait:1000
+touch:end,500,759
+wait:600
+expect:sheet=open
+click:274,488
+wait:1500
+expect:sheet=closed
+expect:quick-reactions=rocket|+1|-1|smile|tada|eyes|heart|white_check_mark
+touch:start,500,759
+wait:1000
+touch:end,500,759
+wait:600
+# The search at the end of the row opens the whole table.
+click:355,488
+wait:1000
+expect:dialog=open
+type:sunglasses
+wait:600
+click:472,185
+wait:1500
+expect:dialog=closed
+expect:quick-reactions=sunglasses|rocket|+1|-1|smile|tada|eyes|heart
+quit
