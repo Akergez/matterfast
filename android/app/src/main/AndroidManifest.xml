@@ -94,32 +94,8 @@
             </intent-filter>
         </activity>
 
-        <!-- GPUI's file prompts: documents are copied into the cache and
-             handed back as paths. -->
-        <activity
-            android:name="dev.gpui.mobile.GpuiPathPicker"
-            android:exported="false"
-            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|keyboard|navigation|uiMode|density"
-            android:theme="@android:style/Theme.Translucent.NoTitleBar"
-        />
-        <activity
-            android:name="dev.gpui.mobile.GpuiPickerActivity"
-            android:exported="false"
-            android:theme="@android:style/Theme.Translucent.NoTitleBar"
-        />
-
-        <!-- Run-time permission requests. -->
-        <activity
-            android:name="dev.gpui.mobile.GpuiPermissionActivity"
-            android:exported="false"
-            android:theme="@android:style/Theme.Translucent.NoTitleBar"
-        />
-
-        <activity
-            android:name="dev.gpui.mobile.GpuiAuthActivity"
-            android:exported="false"
-            android:theme="@android:style/Theme.Translucent.NoTitleBar"
-        />
+        <!-- GPUI's file prompts, run-time permission requests and the other
+             helper activities come with gpui-android-glue's manifest. -->
 
         <!-- Downloaded attachments, handed to whatever opens them
              (Files.java). -->

@@ -101,11 +101,11 @@ android {
 }
 
 dependencies {
-    // What the Java classes taken from gpui-mobile use.
-    implementation("androidx.core:core:1.12.0")
-    implementation("androidx.core:core-splashscreen:1.0.1")
-    implementation("androidx.biometric:biometric:1.1.0")
-    implementation("androidx.media:media:1.7.1")
+    // The Java half of gpui-android-glue: the classes gpui-mobile and the
+    // glue call by name, with the androidx libraries they use (FileProvider,
+    // for Files.java, among them). The same version as the crate in
+    // crates/matterfast/Cargo.toml.
+    implementation("com.akergez.gpui:android-glue:0.1.0")
     // The Java half of the certificate check; see settings.gradle.kts.
     implementation("rustls:rustls-platform-verifier:0.1.1")
 }

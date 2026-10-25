@@ -56,6 +56,11 @@ pub fn show(
     crate::ui::refresh(cx);
 }
 
+/// Whether the lightbox is up, in either of its two uses.
+pub fn is_open(ui: &Rc<Ui>) -> bool {
+    ui.lightbox.borrow().is_some() || ui.expanded_player().is_some()
+}
+
 /// Puts the lightbox away, whichever of its two uses it was in. Answers
 /// whether there was anything to dismiss, so Escape can fall through to
 /// whatever else it means when there was not.

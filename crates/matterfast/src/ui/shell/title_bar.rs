@@ -1,4 +1,4 @@
-use gpui_kit::component::{h_flex, ActiveTheme, Selectable, TitleBar};
+use gpui_kit::component::{h_flex, ActiveTheme, Selectable};
 use gpui_kit::prelude::*;
 use gpui_kit::{div, img, px, AnyElement, Context, FontWeight, MouseButton, Window};
 
@@ -49,31 +49,19 @@ impl Shell {
         let mut bar = h_flex().size_full().gap_3().items_center();
 
         // The toolkit's bar is a gradient of its own colour; a flat fill in
-        // the sidebar's is what makes the two read as one surface.
-        #[cfg(not(target_os = "android"))]
-        let framed = || {
-            TitleBar::new()
-                .bg(theme.sidebar)
-                .border_color(theme.sidebar_border)
-                .text_color(theme.sidebar_foreground)
-        };
-        // A phone has no window to drag, minimise or close, and the toolkit's
-        // bar draws the buttons for that regardless: a plain strip instead,
-        // tall enough for a finger.
-        #[cfg(target_os = "android")]
-        let framed = || {
-            h_flex()
-                .flex_none()
-                .h(px(44.))
-                .px_3()
-                .border_b_1()
-                .bg(theme.sidebar)
-                .border_color(theme.sidebar_border)
-                .text_color(theme.sidebar_foreground)
+        // the sidebar's is what makes the two read as one surface. On a phone
+        // it is a plain strip, tall enough for a finger, with the status bar
+        // already made room for above it (see `render`).
+        let frame = gpui_android_glue::chrome::Frame {
+            background: Some(theme.sidebar),
+            border: Some(theme.sidebar_border),
+            foreground: Some(theme.sidebar_foreground),
+            height: Some(px(44.)),
+            below_status_bar: false,
         };
 
         let Some(ui) = self.session().cloned() else {
-            return framed().child(bar.child(name)).into_any_element();
+            return gpui_android_glue::chrome::title_frame(bar.child(name), frame, cx);
         };
         let server = pretty_server(ui.state.borrow().client.site_url());
         // Counted where the window's title is, not here: see `Ui::mentions`.
@@ -121,6 +109,6 @@ impl Shell {
         );
 
         bar = bar.child(name).child(search).child(actions);
-        framed().child(bar).into_any_element()
+        gpui_android_glue::chrome::title_frame(bar, frame, cx)
     }
 }

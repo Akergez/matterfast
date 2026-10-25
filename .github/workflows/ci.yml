@@ -149,6 +149,11 @@ jobs:
     # The x86-64 runner: Google builds the NDK for no other Linux.
     runs-on: ubuntu-24.04
     timeout-minutes: 180
+    # gpui-android-glue's Java half is read from GitHub Packages, which asks
+    # for a token even to read a public package.
+    permissions:
+      contents: read
+      packages: read
     env:
       CARGO_NDK_VERSION: "4.1.2"
       # Not the distribution's CMake. The C libraries in the tree (opus) ask
@@ -188,6 +193,8 @@ jobs:
           restore-keys: gradle-
       - run: build-aux/build-android.sh "${{ needs.version.outputs.version }}"
         env:
+          # Read by android/settings.gradle.kts, with GITHUB_ACTOR.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Only a tagged build is signed with the release key; see the script.
           ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}

@@ -33,6 +33,15 @@ futures-util.workspace = true
 gpui-adaptive-colors = { git = "https://github.com/Akergez/gpui-adaptive-colors", rev = "55e9997f9bf9858f7a9242bcf75a92cf15732596" }
 gpui-zed-themes = { git = "https://github.com/Akergez/gpui-adaptive-colors", rev = "55e9997f9bf9858f7a9242bcf75a92cf15732596" }
 gpui-kit = "0.7.0"
+# The Android side shared with money-manager-ng and aiddiction: android_main,
+# the keyboard, back, the status bar, the insets, links. Every function of it
+# also exists off Android. Its Java half is `com.akergez.gpui:android-glue`
+# in android/app/build.gradle.kts, at the same version. `platform-verifier`
+# hands the activity to rustls-platform-verifier, which reqwest checks
+# certificates with. To work on it beside the application, swap this for the
+# path variant and build the package with -PglueLocal.
+gpui-android-glue = { git = "https://github.com/Akergez/gpui-android-glue", tag = "v0.1.0", features = ["platform-verifier"] }
+# gpui-android-glue = { path = "../../../gpui-android-glue", features = ["platform-verifier"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
 mattermost-api = { path = "../mattermost-api" }
 mattermost-calls = { path = "../mattermost-calls" }
@@ -75,13 +84,9 @@ windows-registry = "0.6"
 # The platform GPUI does not ship: the toolkit is handed one from this fork,
 # which tracks the same `gpui-pre` and is not on crates.io at this version.
 [target.'cfg(target_os = "android")'.dependencies]
+# At the revision gpui-android-glue names: one copy of the platform.
 gpui-mobile = { package = "gpui-pre-mobile", git = "https://github.com/longbridge/gpui-mobile", rev = "9075e3aa3eea812127f2c60ed66f0cd5798ff245" }
-android-activity = { version = "0.6", features = ["native-activity"] }
-android_logger = "0.15"
 # To call the Java that raises notifications; the version the fork uses.
 jni = "0.22"
-# What reqwest checks certificates with; here only to be handed the activity.
-rustls-platform-verifier = "0.7"
-log = "0.4"
 # With no subscriber, events go to `log`, and from there to logcat.
 tracing = { workspace = true, features = ["log"] }

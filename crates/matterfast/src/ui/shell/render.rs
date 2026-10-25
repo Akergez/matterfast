@@ -62,6 +62,20 @@ impl Render for Shell {
                 }
             }
         }
+        // Escape is handled below, as it always was. The system's back is
+        // Escape too, and it comes to the shell's own handling first; the layer
+        // is there for what that leaves, and for the gesture of predictive back,
+        // which is the application's only while there is a layer. So there is
+        // one exactly while there is something in front: with nothing, back
+        // leaves the application.
+        if self.has_front() != self.back.is_some() {
+            self.back = self.has_front().then(|| {
+                let shell = cx.weak_entity();
+                gpui_android_glue::back::push(move |_, cx| {
+                    shell.update(cx, |shell, cx| shell.close_front(cx)).unwrap_or(false)
+                })
+            });
+        }
         let title_bar = (!phone_session).then(|| self.title_bar(window, cx));
         let link_menu = self.link_menu_layer(window);
         let (bars_top, bars_bottom) = system_bars();

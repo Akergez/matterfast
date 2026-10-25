@@ -2,9 +2,20 @@
 
 The application is the same Rust crate as on the desktop, built as a shared
 object and loaded by a `NativeActivity`. The platform layer is
-[gpui-mobile](https://github.com/longbridge/gpui-mobile); the Java classes in
-`app/src/main/java/dev/gpui/mobile` and the Gradle project come from its
-example, under the same licence terms.
+[gpui-mobile](https://github.com/longbridge/gpui-mobile). What else Android
+needs — `android_main`, the Java classes gpui-mobile calls by name with the
+IME bridge (its tests are there too), the keyboard, back, the status bar — is
+[gpui-android-glue](https://github.com/Akergez/gpui-android-glue): the crate
+in `crates/matterfast/Cargo.toml`, its Java half as
+`com.akergez.gpui:android-glue` in `app/build.gradle.kts`, at the same
+version. The Java half is read from GitHub Packages, which asks for a token
+even for a public package: CI passes its own; at a desk, put a personal token
+with `read:packages` in `~/.gradle/gradle.properties` as `gpr.user` and
+`gpr.key`, or build against a checkout of gpui-android-glue beside this
+repository with `./gradlew -PglueLocal …` (and the path variant of the crate
+in `Cargo.toml`). Matterfast's own Java is `app/src/main/java/app/akergez`.
+The Gradle project comes from gpui-mobile's example, under the same licence
+terms.
 
 ## What is needed
 
@@ -15,10 +26,6 @@ example, under the same licence terms.
 - CMake: Opus is built from source.
 
 ## Building
-
-The IME edit bridge has regression checks for suggestions, autocorrection,
-composition, deletion and emoji. Run `bash build-aux/ime-tests.sh` from the
-repository root; it needs a JDK and does not need the Android SDK or a phone.
 
 From the repository root, the library first:
 

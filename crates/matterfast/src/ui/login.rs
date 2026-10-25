@@ -104,7 +104,7 @@ impl LoginView {
         // keyboard that suits it, where the keyboard is on the screen: one
         // for prose would start an address with a capital and offer to
         // correct a password.
-        use crate::keyboard::Purpose;
+        use gpui_android_glue::keyboard::Purpose;
         let subscriptions = [
             (&server, Purpose::Address),
             (&login_id, Purpose::Login),
@@ -114,7 +114,7 @@ impl LoginView {
         .into_iter()
             .map(|(field, purpose)| {
                 cx.subscribe(field, move |view: &mut LoginView, field, event: &InputEvent, cx| {
-                    crate::keyboard::follow(field.entity_id(), event, purpose);
+                    gpui_android_glue::keyboard::follow(field.entity_id(), event, purpose);
                     if matches!(event, InputEvent::PressEnter { .. }) {
                         view.submit(cx);
                     }

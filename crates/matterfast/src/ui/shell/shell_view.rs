@@ -21,6 +21,9 @@ pub struct Shell {
     /// The desktop switching between light and dark, which a "System" theme
     /// has to follow while the window is open.
     _appearance: Subscription,
+    /// The system's back, while [`Shell::close_front`] has something to put
+    /// away; see `render`.
+    pub(super) back: Option<gpui_android_glue::back::Guard>,
 }
 
 impl Shell {
@@ -59,6 +62,7 @@ impl Shell {
             notice: RefCell::new(None),
             session_subscriptions: Vec::new(),
             link_menu: None,
+            back: None,
         }
     }
 
@@ -74,6 +78,15 @@ impl Shell {
         if let Some(ui) = self.session() {
             ui.later(cx, move |ui, cx| ui.menu_action(action, cx));
         }
+    }
+
+    /// Whether [`Shell::close_front`] has anything to put away.
+    pub(super) fn has_front(&self) -> bool {
+        self.session().is_some_and(|ui| {
+            crate::ui::lightbox::is_open(ui)
+                || ui.overlay.shown()
+                || (ui.split.collapsed.get() && ui.split.showing_content())
+        })
     }
 
     /// Escape, when nothing more specific wanted it: puts away whatever is

@@ -21,7 +21,6 @@ mod fonts;
 #[cfg_attr(target_os = "android", allow(dead_code))]
 mod ipc;
 pub(crate) use matterfast_markdown as markdown;
-mod keyboard;
 mod notifications;
 #[cfg(target_os = "android")]
 mod open_file;
@@ -124,6 +123,9 @@ pub fn run() {
 /// What every platform does once the toolkit is running.
 fn start(requests: Vec<ipc::Request>, cx: &mut gpui_kit::App) {
     gpui_kit::init(cx);
+    // On Android `launch::run` has done this already.
+    #[cfg(not(target_os = "android"))]
+    gpui_android_glue::init(cx);
     fonts::install(cx);
     // Noted before a theme is shown: these are the fonts to go back to.
     appearance::built_in_fonts(cx);
@@ -137,122 +139,59 @@ fn start(requests: Vec<ipc::Request>, cx: &mut gpui_kit::App) {
     }
 }
 
-/// Hands a link to whatever the system opens links with.
-///
-/// Everything goes through here rather than to the toolkit, because the
-/// Android platform's own `open_url` does nothing at all.
-pub(crate) fn open_url(url: &str, cx: &mut gpui_kit::App) {
-    #[cfg(not(target_os = "android"))]
-    cx.open_url(url);
-    #[cfg(target_os = "android")]
-    {
-        let _ = cx;
-        match gpui_mobile::packages::url_launcher::launch_url(url) {
-            Ok(true) => {}
-            Ok(false) => tracing::error!("nothing on this phone opens {url}"),
-            Err(error) => tracing::error!(%error, "could not open {url}"),
-        }
-    }
-}
+/// Hands a link to whatever the system opens links with. Everything goes
+/// through here rather than to the toolkit, because the Android platform's
+/// own `open_url` does nothing at all.
+pub(crate) use gpui_android_glue::open_url;
 
 /// The Android entry point, called by `android-activity` on a thread of its
-/// own once the activity has loaded this library. It returns when the
-/// activity is destroyed.
+/// own once the activity has loaded this library. `launch::run` does what
+/// every application does — logcat, the private directory for the XDG
+/// variables (and the cache: attachments and pictures are kept there), the
+/// certificate verifier — and returns never.
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
-fn android_main(app: android_activity::AndroidApp) {
-    use gpui_mobile::android::jni;
-    use std::sync::atomic::{AtomicBool, Ordering};
+fn android_main(app: gpui_android_glue::launch::AndroidApp) {
+    use gpui_android_glue::launch::{run, Config};
 
-    // The system may create the activity again in a process it has kept, and
-    // that calls this again, on another thread. The toolkit belongs to the
-    // thread it first ran on and cannot be started twice, so one process is
-    // one run: a second call ends the process, and the system starts the
-    // activity over in a fresh one.
-    static STARTED: AtomicBool = AtomicBool::new(false);
-    if STARTED.swap(true, Ordering::SeqCst) {
-        std::process::exit(0);
-    }
+    let config = Config::new("matterfast")
+        .filter("info,matterfast=debug,mattermost_api=debug,mattermost_calls=debug")
+        .with_cache();
+    run(app, config, gpui_kit::assets::AllAssets, |cx| {
+        // Before anything can reach rustls. Two providers are in the tree —
+        // aws-lc-rs through reqwest, ring through webrtc's DTLS — so rustls
+        // refuses to pick one, and the thread that first needs TLS panics.
+        mattermost_api::tls::install_crypto_provider();
 
-    // There is no terminal: `tracing` hands its events to `log` when nothing
-    // subscribes, and this sends `log` to logcat.
-    android_logger::init_once(
-        android_logger::Config::default()
-            .with_max_level(log::LevelFilter::Debug)
-            .with_tag("matterfast")
-            .with_filter(
-                android_logger::FilterBuilder::new()
-                    .parse("info,matterfast=debug,mattermost_api=debug,mattermost_calls=debug")
-                    .build(),
-            ),
-    );
-    jni::install_panic_hook();
+        // The browser finishes a single sign-on by opening the activity with
+        // a `mattermost-dev://` link, which is this launch's argument. A
+        // notification left over from a process that is gone opens it too,
+        // and that is only a launch: there is no session yet for it to point
+        // into.
+        let link = gpui_mobile::packages::deeplink::get_initial_link()
+            .ok()
+            .flatten()
+            .filter(|link| !link.starts_with("matterfast-notice:"));
+        let requests = ipc::requests_from_args(link.into_iter());
 
-    // An application has no home directory here, only the private directory
-    // the system gives it; `paths` reads these on first use, and nothing has
-    // used it yet.
-    if let Some(files) = app.internal_data_path() {
-        // SAFETY: no other thread of ours exists yet to read the environment.
-        unsafe {
-            std::env::set_var("XDG_CONFIG_HOME", files.join("config"));
-            std::env::set_var("XDG_DATA_HOME", files.join("data"));
-            std::env::set_var("XDG_CACHE_HOME", files.join("cache"));
-        }
-    }
-
-    mattermost_api::tls::install_crypto_provider();
-
-    jni::init_platform(&app);
-    let Some(platform) = jni::shared_platform() else {
-        tracing::error!("no Android platform to run on");
-        return;
-    };
-
-    // Certificates are checked by the system, which is Java: the verifier has
-    // to be given the activity before the first connection, or that
-    // connection panics.
-    if let Err(error) = jni::with_env(|env| {
-        let activity = jni::activity(env)?;
-        rustls_platform_verifier::android::init_with_env(env, activity)
-            .map_err(|error| error.to_string())
-    }) {
-        tracing::error!(%error, "no certificate verifier: nothing will connect");
-    }
-
-    // The browser finishes a single sign-on by opening the activity with a
-    // `mattermost-dev://` link, which is this launch's argument.
-    // A notification left over from a process that is gone opens it too, and
-    // that is only a launch: there is no session yet for it to point into.
-    let link = gpui_mobile::packages::deeplink::get_initial_link()
-        .ok()
-        .flatten()
-        .filter(|link| !link.starts_with("matterfast-notice:"));
-    let requests = ipc::requests_from_args(link.into_iter());
-
-    // And when the activity is already running, the link comes to it instead,
-    // on the system's thread: this is what a second launch is on a desktop.
-    let (links, later_links) = async_channel::unbounded::<String>();
-    gpui_mobile::packages::deeplink::set_deep_link_handler(move |link| {
-        // A pressed notification arrives the same way.
-        if notifications::pressed(&link.to_string()) {
-            return;
-        }
-        let _ = links.try_send(link.to_string());
-    });
-
-    gpui_kit::gpui::Application::with_platform(platform.into_rc())
-        .with_assets(gpui_kit::assets::AllAssets)
-        .run(move |cx| {
-            start(requests, cx);
-            runtime::receive(later_links, |link, cx| {
-                for request in ipc::requests_from_args(std::iter::once(link)) {
-                    ui::handle_request(request, cx);
-                }
-                true
-            });
+        // And when the activity is already running, the link comes to it
+        // instead, on the system's thread: this is what a second launch is on
+        // a desktop.
+        let (links, later_links) = async_channel::unbounded::<String>();
+        gpui_mobile::packages::deeplink::set_deep_link_handler(move |link| {
+            // A pressed notification arrives the same way.
+            if notifications::pressed(&link.to_string()) {
+                return;
+            }
+            let _ = links.try_send(link.to_string());
         });
 
-    // The activity is gone. Nothing of ours can be used by the next one (see
-    // above), so the process goes with it.
-    std::process::exit(0);
+        start(requests, cx);
+        runtime::receive(later_links, |link, cx| {
+            for request in ipc::requests_from_args(std::iter::once(link)) {
+                ui::handle_request(request, cx);
+            }
+            true
+        });
+    });
 }
