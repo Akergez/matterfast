@@ -12,6 +12,11 @@
 //! - `scroll:<x>,<y>,<dy>` — positive `dy` scrolls towards older content
 //! - `swipe:<x>,<y>,<dx>` — a finger carried sideways from there, to the
 //!   left for a negative `dx`; only a phone-sized window does anything with it
+//! - `swipe:<x>,<y>,<dx>,<dy>` — a finger put down there, moved by (dx, dy)
+//!   in ten steps and lifted: raw touches, which gpui makes a pan of whatever
+//!   is under it, locked to one axis, as on a phone
+//! - `hold:<x>,<y>,<dx>,<dy>` — the same finger, left down where it got to;
+//!   `lift` lifts it there
 //! - `touch:<start|move|end|cancel>,<x>,<y>` — a raw contact, as Android reports it
 //! - `pan:<start|move|end|cancel>,<x>,<y>,<dx>,<dy>` — one touch event
 //! - `key:<keystroke>` — `ctrl-k`, `escape`, `enter`
@@ -55,6 +60,9 @@
 //! - `sheet=open|closed` — whether a sheet (a message's actions on a phone)
 //!   is up
 //! - `link-menu=open|closed` — whether a right click on a link opened its menu
+//! - `page-offset=<px>` — how far right of its place a phone's conversation
+//!   page is: 0 in front, the window's width when the list is
+//! - `tabs-scroll=<px>` — how far the strip of folder tabs is scrolled along
 //!
 //! Coordinates are divided by `MATTERFAST_SCRIPT_SCALE`, so they can be read
 //! straight off a screenshot taken on a scaled display.
@@ -79,6 +87,9 @@ enum Step {
     Drag(f32, f32, f32, f32),
     Scroll(f32, f32, f32),
     Swipe(f32, f32, f32),
+    /// A finger from (x, y) moved by (dx, dy); lifted at the end if `true`.
+    Finger(f32, f32, f32, f32, bool),
+    Lift,
     Pan(f32, f32, f32, f32, TouchPhase),
     Touch(f32, f32, TouchPhase),
     Key(String),
@@ -119,8 +130,14 @@ fn parse(script: &str) -> Vec<Step> {
                 },
                 "swipe" => match numbers(rest)?[..] {
                     [x, y, dx] => Step::Swipe(x, y, dx),
+                    [x, y, dx, dy] => Step::Finger(x, y, dx, dy, true),
                     _ => return None,
                 },
+                "hold" => match numbers(rest)?[..] {
+                    [x, y, dx, dy] => Step::Finger(x, y, dx, dy, false),
+                    _ => return None,
+                },
+                "lift" => Step::Lift,
                 "touch" => {
                     let (phase, values) = rest.split_once(',')?;
                     let phase = match phase {
@@ -319,6 +336,14 @@ fn observe(what: &str, window: &mut Window, cx: &mut App) -> Option<String> {
             .map(|ui| ui.state.borrow().quick_reactions().join("|"))
             .unwrap_or_default(),
         "sheet" =>if window.has_active_sheet(cx) { "open" } else { "closed" }.to_string(),
+        "page-offset" => ui
+            .map(|ui| (ui.split.open() * f32::from(window.viewport_size().width)).round() as i32)
+            .unwrap_or(0)
+            .to_string(),
+        "tabs-scroll" => ui
+            .map(|ui| (-f32::from(ui.channels.tabs_scroll.offset().x)).round() as i32)
+            .unwrap_or(0)
+            .to_string(),
         "link-menu" =>if super::shell::link_menu_open(cx) { "open" } else { "closed" }.to_string(),
         _ => return None,
     })
@@ -452,6 +477,22 @@ fn next(handle: AnyWindowHandle, mut steps: VecDeque<Step>, cx: &mut App) {
                 );
             }
         }
+        Step::Finger(x, y, dx, dy, lifted) => {
+            const MOVES: u16 = 10;
+            for step in 0..=MOVES + u16::from(*lifted) {
+                let (phase, done) = match step {
+                    0 => (TouchPhase::Started, 0.),
+                    step if step <= MOVES => (TouchPhase::Moved, f32::from(step) / f32::from(MOVES)),
+                    _ => (TouchPhase::Ended, 1.),
+                };
+                finger(phase, at(x + dx * done, y + dy * done), window, cx);
+            }
+        }
+        Step::Lift => {
+            if let Some(position) = FINGER.get() {
+                finger(TouchPhase::Ended, position, window, cx);
+            }
+        }
         Step::Key(key) => match Keystroke::parse(key) {
             Ok(keystroke) => {
                 window.dispatch_keystroke(keystroke, cx);
@@ -494,6 +535,25 @@ fn next(handle: AnyWindowHandle, mut steps: VecDeque<Step>, cx: &mut App) {
     });
 }
 
+thread_local! {
+    /// Where the scripted finger is while it is down.
+    static FINGER: std::cell::Cell<Option<Point<Pixels>>> = const { std::cell::Cell::new(None) };
+}
+
+fn finger(phase: TouchPhase, position: Point<Pixels>, window: &mut Window, cx: &mut App) {
+    FINGER.set((phase != TouchPhase::Ended).then_some(position));
+    window.dispatch_event(
+        PlatformInput::Touch(TouchEvent {
+            id: TouchId(1),
+            phase,
+            position,
+            predicted_position: None,
+            force: None,
+        }),
+        cx,
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -518,5 +578,18 @@ mod tests {
     #[test]
     fn a_step_that_does_not_parse_is_skipped() {
         assert_eq!(parse("click:1;bogus;wait:x;scroll:1,2,3"), [Step::Scroll(1.0, 2.0, 3.0)]);
+    }
+
+    #[test]
+    fn a_finger_is_a_swipe_with_four_numbers_or_a_hold() {
+        assert_eq!(
+            parse("swipe:1,2,3;swipe:1,2,3,4;hold:1,2,3,4;hold:1,2,3;lift"),
+            [
+                Step::Swipe(1.0, 2.0, 3.0),
+                Step::Finger(1.0, 2.0, 3.0, 4.0, true),
+                Step::Finger(1.0, 2.0, 3.0, 4.0, false),
+                Step::Lift,
+            ]
+        );
     }
 }

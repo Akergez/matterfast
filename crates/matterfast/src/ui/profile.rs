@@ -25,7 +25,7 @@ pub fn show(ui: &Rc<Ui>, user_id: &str, cx: &mut App) -> bool {
     let user_id = user_id.to_string();
     let card_ui = ui.clone();
     ui.with_window(cx, move |window, cx| {
-        window.open_dialog(cx, move |dialog, _, cx| {
+        gpui_android_glue::back::open_dialog(window, cx, move |dialog, _, cx| {
             // Read on every draw: presence and the picture both change while
             // the card is up.
             dialog.w(px(320.)).child(card(&card_ui, &user_id, cx))

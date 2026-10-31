@@ -1,3 +1,4 @@
+use gpui_kit::base::InteractiveElementExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::Input;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Disableable, Sizable};
@@ -165,6 +166,7 @@ impl Render for List {
             .id("list-dialog")
             .max_h(px(520.))
             .overflow_y_scroll()
+            .lock_scroll_axis()
             .child(column)
     }
 }

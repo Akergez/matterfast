@@ -20,7 +20,7 @@ pub(crate) fn choose(
     let body: SharedString = body.to_string().into();
     let options = Rc::new(options);
     ui.with_window(cx, move |window, cx| {
-        window.open_dialog(cx, move |dialog, _, cx| {
+        gpui_android_glue::back::open_dialog(window, cx, move |dialog, _, cx| {
             let mut column = v_flex().gap_2().child(
                 div()
                     .text_color(cx.theme().muted_foreground)

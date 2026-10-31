@@ -8,12 +8,13 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use gpui_kit::base::InteractiveElementExt as _;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::radio::Radio;
 use gpui_kit::component::switch::Switch;
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Sizable, WindowExt};
+use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Sizable};
 use gpui_kit::prelude::*;
 use gpui_kit::{div, px, App, Context, Entity, FontWeight, Subscription, Window};
 use mattermost_api::models::dialog::{Dialog, DialogElement};
@@ -64,6 +65,20 @@ fn default_option(element: &DialogElement) -> usize {
         .unwrap_or(0)
 }
 
+/// The phone's keyboard that suits a text field, by the subtype the
+/// integration gave it: digits for a number, no capitals or corrections for
+/// an address or a secret.
+fn purpose(element: &DialogElement) -> gpui_android_glue::keyboard::Purpose {
+    use gpui_android_glue::keyboard::Purpose;
+    match element.subtype.as_str() {
+        "number" => Purpose::Number,
+        "email" => Purpose::Login,
+        "url" => Purpose::Address,
+        "password" => Purpose::Password,
+        _ => Purpose::Plain,
+    }
+}
+
 /// Required-ness and the length bounds for a text field holding `len`
 /// characters.
 fn length_ok(element: &DialogElement, len: usize) -> bool {
@@ -94,7 +109,12 @@ impl Interactive {
                         // the form has to be drawn again to say so.
                         subscriptions.push(cx.subscribe(
                             &area,
-                            |_, _, event: &InputEvent, cx| {
+                            |_, area, event: &InputEvent, cx| {
+                                gpui_android_glue::keyboard::follow(
+                                    area.entity_id(),
+                                    event,
+                                    gpui_android_glue::keyboard::Purpose::Message,
+                                );
                                 if matches!(event, InputEvent::Change) {
                                     cx.notify();
                                 }
@@ -120,9 +140,11 @@ impl Interactive {
                                 // payload treats it as text.
                                 .masked(element.subtype == "password")
                         });
+                        let purpose = purpose(element);
                         subscriptions.push(cx.subscribe(
                             &input,
-                            |_, _, event: &InputEvent, cx| {
+                            move |_, input, event: &InputEvent, cx| {
+                                gpui_android_glue::keyboard::follow(input.entity_id(), event, purpose);
                                 if matches!(event, InputEvent::Change) {
                                     cx.notify();
                                 }
@@ -346,6 +368,7 @@ impl Render for Interactive {
             .id("interactive")
             .max_h(px(520.))
             .overflow_y_scroll()
+            .lock_scroll_axis()
             .child(column)
     }
 }
@@ -382,7 +405,7 @@ pub fn present(
         } else {
             dialog.submit_label.clone()
         });
-        window.open_dialog(cx, move |dialog, _, _| {
+        gpui_android_glue::back::open_dialog(window, cx, move |dialog, _, _| {
             let submit = view.clone();
             let closed = view.clone();
             let on_submit = on_submit.clone();
@@ -437,6 +460,18 @@ mod tests {
         assert!(!length_ok(&element(false, 0, 0), 0));
         // The bounds do not apply to a field left empty on purpose.
         assert!(length_ok(&element(true, 5, 10), 0));
+    }
+
+    #[test]
+    fn a_field_asks_for_the_keyboard_its_subtype_wants() {
+        use gpui_android_glue::keyboard::Purpose;
+        let typed = |subtype: &str| DialogElement { subtype: subtype.into(), ..Default::default() };
+        assert_eq!(purpose(&typed("number")), Purpose::Number);
+        assert_eq!(purpose(&typed("email")), Purpose::Login);
+        assert_eq!(purpose(&typed("url")), Purpose::Address);
+        assert_eq!(purpose(&typed("password")), Purpose::Password);
+        assert_eq!(purpose(&typed("")), Purpose::Plain);
+        assert_eq!(purpose(&typed("tel")), Purpose::Plain);
     }
 
     #[test]

@@ -6,6 +6,7 @@
 
 use std::rc::Rc;
 
+use gpui_kit::base::InteractiveElementExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::spinner::Spinner;
@@ -396,6 +397,7 @@ impl Render for LoginView {
             .id("login")
             .size_full()
             .overflow_y_scroll()
+            .lock_scroll_axis()
             .bg(theme.background)
             .child(
                 div()

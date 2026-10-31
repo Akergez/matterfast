@@ -1,6 +1,5 @@
 use std::rc::Rc;
 
-use gpui_kit::component::WindowExt;
 use gpui_kit::prelude::*;
 use gpui_kit::{px, App, Context, Entity, SharedString, Window};
 
@@ -23,7 +22,7 @@ pub(crate) fn open_list(
             list
         });
         let body = view.clone();
-        window.open_dialog(cx, move |dialog, _, _| {
+        gpui_android_glue::back::open_dialog(window, cx, move |dialog, _, _| {
             dialog.title(title.clone()).w(px(520.)).child(body.clone())
         });
         view

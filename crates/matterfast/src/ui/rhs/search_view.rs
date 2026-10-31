@@ -1,5 +1,6 @@
 use std::rc::Rc;
 
+use gpui_kit::base::InteractiveElementExt as _;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{v_flex, ActiveTheme, Sizable};
 use gpui_kit::prelude::*;
@@ -103,5 +104,6 @@ pub(super) fn search_view(ui: &Rc<Ui>, cx: &mut App) -> AnyElement {
                 .child(Spinner::new().small()),
         );
     }
-    column.overflow_y_scroll().into_any_element()
+    column.overflow_y_scroll()
+        .lock_scroll_axis().into_any_element()
 }

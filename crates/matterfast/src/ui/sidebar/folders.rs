@@ -1,5 +1,6 @@
 use std::rc::Rc;
 
+use gpui_kit::base::InteractiveElementExt as _;
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenuItem};
 use gpui_kit::component::{h_flex, ActiveTheme};
 use gpui_kit::prelude::*;
@@ -118,6 +119,8 @@ pub(super) fn folders(ui: &Rc<Ui>, st: &AppState, cx: &App) -> AnyElement {
         .min_w_0()
         .gap_1()
         .overflow_x_scroll()
+        .lock_scroll_axis()
+        .track_scroll(&ui.channels.tabs_scroll)
         .child(
             // What is waiting in it is a count of its own: mentions and
             // threads, not conversations. Pressed while it is in front it

@@ -1,5 +1,6 @@
 use std::rc::Rc;
 
+use gpui_kit::base::InteractiveElementExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::{h_flex, v_flex, WindowExt};
@@ -55,6 +56,7 @@ impl Render for EmojiPicker {
                     .id("emoji-grid")
                     .h(px(260.))
                     .overflow_y_scroll()
+                    .lock_scroll_axis()
                     .child(grid),
             )
     }
@@ -80,7 +82,7 @@ pub fn pick_emoji(ui: &Rc<Ui>, cx: &mut App, on_pick: impl Fn(String, &mut App) 
             }
         });
         let search = view.read(cx).search.clone();
-        window.open_dialog(cx, move |dialog, _, _| {
+        gpui_android_glue::back::open_dialog(window, cx, move |dialog, _, _| {
             dialog.title("Add reaction").child(view.clone())
         });
         search.update(cx, |search, cx| search.focus(window, cx));

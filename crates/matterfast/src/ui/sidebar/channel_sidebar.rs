@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use gpui_kit::{
-    px, rems, App, Bounds, ListAlignment, ListState, Pixels, Point, Rems, TouchPhase, Window,
+    px, rems, App, Bounds, ListAlignment, ListState, Pixels, Point, Rems, ScrollHandle,
+    TouchPhase, Window,
 };
 use mattermost_api::models::Channel;
 
@@ -41,6 +42,8 @@ pub struct ChannelSidebar {
     /// When `slide` last moved, which is what its next step is measured
     /// from.
     slid: Cell<Option<std::time::Instant>>,
+    /// The strip of folder tabs, which scrolls along when they do not fit.
+    pub(crate) tabs_scroll: ScrollHandle,
 }
 
 impl ChannelSidebar {
@@ -54,6 +57,7 @@ impl ChannelSidebar {
             tab_order: Cell::new((0, 2)),
             slide: Cell::new(0.0),
             slid: Cell::new(None),
+            tabs_scroll: ScrollHandle::new(),
         }
     }
 

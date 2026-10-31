@@ -76,9 +76,29 @@ impl Render for Shell {
                 })
             });
         }
+        // The system's gesture of back (Android 14+) shows where it goes
+        // while the finger is down: the panel or the conversation, whichever
+        // back would take away, moves off as far as the finger has gone and
+        // the page under it shows. A picture or a sheet in front is taken
+        // away without that, at once.
+        let gesture = self
+            .session()
+            .is_some_and(|ui| {
+                ui.split.collapsed.get()
+                    && !crate::ui::lightbox::is_open(ui)
+                    && !window.has_active_sheet(cx)
+            })
+            .then(|| self.back.as_ref().and_then(|back| back.gesture(window, cx)))
+            .flatten()
+            .map(|gesture| gesture.progress);
+        if let Some(ui) = self.session() {
+            let panel = ui.overlay.shown();
+            ui.overlay.follow_back(gesture.filter(|_| panel));
+            ui.split.follow_back(gesture.filter(|_| !panel));
+        }
         let title_bar = (!phone_session).then(|| self.title_bar(window, cx));
         let link_menu = self.link_menu_layer(window);
-        let (bars_top, bars_bottom) = system_bars();
+        let (bars_top, bars_bottom) = system_bars(window);
         let body = match &self.stage {
             Stage::Loading => div()
                 .size_full()

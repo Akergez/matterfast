@@ -1,5 +1,6 @@
 use std::rc::Rc;
 
+use gpui_kit::base::InteractiveElementExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Sizable};
@@ -169,6 +170,7 @@ pub(super) fn switcher(ui: &Rc<Ui>, cx: &App) -> AnyElement {
                         .id("teams")
                         .max_h(px(320.))
                         .overflow_y_scroll()
+                        .lock_scroll_axis()
                         .child(teams),
                 )
         })

@@ -163,7 +163,7 @@ pub fn edit_profile(
             picture,
             on_avatar,
         });
-        window.open_dialog(cx, move |dialog, _, _| {
+        gpui_android_glue::back::open_dialog(window, cx, move |dialog, _, _| {
             let form = form.clone();
             let on_save = on_save.clone();
             dialog
@@ -316,7 +316,7 @@ pub fn custom_status(
             form: form.clone(),
             recents,
         });
-        window.open_dialog(cx, move |dialog, _, _| {
+        gpui_android_glue::back::open_dialog(window, cx, move |dialog, _, _| {
             let form = form.clone();
             let on_set = on_set.clone();
             let on_clear = on_clear.clone();

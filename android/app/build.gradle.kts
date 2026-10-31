@@ -105,7 +105,7 @@ dependencies {
     // glue call by name, with the androidx libraries they use (FileProvider,
     // for Files.java, among them). The same version as the crate in
     // crates/matterfast/Cargo.toml.
-    implementation("com.akergez.gpui:android-glue:0.1.0")
+    implementation("com.akergez.gpui:android-glue:0.4.0")
     // The Java half of the certificate check; see settings.gradle.kts.
     implementation("rustls:rustls-platform-verifier:0.1.1")
 }

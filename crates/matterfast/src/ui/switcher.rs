@@ -10,6 +10,7 @@
 
 use std::rc::Rc;
 
+use gpui_kit::base::InteractiveElementExt as _;
 use gpui_kit::component::input::{Input, InputEvent, InputState, MoveDown, MoveUp};
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme, WindowExt};
 use gpui_kit::prelude::*;
@@ -74,7 +75,8 @@ impl Render for View {
             .max_h(px(360.))
             .gap_0p5()
             .track_scroll(&self.scroll)
-            .overflow_y_scroll();
+            .overflow_y_scroll()
+            .lock_scroll_axis();
         if self.entries.is_empty() {
             rows = rows.child(
                 div()
@@ -186,7 +188,7 @@ impl Switcher {
             });
             let search = view.read(cx).search.clone();
             let body = view.clone();
-            window.open_dialog(cx, move |dialog, _, _| {
+            gpui_android_glue::back::open_dialog(window, cx, move |dialog, _, _| {
                 dialog.w(px(520.)).close_button(false).child(body.clone())
             });
             search.update(cx, |search, cx| search.focus(window, cx));

@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Disableable, Sizable, WindowExt};
+use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Disableable, Sizable};
 use gpui_kit::prelude::*;
 use gpui_kit::{div, px, App, Context, Entity, Subscription, Window};
 
@@ -134,7 +134,7 @@ pub fn show(ui: &Rc<Ui>, cache: ResourceCache, cx: &mut App) {
             storage.measure(cx);
             storage
         });
-        window.open_dialog(cx, move |dialog, _, _| {
+        gpui_android_glue::back::open_dialog(window, cx, move |dialog, _, _| {
             dialog.title("Storage").child(view.clone())
         });
     });

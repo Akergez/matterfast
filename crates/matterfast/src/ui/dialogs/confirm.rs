@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dialog::{DialogAction, DialogClose, DialogFooter};
-use gpui_kit::component::{ActiveTheme, WindowExt};
+use gpui_kit::component::ActiveTheme;
 use gpui_kit::prelude::*;
 use gpui_kit::{div, App, SharedString};
 
@@ -25,7 +25,7 @@ pub fn confirm(
     let ok: SharedString = ok.to_string().into();
     let on_ok: Callback = Rc::new(on_ok);
     ui.with_window(cx, move |window, cx| {
-        window.open_dialog(cx, move |dialog, _, cx| {
+        gpui_android_glue::back::open_dialog(window, cx, move |dialog, _, cx| {
             let on_ok = on_ok.clone();
             let confirm = Button::new("ok").label(ok.clone());
             dialog

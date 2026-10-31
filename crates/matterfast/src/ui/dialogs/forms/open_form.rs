@@ -2,7 +2,6 @@ use std::rc::Rc;
 
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dialog::{DialogAction, DialogClose, DialogFooter};
-use gpui_kit::component::WindowExt;
 use gpui_kit::prelude::*;
 use gpui_kit::{App, SharedString};
 
@@ -33,7 +32,7 @@ pub fn form(
         });
         let title: SharedString = spec.title.clone().into();
         let ok: SharedString = spec.ok.clone().into();
-        window.open_dialog(cx, move |dialog, _, _| {
+        gpui_android_glue::back::open_dialog(window, cx, move |dialog, _, _| {
             let view = view.clone();
             let submit = view.clone();
             let on_ok = on_ok.clone();

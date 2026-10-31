@@ -1,5 +1,6 @@
 use std::rc::Rc;
 
+use gpui_kit::base::InteractiveElementExt as _;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Sizable};
 use gpui_kit::prelude::*;
 use gpui_kit::{div, px, AnyElement, App, ElementId};
@@ -105,6 +106,7 @@ pub(super) fn roster(ui: &Rc<Ui>, cx: &App) -> AnyElement {
         .id("roster")
         .max_h(px(280.))
         .overflow_y_scroll()
+        .lock_scroll_axis()
         .child(list)
         .into_any_element()
 }

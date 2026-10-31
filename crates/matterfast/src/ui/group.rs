@@ -3,6 +3,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use gpui_kit::base::InteractiveElementExt as _;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme, WindowExt};
 use gpui_kit::prelude::*;
 use gpui_kit::{div, px, App, ElementId, FontWeight};
@@ -80,7 +81,7 @@ pub fn show(ui: &Rc<Ui>, group: Group, cx: &mut App) {
 
     let card_ui = ui.clone();
     ui.with_window(cx, move |window, cx| {
-        window.open_dialog(cx, move |dialog, _, cx| {
+        gpui_android_glue::back::open_dialog(window, cx, move |dialog, _, cx| {
             dialog
                 .w(px(340.))
                 .child(card(&card_ui, &group, &roster.borrow(), cx))
@@ -172,6 +173,7 @@ fn card(ui: &Rc<Ui>, group: &Group, roster: &Roster, cx: &App) -> gpui_kit::AnyE
                 .id("group-members")
                 .max_h(px(420.))
                 .overflow_y_scroll()
+                .lock_scroll_axis()
                 .child(list)
                 .into_any_element()
         }

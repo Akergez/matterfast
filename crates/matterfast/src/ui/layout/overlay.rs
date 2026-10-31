@@ -10,6 +10,8 @@ pub struct Overlay {
     collapsed: Cell<bool>,
     visible: Cell<f32>,
     ticked: Cell<Option<std::time::Instant>>,
+    /// Whether the system's gesture of back is carrying the panel off.
+    held: Cell<bool>,
 }
 
 impl Overlay {
@@ -30,6 +32,25 @@ impl Overlay {
 
     pub fn shown(&self) -> bool {
         self.shown.get()
+    }
+
+    /// Lays the panel out by the system's gesture of back while one is under
+    /// way, `progress` from 0 to 1 where the panel is gone. Once the gesture
+    /// is over (`None`) a panel still shown goes back where it was, and one
+    /// that back closed settles off from where the gesture left it.
+    pub(crate) fn follow_back(&self, progress: Option<f32>) {
+        match progress {
+            Some(progress) if self.shown() => {
+                self.held.set(true);
+                self.visible.set(1.0 - progress.clamp(0.0, 1.0));
+                self.ticked.set(None);
+            }
+            _ => {
+                if self.held.replace(false) && self.shown() {
+                    self.visible.set(1.0);
+                }
+            }
+        }
     }
 
     pub(crate) fn visible(&self) -> f32 {
@@ -79,5 +100,23 @@ mod tests {
             visible = next;
         }
         assert_eq!(visible, 0.0);
+    }
+
+    #[test]
+    fn the_gesture_of_back_carries_a_shown_panel_and_puts_it_back_if_cancelled() {
+        let overlay = Overlay::default();
+        overlay.shown.set(true);
+        overlay.visible.set(1.0);
+        overlay.follow_back(Some(0.25));
+        assert_eq!(overlay.visible(), 0.75);
+        // Cancelled: still shown, so back where it was.
+        overlay.follow_back(None);
+        assert_eq!(overlay.visible(), 1.0);
+
+        // Done: back closed it, and it goes off from where it was left.
+        overlay.follow_back(Some(0.9));
+        overlay.shown.set(false);
+        overlay.follow_back(None);
+        assert!((overlay.visible() - 0.1).abs() < 1e-6);
     }
 }

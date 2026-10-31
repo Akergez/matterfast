@@ -1,0 +1,46 @@
+# mode: demo
+# size: 400x800
+#
+# Back on a phone by a finger drawn to the right across a conversation, as
+# real touches: the page follows the finger pixel for pixel over the list,
+# goes back where it was if the finger rests and is lifted short of halfway,
+# and goes off to the list if drawn far. Escape, which is what the system's
+# back is, then closes a dialog over the list and leaves the list in front.
+wait:2500
+expect:page=list
+click:155,22
+wait:600
+expect:folder=all
+move:200,145
+wait:300
+click:200,145
+wait:1200
+expect:channel=Design Crit
+expect:page=chat
+expect:page-offset=0
+# A third of the way, finger still down: the list shows under the page.
+hold:60,400,140,0
+wait:300
+expect:page-offset=140
+expect:page=chat
+shot:phone-swipe-back-held
+# Rested and lifted there: the conversation comes back.
+lift
+wait:800
+expect:page=chat
+expect:page-offset=0
+# Drawn far: back to the list.
+swipe:60,400,240,0
+wait:800
+expect:page=list
+expect:page-offset=400
+shot:phone-swipe-back-list
+# The settings are a dialog over the list.
+key:ctrl-,
+wait:1000
+expect:dialog=open
+key:escape
+wait:400
+expect:dialog=closed
+expect:page=list
+quit
