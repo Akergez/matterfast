@@ -9,6 +9,7 @@ use super::ui::Ui;
 use crate::runtime;
 use crate::state::ChannelFeed;
 use crate::ui::constants::SEARCH_PAGE;
+use crate::ui::layout::Place;
 use crate::ui::rhs::PanelMode;
 use crate::ui::search;
 
@@ -43,8 +44,7 @@ impl Ui {
                     }
                     ui.right
                         .set_mode(PanelMode::Search("Pinned messages".into()), cx);
-                    ui.refresh_panel_mode(cx);
-                    ui.overlay.set_show_sidebar(true, cx);
+                    ui.pages.open_panel(Place::Search, cx);
                     ui.refresh_messages(cx);
                 }
                 Err(e) => ui.toast(&format!("Could not load the pinned messages: {e}"), cx),
@@ -78,8 +78,7 @@ impl Ui {
 
         self.right.set_mode(PanelMode::Search(terms.clone()), cx);
         self.right.search_from_the_top();
-        self.refresh_panel_mode(cx);
-        self.overlay.set_show_sidebar(true, cx);
+        self.pages.open_panel(Place::Search, cx);
         self.refresh_messages(cx);
         self.search_page(client, team_id, terms, 0);
     }
@@ -237,8 +236,7 @@ impl Ui {
 
         self.right
             .set_mode(PanelMode::Search(format!("files: {terms}")), cx);
-        self.refresh_panel_mode(cx);
-        self.overlay.set_show_sidebar(true, cx);
+        self.pages.open_panel(Place::Search, cx);
         self.refresh_messages(cx);
 
         let ui = self.clone();

@@ -78,13 +78,10 @@ impl Shell {
         }
     }
 
-    /// Whether [`Shell::close_front`] has anything to put away.
+    /// Whether a picture is over the window: the one thing in front that
+    /// the shell, not the navigator of pages, takes away on back.
     pub(super) fn has_front(&self) -> bool {
-        self.session().is_some_and(|ui| {
-            crate::ui::lightbox::is_open(ui)
-                || ui.overlay.shown()
-                || (ui.split.collapsed.get() && ui.split.showing_content())
-        })
+        self.session().is_some_and(crate::ui::lightbox::is_open)
     }
 
     /// Escape, when nothing more specific wanted it: puts away whatever is
@@ -96,14 +93,14 @@ impl Shell {
         if crate::ui::lightbox::dismiss(&ui, cx) {
             return true;
         }
-        if ui.overlay.shown() {
+        if ui.pages.panel(cx).is_some() {
             ui.dispatch(Action::CloseRightPanel, cx);
             return true;
         }
         // On a phone a conversation is a page over the list of them, and
         // going back leaves it for the list.
-        if ui.split.collapsed.get() && ui.split.showing_content() {
-            ui.split.set_show_content(false, cx);
+        if ui.pages.collapsed.get() && ui.pages.showing_chat(cx) {
+            ui.pages.show_list(cx);
             return true;
         }
         false

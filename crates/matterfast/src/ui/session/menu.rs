@@ -20,8 +20,8 @@ impl Ui {
             MenuAction::BrowseTeams => self.browse_teams(cx),
             MenuAction::NewCategory => self.new_category(cx),
             MenuAction::FocusSearch => {
-                if self.split.collapsed.get() {
-                    self.split.set_show_content(false, cx);
+                if self.pages.collapsed.get() {
+                    self.pages.show_list(cx);
                 }
                 self.search_box.focus(cx);
                 self.channels.refresh(cx);

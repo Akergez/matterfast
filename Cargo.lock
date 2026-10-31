@@ -2939,8 +2939,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-adaptive"
-version = "0.2.0"
-source = "git+https://github.com/Akergez/gpui-mobile-components?tag=v0.2.0#f71c1ca07ae2f6330688b7646f4dceca0650d883"
+version = "0.3.0"
+source = "git+https://github.com/Akergez/gpui-mobile-components?tag=v0.3.0#7a2fcdd9f57cbc8c91843c4493252d7dd2390ce3"
 dependencies = [
  "chrono",
  "gpui-adaptive-colors",
@@ -4935,7 +4935,7 @@ dependencies = [
 
 [[package]]
 name = "matterfast"
-version = "2.5.0"
+version = "2.6.0"
 dependencies = [
  "ashpd",
  "async-channel",
@@ -4980,14 +4980,14 @@ dependencies = [
 
 [[package]]
 name = "matterfast-emoji"
-version = "2.5.0"
+version = "2.6.0"
 dependencies = [
  "emojis",
 ]
 
 [[package]]
 name = "matterfast-markdown"
-version = "2.5.0"
+version = "2.6.0"
 dependencies = [
  "matterfast-emoji",
  "pulldown-cmark",
@@ -4995,14 +4995,14 @@ dependencies = [
 
 [[package]]
 name = "matterfast-paths"
-version = "2.5.0"
+version = "2.6.0"
 dependencies = [
  "dirs 6.0.0",
 ]
 
 [[package]]
 name = "matterfast-testserver"
-version = "2.5.0"
+version = "2.6.0"
 dependencies = [
  "axum",
  "flate2",
@@ -5016,7 +5016,7 @@ dependencies = [
 
 [[package]]
 name = "matterfast-timefmt"
-version = "2.5.0"
+version = "2.6.0"
 dependencies = [
  "chrono",
  "mattermost-api",
@@ -5024,7 +5024,7 @@ dependencies = [
 
 [[package]]
 name = "mattermost-api"
-version = "2.5.0"
+version = "2.6.0"
 dependencies = [
  "futures-util",
  "rand 0.9.5",
@@ -5042,7 +5042,7 @@ dependencies = [
 
 [[package]]
 name = "mattermost-calls"
-version = "2.5.0"
+version = "2.6.0"
 dependencies = [
  "flate2",
  "futures-util",

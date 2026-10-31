@@ -9,7 +9,6 @@ use super::actions::{
     QuickSwitch, CONTEXT,
 };
 use super::choose_server::choose_server;
-use super::constants::SIDEBAR_PAGE_BELOW;
 use super::session_panes::session;
 use super::shell_view::Shell;
 use super::stage::Stage;
@@ -25,10 +24,11 @@ impl Render for Shell {
             Notice::new(notice).push(window, cx);
         }
 
+        // A phone's window: one page at a time, as the navigator lays it out.
         let phone_session = self.session().is_some()
-            && f32::from(window.viewport_size().width) < SIDEBAR_PAGE_BELOW;
+            && gpui_adaptive::Env::of(window, cx).width() == gpui_adaptive::WidthClass::Compact;
         let phone_panel = phone_session && self.session().is_some_and(|ui| {
-            ui.overlay.shown()
+            ui.pages.panel(cx).is_some()
                 && !matches!(ui.right.mode(cx), crate::ui::rhs::PanelMode::Hidden)
         });
         if self.phone_panel_shown != phone_panel {
@@ -59,12 +59,11 @@ impl Render for Shell {
                 }
             }
         }
-        // Escape is handled below, as it always was. The system's back is
-        // Escape too, and it comes to the shell's own handling first; the layer
-        // is there for what that leaves, and for the gesture of predictive back,
-        // which is the application's only while there is a layer. So there is
-        // one exactly while there is something in front: with nothing, back
-        // leaves the application.
+        // Escape is handled below, as it always was; the system's back is
+        // Escape too. Pages are the navigator's: it holds the layer of back
+        // and shows the page under while the gesture moves the one in front.
+        // A picture over the window is taken away here, with a layer of its
+        // own while it is up.
         if self.has_front() != self.back.is_some() {
             self.back = self.has_front().then(|| {
                 let shell = cx.weak_entity();
@@ -72,26 +71,6 @@ impl Render for Shell {
                     shell.update(cx, |shell, cx| shell.close_front(cx)).unwrap_or(false)
                 })
             });
-        }
-        // The system's gesture of back (Android 14+) shows where it goes
-        // while the finger is down: the panel or the conversation, whichever
-        // back would take away, moves off as far as the finger has gone and
-        // the page under it shows. A picture or a sheet in front is taken
-        // away without that, at once.
-        let gesture = self
-            .session()
-            .is_some_and(|ui| {
-                ui.split.collapsed.get()
-                    && !crate::ui::lightbox::is_open(ui)
-                    && !Sheet::is_open(window, cx)
-            })
-            .then(|| self.back.as_ref().and_then(|back| back.gesture(window, cx)))
-            .flatten()
-            .map(|gesture| gesture.progress);
-        if let Some(ui) = self.session() {
-            let panel = ui.overlay.shown();
-            ui.overlay.follow_back(gesture.filter(|_| panel));
-            ui.split.follow_back(gesture.filter(|_| !panel));
         }
         let title_bar = (!phone_session).then(|| self.title_bar(window, cx));
         let (bars_top, bars_bottom) = system_bars(window);

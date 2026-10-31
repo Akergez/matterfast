@@ -15,7 +15,7 @@ impl Ui {
     pub(crate) fn select_team(self: &Rc<Self>, team_id: String, cx: &mut App) {
         // On a collapsed window, picking a team should land on that team's
         // channel list rather than straight into a conversation.
-        self.split.set_show_content(false, cx);
+        self.pages.show_list(cx);
         {
             let mut st = self.state.borrow_mut();
             if st.current_team.as_deref() == Some(team_id.as_str()) {
@@ -68,7 +68,7 @@ impl Ui {
     /// Opens a conversation somebody chose: on a phone it comes to the front,
     /// over the list.
     pub(crate) fn select_channel(self: &Rc<Self>, channel_id: String, cx: &mut App) {
-        self.split.set_show_content(true, cx);
+        self.pages.open_chat(cx);
         self.load_channel(channel_id, cx);
     }
 

@@ -9,7 +9,7 @@ use crate::state::SharedState;
 use crate::ui::call_dock::CallDock;
 use crate::ui::chat::ChatView;
 use crate::ui::constants::AVATAR_REDRAW_WAIT;
-use crate::ui::layout::{Overlay, Split, Widths, WindowSlot};
+use crate::ui::layout::{Pages, Widths, WindowSlot};
 use crate::ui::rhs::RightPanel;
 use crate::ui::sidebar::ChannelSidebar;
 use crate::ui::{autocomplete, lightbox, media, search};
@@ -23,8 +23,7 @@ pub struct Ui {
     pub dock: CallDock,
     pub chat: ChatView,
     pub right: RightPanel,
-    pub overlay: Overlay,
-    pub split: Split,
+    pub pages: Pages,
     pub widths: Widths,
     pub search_box: search::SearchBox,
     /// Remote screens and cameras, keyed by the media session they belong to
@@ -35,8 +34,6 @@ pub struct Ui {
     pub(crate) asked_handles: RefCell<HashSet<String>>,
     pub avatars: Avatars,
     pub(crate) notifier: Notifier,
-    /// Set while the window is too narrow for a static thread column.
-    pub(crate) narrow: Cell<bool>,
     /// The window's scale factor, as last drawn. Decides which size of an
     /// attached image is worth fetching.
     pub(crate) scale: Cell<f32>,
@@ -101,15 +98,13 @@ impl Ui {
             dock: CallDock::new(),
             chat: ChatView::new(window.clone()),
             right: RightPanel::new(window.clone()),
-            overlay: Overlay::default(),
-            split: Split::default(),
+            pages: Pages::default(),
             widths: Widths::default(),
             search_box: search::SearchBox::new(window.clone()),
             video_views: RefCell::new(Vec::new()),
             asked_handles: RefCell::new(HashSet::new()),
             avatars: avatars.clone(),
             notifier,
-            narrow: Cell::new(false),
             scale: Cell::new(1.0),
             sidebar_reload_pending: Cell::new(false),
             typing_sweep_pending: Cell::new(false),

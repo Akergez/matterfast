@@ -17,7 +17,6 @@ mod app_icon;
 mod choose_server;
 mod column_width;
 mod constants;
-mod divider;
 mod init;
 mod link_menu;
 mod matterfast;

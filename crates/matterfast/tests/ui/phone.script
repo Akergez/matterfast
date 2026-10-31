@@ -1,5 +1,6 @@
 # mode: demo
 # size: 400x800
+# input: touch
 #
 # The phone-sized layout: the list of conversations with its tabs is the
 # screen the window opens on, a swipe across it goes to the tab beside the one

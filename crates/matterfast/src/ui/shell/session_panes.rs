@@ -1,206 +1,114 @@
-use gpui_adaptive::prim::row;
 use std::rc::Rc;
 
+use gpui_adaptive::{Env, Navigator, Sheet, WidthClass};
 use gpui_kit::prelude::*;
-use gpui_kit::{
-    canvas, div, px, AnyElement, App, DispatchPhase, DragMoveEvent, ScrollWheelEvent, Window,
-};
+use gpui_kit::{canvas, div, px, AnyElement, App, DispatchPhase, ScrollWheelEvent, Window};
 
 use super::column_width::{column_width, dragged_width};
-use super::constants::{
-    DRAGGED_MIN, DRAGGED_SHARE, SIDEBAR_PAGE_BELOW, STATIC_PANEL_MIN_WIDTH,
-};
-use super::divider::divider;
+use super::constants::{DRAGGED_MIN, DRAGGED_SHARE};
 use super::panes::Panes;
 use super::videos::videos;
+use crate::ui::layout::Place;
 use crate::ui::rhs::PanelMode;
 use crate::ui::{Divider, Ui};
 
-/// The three panes, laid out for however wide the window is right now.
-pub(super) fn session(
-    ui: &Rc<Ui>,
-    columns: &Panes,
-    window: &mut Window,
-    cx: &mut App,
-) -> AnyElement {
+/// The session's places, laid out by the design system's navigator for
+/// however wide the window is right now: side by side where there is room,
+/// a stack of pages on a phone (see [`Place`]).
+pub(super) fn session(ui: &Rc<Ui>, columns: &Panes, window: &mut Window, cx: &mut App) -> AnyElement {
     ui.learn_unknown_mentions();
-    let width = f32::from(window.viewport_size().width);
     ui.scale.set(window.scale_factor());
-    let collapsed = width < SIDEBAR_PAGE_BELOW;
-    let narrow = width < STATIC_PANEL_MIN_WIDTH;
-    ui.split.collapsed.set(collapsed);
-    ui.narrow.set(narrow);
-    let panel_visible = if collapsed { ui.overlay.advance(window) } else { 0.0 };
-    if !ui.overlay.shown() && panel_visible == 0.0
-        && !matches!(ui.right.mode(cx), PanelMode::Hidden)
-    {
-        ui.later(cx, |ui, cx| {
-            if !ui.overlay.shown() && ui.overlay.visible() == 0.0 {
-                ui.right.set_mode(PanelMode::Hidden, cx);
-            }
-        });
-    }
-
-    // A thread is a place you read alongside the conversation, so it earns a
-    // static column when there is room. Search results are a stack you glance
-    // at and dismiss, so they always overlay — pushing the conversation aside
-    // for them would be a heavier gesture than the content deserves.
-    let overlays = narrow || matches!(ui.right.mode(cx), PanelMode::Search(_));
-    let panel = ((ui.overlay.shown() || panel_visible > 0.0)
-        && !matches!(ui.right.mode(cx), PanelMode::Hidden))
-        .then(|| columns.right());
-
-    // On a phone the panel is a page: a strip of conversation left showing
-    // beside it is too narrow to read and too easy to tap by accident.
+    let collapsed = Env::of(window, cx).width() == WidthClass::Compact;
+    ui.pages.collapsed.set(collapsed);
     ui.widths.save_when_settled(cx);
-    let most = (width * DRAGGED_SHARE).max(DRAGGED_MIN);
-    let sidebar_width = dragged_width(
-        ui.widths.get(Divider::Sidebar),
-        column_width(width, 0.24, 220.0, 360.0),
-        DRAGGED_MIN,
-        most,
-    );
-    let panel_width = if collapsed {
-        width
-    } else {
-        dragged_width(
-            ui.widths.get(Divider::Panel),
-            column_width(width, 0.30, 320.0, 460.0),
-            DRAGGED_MIN,
-            most,
+    panel_closed(ui, cx);
+
+    let navigator = ui.pages.attach(cx);
+    let pages = {
+        let columns = columns.clone();
+        Navigator::new("places", &navigator, move |place, _, _, _| match place {
+            Place::List => columns.sidebar(),
+            Place::Chat => columns.chat(),
+            Place::Thread | Place::Search => columns.right(),
+        })
+    };
+    // The side columns are as wide as the person dragged them, within
+    // reason: not thinner than a channel name, not so wide the
+    // conversation has no room.
+    let resizable = {
+        let (sized, resized) = (ui.clone(), ui.clone());
+        pages.resizable(
+            move |place, window_width, _| px(side_width(&sized, *place, f32::from(window_width))),
+            move |place, width, cx| {
+                let divider = match place {
+                    Place::List => Divider::Sidebar,
+                    _ => Divider::Panel,
+                };
+                resized.widths.set(divider, width.map(f32::from), cx);
+            },
         )
     };
-    let mut panes = row().relative().size_full().min_h_0().on_drag_move({
+
+    let mut panes = div().relative().size_full().min_h_0().child(resizable);
+
+    // On a phone a swipe sideways over the list goes to the tab beside the
+    // one in front; over a page above it the navigator takes the swipe to
+    // the right as back. A script may swipe on any system: it is how this
+    // is tested where there is no finger.
+    let swipes = cfg!(target_os = "android") || crate::ui::script::playing();
+    let list_in_front = navigator.read(cx).stack() == [Place::List];
+    if collapsed && swipes && list_in_front && !Sheet::is_open(window, cx) {
         let ui = ui.clone();
-        move |moved: &DragMoveEvent<Divider>, _, cx| {
-            let which = *moved.drag(cx);
-            let pointer = moved.event.position.x;
-            let dragged = match which {
-                Divider::Sidebar => pointer - moved.bounds.left(),
-                Divider::Panel => moved.bounds.right() - pointer,
-            };
-            ui.widths.set(which, Some(f32::from(dragged).round()), cx);
-        }
-    });
-
-    // The opaque panel fills the phone. Covered pages retain their views and
-    // scroll states, but stay out of the tree so their lists are not measured.
-    if collapsed && panel.is_none() {
-        // The list of conversations is the screen, the whole width of it,
-        // and a conversation is a page that comes in over it from the right
-        // and goes back the same way. Neither is built while the other has
-        // the window to itself. The dock would come and go with the list, so
-        // here it belongs under the conversation.
-        let open = ui.split.advance(window);
-        if open > 0.0 {
-            panes = panes.child(div().size_full().child(columns.sidebar()));
-        }
-        if open < 1.0 {
-            panes = panes.child(
-                div()
-                    .absolute()
-                    .top_0()
-                    .bottom_0()
-                    .left(px(open * width))
-                    .w(px(width))
-                    .when(open > 0.0, |page| page.shadow_lg())
-                    .occlude()
-                    .child(columns.chat()),
-            );
-        }
-        // A phone has no edge to click. Over a conversation a swipe to the
-        // right carries it off and leaves the list; over the list a swipe
-        // goes to the tab beside the one in front. Anything laid over either
-        // keeps its own swipes. A script may swipe on any system: it is how
-        // this is tested where there is no finger.
-        let swipes = cfg!(target_os = "android") || crate::ui::script::playing();
-        if swipes && !ui.overlay.shown() && !gpui_adaptive::Sheet::is_open(window, cx) {
-            let ui = ui.clone();
-            panes = panes.child(
-                canvas(
-                    |_, _, _| (),
-                    move |_, _, window, _| {
-                        window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
-                            if phase != DispatchPhase::Capture {
-                                return;
-                            }
-                            let delta = event.delta.pixel_delta(px(1.));
-                            let (dx, dy) = (f32::from(delta.x), f32::from(delta.y));
-                            if ui.split.swiped(dx, dy, event.touch_phase, width) {
-                                cx.stop_propagation();
-                                window.refresh();
-                                return;
-                            }
-                            if !ui.split.list_in_front() {
-                                return;
-                            }
-                            let (taken, turn) = ui.channels.swiped(
-                                dx,
-                                dy,
-                                event.touch_phase,
-                                event.position,
-                            );
-                            if let Some(step) = turn {
-                                crate::ui::sidebar::turn(&ui, step, cx);
-                            }
-                            if taken {
-                                window.refresh();
-                                cx.stop_propagation();
-                            }
-                        });
-                    },
-                )
-                .absolute()
-                .size_0(),
-            );
-        }
-    } else if collapsed && panel_visible < 1.0 {
-        panes = panes.child(div().size_full().child(columns.sidebar()));
-    } else if !collapsed {
-        panes = panes
-            .child(
-                div()
-                    .flex_none()
-                    .h_full()
-                    .w(px(sidebar_width))
-                    .child(columns.sidebar()),
+        panes = panes.child(
+            canvas(
+                |_, _, _| (),
+                move |_, _, window, _| {
+                    window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
+                        if phase != DispatchPhase::Capture {
+                            return;
+                        }
+                        let delta = event.delta.pixel_delta(px(1.));
+                        let (dx, dy) = (f32::from(delta.x), f32::from(delta.y));
+                        let (taken, turn) = ui.channels.swiped(dx, dy, event.touch_phase, event.position);
+                        if let Some(step) = turn {
+                            crate::ui::sidebar::turn(&ui, step, cx);
+                        }
+                        if taken {
+                            window.refresh();
+                            cx.stop_propagation();
+                        }
+                    });
+                },
             )
-            .child(div().flex_1().min_w_0().h_full().child(columns.chat()));
-    }
-
-    if let Some(panel) = panel {
-        panes = panes.child(if overlays || collapsed {
-            div()
-                .absolute()
-                .top_0()
-                .bottom_0()
-                .right(px(if collapsed { -(1.0 - panel_visible) * width } else { 0.0 }))
-                .w(px(panel_width))
-                .when(!collapsed, |panel| panel.shadow_lg())
-                .occlude()
-                .child(panel)
-                .into_any_element()
-        } else {
-            div()
-                .flex_none()
-                .h_full()
-                .w(px(panel_width))
-                .child(panel)
-                .into_any_element()
-        });
-        if !collapsed {
-            panes = panes.child(divider(ui, Divider::Panel, panel_width, cx));
-        }
-    }
-    // After the panes, so that it is above both of the two it sits between.
-    if !collapsed {
-        panes = panes.child(divider(ui, Divider::Sidebar, sidebar_width, cx));
+            .absolute()
+            .size_0(),
+        );
     }
 
     panes
         .when_some(videos(ui, cx), |panes, videos| panes.child(videos))
-        .when_some(crate::ui::lightbox::render(ui, cx), |panes, lightbox| {
-            panes.child(lightbox)
-        })
+        .when_some(crate::ui::lightbox::render(ui, cx), |panes, lightbox| panes.child(lightbox))
         .into_any_element()
+}
+
+/// How wide a side column is in a window `width` wide: what it was dragged
+/// to, or its share of the window.
+fn side_width(ui: &Ui, place: Place, width: f32) -> f32 {
+    let most = (width * DRAGGED_SHARE).max(DRAGGED_MIN);
+    match place {
+        Place::List => dragged_width(ui.widths.get(Divider::Sidebar), column_width(width, 0.24, 220.0, 360.0), DRAGGED_MIN, most),
+        _ => dragged_width(ui.widths.get(Divider::Panel), column_width(width, 0.30, 320.0, 460.0), DRAGGED_MIN, most),
+    }
+}
+
+/// Keeps what the panel shows in step with the pages: a panel taken away
+/// by back, a swipe or Escape shows nothing any more.
+fn panel_closed(ui: &Rc<Ui>, cx: &mut App) {
+    if ui.pages.panel(cx).is_none() && !matches!(ui.right.mode(cx), PanelMode::Hidden) {
+        ui.later(cx, |ui, cx| {
+            if ui.pages.panel(cx).is_none() {
+                ui.right.set_mode(PanelMode::Hidden, cx);
+            }
+        });
+    }
 }

@@ -45,7 +45,7 @@ pub(super) fn header(ui: &Rc<Ui>, narrow: bool, cx: &mut App) -> AnyElement {
         // back to it.
         bar = bar.child(
             kit::icon_button("back", Lucide::ChevronLeft, "Channels")
-                .on_trigger(ui.run(|ui, cx| ui.split.set_show_content(false, cx)))
+                .on_trigger(ui.run(|ui, cx| ui.pages.show_list(cx)))
                 .as_icon_button(),
         );
     }

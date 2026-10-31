@@ -101,8 +101,7 @@ impl Ui {
         // Flush the previous thread's reply before the box is reused.
         self.save_thread_draft(cx);
         self.right.set_mode(PanelMode::Thread(root_id.clone()), cx);
-        self.refresh_panel_mode(cx);
-        self.overlay.set_show_sidebar(true, cx);
+        self.pages.open_panel(crate::ui::layout::Place::Thread, cx);
         self.restore_thread_draft(cx);
         let following = {
             let st = self.state.borrow();
@@ -229,7 +228,7 @@ impl Ui {
         self.channels.show_inbox(true, cx);
         // On a phone the list it is a tab of is a page of its own, and has
         // to be the one in front.
-        self.split.set_show_content(false, cx);
+        self.pages.show_list(cx);
 
         self.refresh_messages(cx);
         self.load_inbox(cx);

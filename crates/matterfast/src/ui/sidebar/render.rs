@@ -23,7 +23,7 @@ pub fn render(
 ) -> AnyElement {
     let st = ui.state.borrow();
     let colors = cx.colors();
-    let collapsed = ui.split.collapsed.get();
+    let collapsed = ui.pages.collapsed.get();
     let searching = collapsed && ui.search_box.compact_expanded();
     let header = row()
         .id("sidebar-header")

@@ -1,0 +1,38 @@
+# mode: demo
+# size: 400x800
+# input: touch
+#
+# A thread opened from a conversation is a page over it, and goes back the
+# way the conversation does: drawn to the right by a finger it follows the
+# finger over the conversation, comes back if rested and lifted short, and
+# goes off if drawn far, leaving the conversation where it was.
+wait:2500
+click:155,22
+wait:600
+expect:folder=all
+click:200,85
+wait:1500
+expect:channel=Development
+expect:page=chat
+expect:panel=hidden
+# "2 replies" under Anton's message.
+click:140,333
+wait:1500
+expect:panel=thread
+expect:page-offset=0
+hold:60,400,140,0
+wait:300
+expect:page-offset=140
+expect:panel=thread
+shot:phone-thread-swipe-held
+lift
+wait:800
+expect:panel=thread
+expect:page-offset=0
+swipe:60,400,240,0
+wait:800
+expect:panel=hidden
+expect:page=chat
+expect:channel=Development
+shot:phone-thread-swipe-back
+quit

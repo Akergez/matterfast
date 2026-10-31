@@ -38,7 +38,7 @@ impl Render for Pane {
         let ui = &self.ui;
         // The call dock sits under the channel list, and under the
         // conversation once the list is a page of its own.
-        let collapsed = ui.split.collapsed.get();
+        let collapsed = ui.pages.collapsed.get();
         let began = std::time::Instant::now();
         let part = match self.which {
             Which::Sidebar => Part::Sidebar,
@@ -134,6 +134,7 @@ pub fn refresh(cx: &mut App) {
 }
 
 /// The columns of one session, for as long as a window shows it.
+#[derive(Clone)]
 pub(super) struct Panes {
     sidebar: Entity<Pane>,
     chat: Entity<Pane>,

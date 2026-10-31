@@ -54,12 +54,8 @@ impl Ui {
             Action::OpenInbox => self.open_inbox(cx),
             Action::OlderThreads => self.load_older_threads(cx),
             Action::CloseRightPanel => {
-                if self.split.collapsed.get() {
-                    self.split.reveal_list(cx);
-                } else {
-                    self.right.set_mode(PanelMode::Hidden, cx);
-                }
-                self.overlay.set_show_sidebar(false, cx);
+                self.right.set_mode(PanelMode::Hidden, cx);
+                self.pages.close_panel(cx);
             }
             Action::ToggleReaction(post_id, emoji) => self.toggle_reaction(post_id, emoji, cx),
             Action::CardAction {
@@ -68,12 +64,14 @@ impl Ui {
                 selected,
                 cookie,
             } => self.card_action(post_id, action_id, selected, cookie, cx),
-            Action::OpenPost(channel_id, root_id) => {
-                self.select_channel(channel_id, cx);
-                if !root_id.is_empty() {
-                    self.open_thread(root_id, cx);
-                }
+            // A thread opened from the inbox is a page over the inbox: back
+            // goes to where it was opened from, not into its conversation.
+            // Where there is room the conversation stands beside it anyway.
+            Action::OpenPost(channel_id, root_id) if !root_id.is_empty() => {
+                self.load_channel(channel_id, cx);
+                self.open_thread(root_id, cx);
             }
+            Action::OpenPost(channel_id, _) => self.select_channel(channel_id, cx),
             Action::JumpToPost(channel_id, post_id) => self.jump_to_post(channel_id, post_id, cx),
             Action::OpenDirectMessage(user_id) => self.open_direct_message(user_id, cx),
             Action::Post(post_id, what) => self.post_action(post_id, what, cx),

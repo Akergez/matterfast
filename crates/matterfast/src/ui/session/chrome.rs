@@ -3,7 +3,6 @@
 use gpui_kit::App;
 
 use super::ui::Ui;
-use crate::ui::rhs::PanelMode;
 
 impl Ui {
     /// Mirrors what the desktop app puts in its tray badge: a single mention
@@ -46,16 +45,5 @@ impl Ui {
         self.chat.set_call_in_progress(in_progress, cx);
         self.chat.set_in_call(in_call, in_progress.is_some(), cx);
         self.dock.refresh(&self.state, cx);
-    }
-
-    /// A thread is a place you read alongside the conversation, so it earns a
-    /// static column when there is room. Search results are a stack you
-    /// glance at and dismiss, so they always overlay — pushing the
-    /// conversation aside for them would be a heavier gesture than the
-    /// content deserves.
-    pub(crate) fn refresh_panel_mode(&self, cx: &mut App) {
-        let overlays =
-            self.narrow.get() || matches!(self.right.mode(cx), PanelMode::Search(_));
-        self.overlay.set_collapsed(overlays, cx);
     }
 }

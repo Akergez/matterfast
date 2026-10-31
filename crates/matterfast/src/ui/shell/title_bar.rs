@@ -4,7 +4,6 @@ use gpui_kit::prelude::*;
 use gpui_kit::{div, img, px, AnyElement, Context, FontWeight, MouseButton, Window};
 
 use super::app_icon::app_icon;
-use super::constants::SIDEBAR_PAGE_BELOW;
 use super::column_width::column_width;
 use super::pretty_server::pretty_server;
 use super::shell_view::Shell;
@@ -22,7 +21,7 @@ impl Shell {
     pub(super) fn title_bar(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let colors = cx.colors();
         let width = f32::from(window.viewport_size().width);
-        let roomy = width >= SIDEBAR_PAGE_BELOW;
+        let roomy = gpui_adaptive::Env::of(window, cx).width() != gpui_adaptive::WidthClass::Compact;
         // A window that is not the one being typed into says so quietly.
         let active = window.is_window_active();
 

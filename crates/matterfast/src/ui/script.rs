@@ -250,7 +250,6 @@ fn observe(what: &str, window: &mut Window, cx: &mut App) -> Option<String> {
         "theme-name" => theme_name(cx),
         "category-offset" => ui.map(|ui| ui.channels.swipe_offset().round() as i32).unwrap_or(0).to_string(),
         "sidebar-body-top" => ui.map(|ui| ui.channels.body_top().round() as i32).unwrap_or(0).to_string(),
-        "panel-sliding" => ui.is_some_and(|ui| !ui.overlay.shown() && ui.overlay.visible() > 0.0).to_string(),
         "search" => ui.map(|ui| ui.search_box.text(cx)).unwrap_or_default(),
         "search-hints" => ui.map(|ui| ui.search_box.offered().join("|")).unwrap_or_default(),
         "search-hits" => ui
@@ -303,7 +302,7 @@ fn observe(what: &str, window: &mut Window, cx: &mut App) -> Option<String> {
             false => "no",
         }
         .to_string(),
-        "page" => match ui.is_some_and(|ui| ui.split.showing_content()) {
+        "page" => match ui.as_ref().is_some_and(|ui| ui.pages.showing_chat(cx)) {
             true => "chat",
             false => "list",
         }
@@ -336,10 +335,19 @@ fn observe(what: &str, window: &mut Window, cx: &mut App) -> Option<String> {
             .map(|ui| ui.state.borrow().quick_reactions().join("|"))
             .unwrap_or_default(),
         "sheet" => if gpui_adaptive::Sheet::is_open(window, cx) { "open" } else { "closed" }.to_string(),
-        "page-offset" => ui
-            .map(|ui| (ui.split.open() * f32::from(window.viewport_size().width)).round() as i32)
-            .unwrap_or(0)
-            .to_string(),
+        // How far right of its place the page in front is moved by a
+        // gesture of back; the window's width when the list is in front.
+        "page-offset" => {
+            let width = f32::from(window.viewport_size().width);
+            let navigator = ui.as_ref().and_then(|ui| ui.pages.navigator());
+            let offset = match navigator {
+                Some(navigator) if navigator.read(cx).stack() != [crate::ui::layout::Place::List] => navigator
+                    .update(cx, |navigator, cx| navigator.gesture_offset(window, cx))
+                    .unwrap_or(0.0),
+                _ => 1.0,
+            };
+            ((offset * width).round() as i32).to_string()
+        }
         "tabs-scroll" => ui
             .map(|ui| (-f32::from(ui.channels.tabs_scroll.offset().x)).round() as i32)
             .unwrap_or(0)

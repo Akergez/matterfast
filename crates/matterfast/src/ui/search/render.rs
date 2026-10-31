@@ -52,7 +52,7 @@ pub fn render(ui: &Rc<Ui>, width: f32, window: &Window, cx: &mut App) -> AnyElem
                         let index = search.selected.get().unwrap_or(0);
                         ui.later(cx, move |ui, cx| ui.search_box.pick(index, ui, cx));
                     }
-                    FieldKey::Escape if ui.split.collapsed.get() => {
+                    FieldKey::Escape if ui.pages.collapsed.get() => {
                         search.collapse_compact(cx);
                         ui.channels.refresh(cx);
                     }
