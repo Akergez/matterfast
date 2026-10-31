@@ -1,9 +1,7 @@
 use std::rc::Rc;
 
-use gpui_kit::component::button::Button;
-use gpui_kit::component::{v_flex, ActiveTheme, WindowExt};
-use gpui_kit::prelude::*;
-use gpui_kit::{div, App, SharedString};
+use gpui_adaptive::{Ask, Command};
+use gpui_kit::App;
 
 use super::callback::{run_later, Callback};
 use crate::ui::Ui;
@@ -16,29 +14,9 @@ pub(crate) fn choose(
     body: &str,
     options: Vec<(&'static str, Callback)>,
 ) {
-    let title: SharedString = title.to_string().into();
-    let body: SharedString = body.to_string().into();
-    let options = Rc::new(options);
-    ui.with_window(cx, move |window, cx| {
-        gpui_android_glue::back::open_dialog(window, cx, move |dialog, _, cx| {
-            let mut column = v_flex().gap_2().child(
-                div()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(body.clone()),
-            );
-            for (index, (label, action)) in options.iter().enumerate() {
-                let action = action.clone();
-                column = column.child(
-                    Button::new(("option", index))
-                        .label(*label)
-                        .w_full()
-                        .on_click(move |_, window, cx| {
-                            window.close_dialog(cx);
-                            run_later(&action, cx);
-                        }),
-                );
-            }
-            dialog.title(title.clone()).child(column)
-        });
+    let answers = options.into_iter().enumerate().map(|(index, (label, action))| {
+        Command::new(("option", index), label).on_trigger(move |_, cx| run_later(&action, cx))
     });
+    let question = answers.fold(Ask::new("choose", title.to_string()).detail(body.to_string()), Ask::answer);
+    ui.with_window(cx, move |window, cx| question.open(window, cx));
 }

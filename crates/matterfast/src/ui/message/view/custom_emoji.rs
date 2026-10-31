@@ -1,4 +1,4 @@
-use gpui_kit::component::text::{
+use gpui_adaptive::markdown::{
     markdown_ast, InlineElement, InlineRenderContext, MarkdownNode, MarkdownParseContext,
     MarkdownPlugin,
 };

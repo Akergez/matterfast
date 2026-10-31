@@ -1,4 +1,4 @@
-use gpui_kit::component::input::{InputEvent, InputState};
+use gpui_adaptive::{FieldEvent, Purpose, TextFieldState};
 use gpui_kit::{App, AppContext, Context, Subscription, Window};
 
 use super::field::Field;
@@ -29,9 +29,10 @@ impl Form {
                 } => Slot::Text {
                     label,
                     input: cx.new(|cx| {
-                        InputState::new(window, cx)
-                            .default_value(value)
-                            .placeholder(placeholder)
+                        let mut input = TextFieldState::new(Purpose::Plain, window, cx);
+                        input.set_value(value, window, cx);
+                        input.set_placeholder(placeholder, window, cx);
+                        input
                     }),
                 },
                 Field::Switch {
@@ -78,8 +79,8 @@ impl Form {
         let subscription = cx.subscribe_in(
             source,
             window,
-            |form, source, event: &InputEvent, window, cx| {
-                if !matches!(event, InputEvent::Change) {
+            |form, source, event: &FieldEvent, window, cx| {
+                if *event != FieldEvent::Change {
                     return;
                 }
                 let Some((derive, written)) = form.autofill.clone() else {
@@ -89,10 +90,10 @@ impl Form {
                     return;
                 };
                 // Still ours to write: nobody has typed over what we put.
-                if target.read(cx).value().as_ref() != written {
+                if target.read(cx).value(cx).as_ref() != written {
                     return;
                 }
-                let derived = derive(source.read(cx).value().trim());
+                let derived = derive(source.read(cx).value(cx).trim());
                 target.update(cx, |target, cx| {
                     target.set_value(derived.clone(), window, cx)
                 });
@@ -155,7 +156,7 @@ impl Form {
         self.slots
             .iter()
             .map(|slot| match slot {
-                Slot::Text { input, .. } => Value::Text(input.read(cx).value().to_string()),
+                Slot::Text { input, .. } => Value::Text(input.read(cx).value(cx).to_string()),
                 Slot::Switch { on, .. } => Value::Bool(*on),
                 Slot::Choice {
                     options, selected, ..

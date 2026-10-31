@@ -1,7 +1,7 @@
+use gpui_adaptive::Command;
+use gpui_adaptive::prim::row;
 use std::rc::Rc;
 
-use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::{h_flex, Sizable};
 use gpui_kit::prelude::*;
 use gpui_kit::{div, list, AnyElement, App};
 
@@ -51,17 +51,14 @@ pub(crate) fn inbox_view(ui: &Rc<Ui>, cx: &App) -> AnyElement {
             // page at a time, newest first, and the rest are a press away
             // rather than fetched in case somebody scrolls that far.
             None if inbox.more && index == inbox.entries.len() => Some(
-                h_flex()
+                row()
                     .justify_center()
                     .py_2()
                     .child(
-                        Button::new("older-threads")
-                            .small()
-                            .ghost()
-                            .label("Older threads")
-                            .on_click(
-                                row_ui.click(|ui, cx| ui.dispatch(Action::OlderThreads, cx)),
-                            ),
+                        Command::new("older-threads", "Older threads")
+                            .on_trigger(row_ui.run(|ui, cx| ui.dispatch(Action::OlderThreads, cx)),)
+                            .as_button()
+                            .ghost(),
                     )
                     .into_any_element(),
             ),

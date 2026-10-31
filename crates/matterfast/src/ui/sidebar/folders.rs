@@ -1,8 +1,8 @@
+use gpui_adaptive::prim::row;
+use gpui_adaptive::{ActiveColors as _, Command, ItemActions};
 use std::rc::Rc;
 
-use gpui_kit::base::InteractiveElementExt as _;
-use gpui_kit::component::menu::{ContextMenuExt, PopupMenuItem};
-use gpui_kit::component::{h_flex, ActiveTheme};
+use gpui_adaptive::prim::Scrolls as _;
 use gpui_kit::prelude::*;
 use gpui_kit::{px, AnyElement, App, ElementId, FontWeight, SharedString};
 use mattermost_api::models::CategoryType;
@@ -75,14 +75,14 @@ pub(crate) fn turn(ui: &Rc<Ui>, step: i32, cx: &mut App) {
 /// are.
 pub(super) fn folders(ui: &Rc<Ui>, st: &AppState, cx: &App) -> AnyElement {
     let categories = st.folders();
-    let theme = cx.theme();
+    let colors = cx.colors();
     let inbox = ui.channels.showing_inbox();
     let open = ui.channels.folder();
     // A folder that is gone shows everything, and so "all" is what is open.
     let open = open.filter(|id| categories.iter().any(|category| category.id == *id));
 
     let tab = |id: ElementId, name: SharedString, selected: bool, waiting: Waiting| {
-        h_flex()
+        row()
             .id(id)
             .flex_none()
             .h(px(28.))
@@ -93,11 +93,11 @@ pub(super) fn folders(ui: &Rc<Ui>, st: &AppState, cx: &App) -> AnyElement {
             .cursor_pointer()
             .text_sm()
             .when(selected, |tab| {
-                tab.bg(theme.sidebar_accent).font_weight(FontWeight::SEMIBOLD)
+                tab.bg(colors.nav_selected).font_weight(FontWeight::SEMIBOLD)
             })
             .when(!selected, |tab| {
-                tab.text_color(theme.muted_foreground)
-                    .hover(|style| style.bg(theme.list_hover))
+                tab.text_color(colors.muted)
+                    .hover(|style| style.bg(colors.hover))
             })
             .child(name)
             .when(waiting.mentions > 0, |tab| {
@@ -113,13 +113,12 @@ pub(super) fn folders(ui: &Rc<Ui>, st: &AppState, cx: &App) -> AnyElement {
             .on_click(ui.click(move |ui, cx| ui.channels.set_folder(folder.clone(), cx)))
     };
 
-    let mut row = h_flex()
+    let mut row = row()
         .id("folders")
         .flex_1()
         .min_w_0()
         .gap_1()
-        .overflow_x_scroll()
-        .lock_scroll_axis()
+        .scrolls_x()
         .track_scroll(&ui.channels.tabs_scroll)
         .child(
             // What is waiting in it is a count of its own: mentions and
@@ -156,16 +155,17 @@ pub(super) fn folders(ui: &Rc<Ui>, st: &AppState, cx: &App) -> AnyElement {
         }
         let ui = ui.clone();
         let category_id = category.id.clone();
-        row = row.child(tab.context_menu(move |menu, _, _| {
-            let rename = category_id.clone();
-            let delete = category_id.clone();
-            menu.item(PopupMenuItem::new("Rename…").on_click(ui.click(move |ui, cx| {
+        let (rename, delete) = (category_id.clone(), category_id);
+        let actions = ItemActions::new()
+            .title(category.display_name.clone())
+            .inline()
+            .command(Command::new("rename-folder", "Rename…").on_trigger(ui.run(move |ui, cx| {
                 ui.dispatch(Action::Row(rename.clone(), RowAction::RenameCategory), cx)
             })))
-            .item(PopupMenuItem::new("Delete").on_click(ui.click(move |ui, cx| {
+            .command(Command::new("delete-folder", "Delete").destructive().on_trigger(ui.run(move |ui, cx| {
                 ui.dispatch(Action::Row(delete.clone(), RowAction::DeleteCategory), cx)
-            })))
-        }));
+            })));
+        row = row.child(actions.wrap(tab, cx));
     }
     row.into_any_element()
 }

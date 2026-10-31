@@ -1,31 +1,29 @@
 use std::rc::Rc;
 
-use gpui_kit::component::input::{InputEvent, TextareaState};
+use gpui_adaptive::{FieldEvent, TextFieldState};
 use gpui_kit::{App, AppContext, Entity, Window};
 
 use crate::ui::Ui;
 
-/// Builds the reply box and wires what it reports to the session.
+/// Builds the box and wires what it reports to the session. On a pointer
+/// Enter sends and Shift+Enter breaks the line; on a finger Enter breaks the
+/// line and the send button sends.
 pub(crate) fn build_composer(
     ui: &Rc<Ui>,
     window: &mut Window,
     cx: &mut App,
-) -> (Entity<TextareaState>, gpui_kit::Subscription) {
+) -> (Entity<TextFieldState>, gpui_kit::Subscription) {
     let composer = cx.new(|cx| {
-        TextareaState::new(window, cx)
-            .auto_grow(1, 6)
-            .submit_on_enter(true)
-            .placeholder("Reply…")
+        let mut composer = TextFieldState::prompt(1, 6, window, cx);
+        composer.set_placeholder("Reply…", window, cx);
+        composer
     });
     let weak = Rc::downgrade(ui);
-    let subscription = cx.subscribe(&composer, move |composer, event: &InputEvent, cx| {
-        gpui_android_glue::keyboard::follow(composer.entity_id(), event, gpui_android_glue::keyboard::Purpose::Message);
+    let subscription = cx.subscribe(&composer, move |_, event: &FieldEvent, cx| {
         let Some(ui) = weak.upgrade() else { return };
         match event {
-            InputEvent::Change => ui.later(cx, |ui, cx| ui.right.composer_changed(ui, cx)),
-            InputEvent::PressEnter { shift: false, .. } => {
-                ui.later(cx, |ui, cx| ui.right.composer_submitted(ui, cx))
-            }
+            FieldEvent::Change => ui.later(cx, |ui, cx| ui.right.composer_changed(ui, cx)),
+            FieldEvent::Submit => ui.later(cx, |ui, cx| ui.right.composer_submitted(ui, cx)),
             _ => {}
         }
     });

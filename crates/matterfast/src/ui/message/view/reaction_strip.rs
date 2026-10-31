@@ -1,6 +1,7 @@
+use gpui_adaptive::prim::row;
+use gpui_adaptive::ActiveColors as _;
 use std::rc::Rc;
 
-use gpui_kit::component::{h_flex, ActiveTheme};
 use gpui_kit::prelude::*;
 use gpui_kit::{div, px, AnyElement, App, FontWeight, SharedString};
 use mattermost_api::models::Post;
@@ -49,15 +50,15 @@ pub(super) fn reaction_strip(
         }
     }
 
-    let theme = cx.theme();
-    let mut strip = h_flex().flex_wrap().gap_1().mt_1();
+    let colors = cx.colors();
+    let mut strip = row().flex_wrap().gap_1().mt_1();
     for (index, (name, group)) in grouped.into_iter().enumerate() {
         let mine = group.iter().any(|r| r.user_id == st.me.id);
         let post_id = post.id.clone();
         let toggle = name.clone();
         let named = (ui.clone(), post.id.clone(), name.clone());
         strip = strip.child(
-            h_flex()
+            row()
                 .id(("reaction", index))
                 .gap_1()
                 .px_1p5()
@@ -67,13 +68,13 @@ pub(super) fn reaction_strip(
                 .border_1()
                 .text_sm()
                 .cursor_pointer()
-                .border_color(if mine { theme.primary } else { theme.border })
+                .border_color(if mine { colors.accent } else { colors.border })
                 .bg(if mine {
-                    theme.primary.opacity(0.12)
+                    colors.accent.opacity(0.12)
                 } else {
-                    theme.muted.opacity(0.5)
+                    colors.sunken.opacity(0.5)
                 })
-                .hover(|style| style.border_color(theme.ring))
+                .hover(|style| style.border_color(colors.focus))
                 .child(emoji_element(ui, &name, 16.))
                 .child(
                     div()
@@ -88,7 +89,7 @@ pub(super) fn reaction_strip(
                     let (ui, post_id, emoji) = &named;
                     let tooltip: SharedString =
                         who_reacted(&ui.state.borrow(), post_id, emoji).into();
-                    gpui_kit::component::tooltip::Tooltip::new(tooltip).build(window, cx)
+                    gpui_adaptive::prim::tooltip(tooltip)(window, cx)
                 })
                 .on_click(ui.click(move |ui, cx| {
                     ui.dispatch(Action::ToggleReaction(post_id.clone(), toggle.clone()), cx)

@@ -1,11 +1,12 @@
-use gpui_kit::component::select::{SearchableVec, SelectEvent, SelectState};
-use gpui_kit::component::{IndexPath, ThemeMode};
+use gpui_adaptive::{ChoiceEvent, ChoiceState};
+use gpui_adaptive::theme::ThemeMode;
 use gpui_kit::prelude::*;
 use gpui_kit::{Context, SharedString, Window};
 use gpui_zed_themes::{Browser, BrowserEvent};
 
 use super::built_in_label::built_in_label;
 use super::dialog::Settings;
+use super::names::options;
 use crate::appearance::{self, FontRole};
 use crate::themes;
 
@@ -27,24 +28,14 @@ impl Settings {
             // A chosen font that is no longer installed reads as the built-in
             // one, which is also what is being drawn.
             let selected = appearance::font_choice(role)
-                .and_then(|chosen| families.iter().position(|family| *family == chosen))
-                .map_or(0, |position| position + 1);
-            let state = cx.new(|cx| {
-                SelectState::new(
-                    SearchableVec::new(items),
-                    Some(IndexPath::default().row(selected)),
-                    window,
-                    cx,
-                )
-                .searchable(true)
-            });
+                .and_then(|chosen| families.iter().find(|family| **family == chosen).cloned())
+                .unwrap_or_else(|| built_in.clone());
+            let state = cx.new(|cx| ChoiceState::searchable(options(items), Some(selected), window, cx));
             subscriptions.push(cx.subscribe_in(
                 &state,
                 window,
-                move |_, _, event: &SelectEvent<SearchableVec<SharedString>>, window, cx| {
-                    let SelectEvent::Confirm(Some(family)) = event else {
-                        return;
-                    };
+                move |_, _, event: &ChoiceEvent, window, cx| {
+                    let ChoiceEvent::Change(family) = event;
                     let family = (*family != built_in).then(|| family.to_string());
                     appearance::set_font_choice(role, family, window, cx);
                 },
@@ -59,23 +50,14 @@ impl Settings {
             // A chosen theme that is no longer there reads as the one being
             // worn in its place.
             let worn = appearance::theme_for(mode, cx);
-            let selected = names.iter().position(|name| *name == worn).unwrap_or(0);
-            let state = cx.new(|cx| {
-                SelectState::new(
-                    SearchableVec::new(names),
-                    Some(IndexPath::default().row(selected)),
-                    window,
-                    cx,
-                )
-                .searchable(true)
-            });
+            let selected = names.iter().find(|name| **name == worn).or(names.first()).cloned();
+            let state = cx.new(|cx| ChoiceState::searchable(options(names), selected, window, cx));
             subscriptions.push(cx.subscribe_in(
                 &state,
                 window,
-                move |_, _, event: &SelectEvent<SearchableVec<SharedString>>, window, cx| {
-                    if let SelectEvent::Confirm(Some(name)) = event {
-                        appearance::set_theme_name(mode, name, window, cx);
-                    }
+                move |_, _, event: &ChoiceEvent, window, cx| {
+                    let ChoiceEvent::Change(name) = event;
+                    appearance::set_theme_name(mode, name, window, cx);
                 },
             ));
             state

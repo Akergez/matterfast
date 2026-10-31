@@ -1,6 +1,7 @@
+use gpui_adaptive::prim;
+use gpui_adaptive::ActiveColors as _;
 use std::rc::Rc;
 
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme};
 use gpui_kit::prelude::*;
 use gpui_kit::{div, px, relative, AnyElement, App, FontWeight, MouseButton};
 
@@ -10,9 +11,9 @@ use crate::ui::Ui;
 /// The list under the box.
 pub(super) fn hint_list(ui: &Rc<Ui>, cx: &App) -> AnyElement {
     let search = &ui.search_box;
-    let theme = cx.theme();
+    let colors = cx.colors();
     let title = search.hint.borrow().as_ref().map_or("", heading);
-    let mut rows = v_flex()
+    let mut rows = prim::column()
         .id("search-hints")
         .absolute()
         // Under the box: its place is counted from the box's own top.
@@ -24,9 +25,9 @@ pub(super) fn hint_list(ui: &Rc<Ui>, cx: &App) -> AnyElement {
         .p_1()
         .rounded_md()
         .border_1()
-        .border_color(theme.border)
-        .bg(theme.popover)
-        .text_color(theme.popover_foreground)
+        .border_color(colors.border)
+        .bg(colors.raised)
+        .text_color(colors.text)
         .shadow_md()
         .occlude()
         .child(
@@ -34,13 +35,13 @@ pub(super) fn hint_list(ui: &Rc<Ui>, cx: &App) -> AnyElement {
                 .px_2()
                 .py_1()
                 .text_xs()
-                .text_color(theme.muted_foreground)
+                .text_color(colors.muted)
                 .child(title),
         );
     let selected = search.selected.get();
     for (index, row) in search.rows.borrow().iter().enumerate() {
         rows = rows.child(
-            h_flex()
+            prim::row()
                 .id(("hint", index))
                 .gap_2()
                 .px_2()
@@ -49,8 +50,8 @@ pub(super) fn hint_list(ui: &Rc<Ui>, cx: &App) -> AnyElement {
                 .rounded_sm()
                 .text_sm()
                 .cursor_pointer()
-                .when(selected == Some(index), |row| row.bg(theme.accent))
-                .hover(|style| style.bg(theme.list_hover))
+                .when(selected == Some(index), |row| row.bg(colors.hover))
+                .hover(|style| style.bg(colors.hover))
                 .child(
                     div()
                         .flex_none()
@@ -64,7 +65,7 @@ pub(super) fn hint_list(ui: &Rc<Ui>, cx: &App) -> AnyElement {
                         .truncate()
                         .text_right()
                         .text_xs()
-                        .text_color(theme.muted_foreground)
+                        .text_color(colors.muted)
                         .child(row.detail.clone()),
                 )
                 // On the press, not the click: the press is also what takes

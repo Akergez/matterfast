@@ -1,8 +1,7 @@
+use gpui_adaptive::Command;
+use gpui_adaptive::prim::spinner;
 use std::rc::Rc;
 
-use gpui_kit::component::button::Button;
-use gpui_kit::component::scroll::ScrollableElement;
-use gpui_kit::component::spinner::Spinner;
 use gpui_kit::prelude::*;
 use gpui_kit::{div, list, px, AnyElement, App};
 
@@ -48,10 +47,7 @@ pub(super) fn feed(ui: &Rc<Ui>, cx: &App) -> AnyElement {
         .min_h_0()
         .w_full()
         .child(
-            div()
-                .size_full()
-                .child(rows)
-                .vertical_scrollbar(&list_state),
+            gpui_adaptive::prim::list_scrollbar(div().size_full().child(rows), &list_state, cx),
         )
         .when(chat.loading_older.get(), |feed| {
             feed.child(
@@ -62,7 +58,7 @@ pub(super) fn feed(ui: &Rc<Ui>, cx: &App) -> AnyElement {
                     .right_0()
                     .flex()
                     .justify_center()
-                    .child(Spinner::new()),
+                    .child(spinner()),
             )
         })
         .when(scrolled_up, |feed| {
@@ -72,10 +68,9 @@ pub(super) fn feed(ui: &Rc<Ui>, cx: &App) -> AnyElement {
                     .right_4()
                     .bottom_3()
                     .child(
-                        Button::new("jump-to-latest")
+                        Command::new("jump-to-latest", "Jump to latest")
                             .icon(Lucide::ArrowDown)
-                            .tooltip("Jump to latest")
-                            .on_click(ui.click(|ui, cx| {
+                            .on_trigger(ui.run(|ui, cx| {
                                 // The newest message is not in a block that
                                 // stops short of it: it has to be fetched.
                                 if ui.chat.behind.get() {
@@ -84,7 +79,8 @@ pub(super) fn feed(ui: &Rc<Ui>, cx: &App) -> AnyElement {
                                 }
                                 ui.chat.scroll_to_newest("jump-button");
                                 crate::ui::refresh(cx);
-                            })),
+                            }))
+                            .as_icon_button(),
                     ),
             )
         })

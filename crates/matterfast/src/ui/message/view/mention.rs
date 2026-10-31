@@ -1,8 +1,8 @@
-use gpui_kit::component::text::{
+use gpui_adaptive::ActiveColors as _;
+use gpui_adaptive::markdown::{
     markdown_ast, InlineElement, InlineRenderContext, MarkdownNode, MarkdownParseContext,
     MarkdownPlugin,
 };
-use gpui_kit::component::ActiveTheme;
 use gpui_kit::prelude::*;
 use gpui_kit::{div, px, App, ElementId, FontWeight, SharedString, Window};
 
@@ -84,9 +84,9 @@ impl MarkdownPlugin for Mention {
     ) -> Option<InlineElement> {
         let MentionOf { handle, label } = node.data::<MentionOf>()?;
         let ui = crate::ui::current(cx)?;
-        let theme = cx.theme();
-        let (wash, ink) = (theme.warning.opacity(0.28), theme.foreground);
-        let hover = theme.warning.opacity(0.42);
+        let colors = cx.colors();
+        let (wash, ink) = (colors.warning.opacity(0.28), colors.text);
+        let hover = colors.warning.opacity(0.42);
 
         let at = node.source_range().map_or(0, |range| range.start);
         let pill = div()

@@ -1,6 +1,7 @@
+use gpui_adaptive::prim::row;
+use gpui_adaptive::ActiveColors as _;
 use std::rc::Rc;
 
-use gpui_kit::component::{h_flex, ActiveTheme};
 use gpui_kit::prelude::*;
 use gpui_kit::{div, AnyElement, FontWeight};
 use mattermost_api::models::Post;
@@ -49,7 +50,7 @@ pub(super) fn thread_footer(
     // The root's author is named above the message already.
     repliers.retain(|id| id != &post.user_id);
 
-    let mut footer = h_flex().gap_1p5().items_center().mt_0p5();
+    let mut footer = row().gap_1p5().items_center().mt_0p5();
     for user_id in repliers.iter().take(THREAD_FACES) {
         let name = st
             .users
@@ -66,7 +67,7 @@ pub(super) fn thread_footer(
                 .id("replies")
                 .text_sm()
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(cx.theme().link)
+                .text_color(cx.colors().link)
                 .cursor_pointer()
                 .hover(|style| style.underline())
                 .child(label)

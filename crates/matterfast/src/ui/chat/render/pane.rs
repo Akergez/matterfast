@@ -1,8 +1,7 @@
+use gpui_adaptive::prim::column;
+use gpui_adaptive::{ActiveColors as _, Command};
 use std::rc::Rc;
 
-use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::{v_flex, ActiveTheme, Sizable};
 use gpui_kit::prelude::*;
 use gpui_kit::{div, AnyElement, App, ExternalPaths};
 
@@ -34,11 +33,11 @@ pub fn render(ui: &Rc<Ui>, narrow: bool, dock: Option<AnyElement>, cx: &mut App)
         (channel.is_some(), waiting)
     };
 
-    let mut pane = v_flex()
+    let mut pane = column()
         .id("conversation")
         .size_full()
         .min_w_0()
-        .bg(cx.theme().background)
+        .bg(cx.colors().surface)
         .child(frame_log::timed("header", header(ui, narrow, cx)));
 
     if !has_channel {
@@ -56,20 +55,19 @@ pub fn render(ui: &Rc<Ui>, narrow: bool, dock: Option<AnyElement>, cx: &mut App)
     // Losing the socket is a state of the whole window, not an event, so it
     // gets a banner that stays up rather than a toast that scrolls by.
     if let Some(problem) = chat.connection.borrow().clone() {
-        pane = pane.child(banner(problem, cx.theme().warning, cx));
+        pane = pane.child(banner(problem, cx.colors().warning, cx));
     }
 
     if let Some(participants) = chat.call_participants.get() {
-        let mut call = banner(call_banner_text(participants), cx.theme().success, cx);
+        let mut call = banner(call_banner_text(participants), cx.colors().success, cx);
         // The banner is where you notice a call, so it is where joining it
         // belongs — the header button is for starting one.
         if !chat.in_call.get() {
             call = call.child(
-                Button::new("join-call")
-                    .label("Join")
-                    .small()
+                Command::new("join-call", "Join")
                     .primary()
-                    .on_click(ui.click(|ui, cx| ui.dispatch(Action::ToggleCall, cx))),
+                    .on_trigger(ui.run(|ui, cx| ui.dispatch(Action::ToggleCall, cx)))
+                    .as_button(),
             );
         }
         pane = pane.child(call);
@@ -82,7 +80,7 @@ pub fn render(ui: &Rc<Ui>, narrow: bool, dock: Option<AnyElement>, cx: &mut App)
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(Spinner::new().large()),
+                .child(gpui_adaptive::Busy::new("loading")),
         );
     } else {
         pane = pane.child(frame_log::timed("feed", feed(ui, cx)));
@@ -92,12 +90,11 @@ pub fn render(ui: &Rc<Ui>, narrow: bool, dock: Option<AnyElement>, cx: &mut App)
     // so and offers the way out.
     if chat.editing.borrow().is_some() {
         pane = pane.child(
-            banner("Editing a message", cx.theme().primary, cx).child(
-                Button::new("cancel-edit")
-                    .label("Cancel")
-                    .small()
-                    .ghost()
-                    .on_click(ui.click(|ui, cx| ui.chat.end_edit(cx))),
+            banner("Editing a message", cx.colors().accent, cx).child(
+                Command::new("cancel-edit", "Cancel")
+                    .on_trigger(ui.run(|ui, cx| ui.chat.end_edit(cx)))
+                    .as_button()
+                    .ghost(),
             ),
         );
     }
@@ -112,7 +109,7 @@ pub fn render(ui: &Rc<Ui>, narrow: bool, dock: Option<AnyElement>, cx: &mut App)
                 .pb_0p5()
                 .truncate()
                 .text_xs()
-                .text_color(cx.theme().muted_foreground)
+                .text_color(cx.colors().muted)
                 .child(typing),
         );
     }

@@ -1,7 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use gpui_kit::component::input::TextareaState;
+use gpui_adaptive::TextFieldState;
 use gpui_kit::{point, px, App, Entity, FollowMode, ListAlignment, ListState, ScrollHandle};
 
 use super::inbox::Inbox;
@@ -38,7 +38,7 @@ pub struct RightPanel {
     /// was measured against.
     pub(super) search_drawn: Cell<usize>,
     /// The reply box, while there is a window to put it in.
-    pub(crate) composer: RefCell<Option<Entity<TextareaState>>>,
+    pub(crate) composer: RefCell<Option<Entity<TextFieldState>>>,
     /// Set while a draft is being restored, so it is not mistaken for typing.
     pub(super) restoring: Cell<bool>,
     /// What the reply box is offering to complete, as the conversation's
@@ -97,7 +97,7 @@ impl RightPanel {
         self.thread_channel.borrow().clone()
     }
 
-    pub(crate) fn attach(&self, composer: Entity<TextareaState>) {
+    pub(crate) fn attach(&self, composer: Entity<TextFieldState>) {
         *self.composer.borrow_mut() = Some(composer);
     }
 

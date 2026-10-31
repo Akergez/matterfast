@@ -81,7 +81,7 @@ pub fn run() {
     }
 
     let application = gpui_kit::application()
-        .with_assets(gpui_kit::assets::AllAssets)
+        .with_assets(gpui_adaptive::AllAssets)
         // Closing the window keeps the process, the socket and the
         // notifications alive — a chat client you have to keep a window open
         // for is not one. Quitting is therefore always explicit.
@@ -131,11 +131,23 @@ fn start(requests: Vec<ipc::Request>, cx: &mut gpui_kit::App) {
     appearance::built_in_fonts(cx);
     themes::init(cx);
     appearance::apply(None, cx);
+    gpui_adaptive::init(input_mode(), cx);
     runtime::install(cx);
     ui::init(cx);
 
     for request in requests {
         ui::handle_request(request, cx);
+    }
+}
+
+/// How the person points: a finger on a phone, a pointer elsewhere.
+/// `MATTERFAST_INPUT=touch` draws a desktop window for a finger, which is
+/// how the UI scenarios see the phone's skin.
+fn input_mode() -> gpui_adaptive::InputMode {
+    if cfg!(target_os = "android") || std::env::var("MATTERFAST_INPUT").as_deref() == Ok("touch") {
+        gpui_adaptive::InputMode::Touch
+    } else {
+        gpui_adaptive::InputMode::Pointer
     }
 }
 
@@ -157,7 +169,7 @@ fn android_main(app: gpui_android_glue::launch::AndroidApp) {
     let config = Config::new("matterfast")
         .filter("info,matterfast=debug,mattermost_api=debug,mattermost_calls=debug")
         .with_cache();
-    run(app, config, gpui_kit::assets::AllAssets, |cx| {
+    run(app, config, gpui_adaptive::AllAssets, |cx| {
         // Before anything can reach rustls. Two providers are in the tree —
         // aws-lc-rs through reqwest, ring through webrtc's DTLS — so rustls
         // refuses to pick one, and the thread that first needs TLS panics.

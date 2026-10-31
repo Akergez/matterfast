@@ -7,23 +7,11 @@
 //! from the link handler instead, kept by the window, and drawn over the rest
 //! of it the way the toolkit draws its own context menus.
 
-use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
-use gpui_kit::prelude::*;
-use gpui_kit::{
-    anchored, deferred, div, px, AnyElement, App, ClipboardItem, DismissEvent, Entity, Focusable,
-    Pixels, Point, Subscription, Window,
-};
+use gpui_adaptive::{Command, Menu};
+use gpui_kit::{App, ClipboardItem, Pixels, Point, Window};
 
-use super::shell_view::Shell;
 use super::with_shell::with_shell;
 use crate::ui::message::{link_target, LinkTarget};
-
-/// An open link menu, and where it was asked for.
-pub(crate) struct LinkMenu {
-    position: Point<Pixels>,
-    menu: Entity<PopupMenu>,
-    _dismiss: Subscription,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Choice {
@@ -66,68 +54,22 @@ fn choose(choice: Choice, url: &str, cx: &mut App) {
 /// Opens the menu for `url` at `position`, in window coordinates. Must not be
 /// called from inside the window's own update: it updates the window.
 pub(crate) fn open(url: String, position: Point<Pixels>, cx: &mut App) {
-    with_shell(cx, move |shell, window, cx| {
-        // Back to the composer, usually, once the menu is gone.
-        let back = window.focused(cx).unwrap_or_else(|| shell.focus.clone());
-        let target = link_target(&url);
-        let menu = PopupMenu::build(window, cx, move |mut menu, _, _| {
-            menu = menu.action_context(back);
-            for (label, choice) in entries(&target) {
+    with_shell(cx, move |_, window, cx| {
+        let commands = entries(&link_target(&url))
+            .into_iter()
+            .enumerate()
+            .map(|(index, (label, choice))| {
                 let url = url.clone();
-                menu = menu.item(
-                    PopupMenuItem::new(label).on_click(move |_, _, cx| choose(choice, &url, cx)),
-                );
-            }
-            menu
-        });
-        let dismiss = cx.subscribe_in(&menu, window, |shell, _, _: &DismissEvent, _, cx| {
-            shell.link_menu = None;
-            cx.notify();
-        });
-        // Focused, so that Escape and the arrow keys reach it.
-        menu.focus_handle(cx).focus(window, cx);
-        shell.link_menu = Some(LinkMenu {
-            position,
-            menu,
-            _dismiss: dismiss,
-        });
-        cx.notify();
+                Command::new(("link-menu", index), label).on_trigger(move |_, cx| choose(choice, &url, cx))
+            })
+            .collect();
+        Menu::open_at(None, commands, position, window, cx);
     });
 }
 
 /// Whether a link menu is open, for a script to check.
-pub(crate) fn is_open(cx: &App) -> bool {
-    cx.try_global::<super::matterfast::Matterfast>()
-        .and_then(|app| app.window.as_ref())
-        .is_some_and(|(_, shell)| shell.read(cx).link_menu.is_some())
-}
-
-impl Shell {
-    /// The open link menu, over everything else in the window.
-    pub(super) fn link_menu_layer(&self, window: &Window) -> Option<AnyElement> {
-        let open = self.link_menu.as_ref()?;
-        let size = window.bounds().size;
-        Some(
-            deferred(
-                anchored().child(
-                    div()
-                        .w(size.width)
-                        .h(size.height)
-                        // The list under it must not scroll away from the
-                        // link the menu is about.
-                        .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
-                        .child(
-                            anchored()
-                                .position(open.position)
-                                .snap_to_window_with_margin(px(8.))
-                                .child(open.menu.clone()),
-                        ),
-                ),
-            )
-            .with_priority(gpui_kit::base::POPUP_PRIORITY)
-            .into_any_element(),
-        )
-    }
+pub(crate) fn is_open(window: &Window, cx: &App) -> bool {
+    Menu::is_open_at(window, cx)
 }
 
 #[cfg(test)]

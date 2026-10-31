@@ -7,7 +7,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use gpui_kit::component::input::TextareaState;
+use gpui_adaptive::TextFieldState;
 use gpui_kit::{App, Entity};
 
 use super::ui::Ui;
@@ -22,12 +22,12 @@ use crate::ui::{Action, WindowSlot};
 pub(crate) fn completion_asked(
     ui: &Rc<Ui>,
     which: Composer,
-    composer: &Entity<TextareaState>,
+    composer: &Entity<TextFieldState>,
     cx: &mut App,
 ) {
     let (text, cursor) = {
         let composer = composer.read(cx);
-        (composer.value().to_string(), composer.cursor())
+        (composer.value(cx).to_string(), composer.cursor(cx))
     };
     let query = autocomplete::token_at(&text, cursor.min(text.len()));
     let completions = ui.completions(which);
@@ -57,7 +57,7 @@ pub(crate) fn completion_asked(
 /// asked means what it usually does.
 pub(crate) fn accept_in(
     completions: &RefCell<Completions>,
-    composer: &RefCell<Option<Entity<TextareaState>>>,
+    composer: &RefCell<Option<Entity<TextFieldState>>>,
     window: &WindowSlot,
     cx: &mut App,
 ) -> bool {
@@ -73,14 +73,14 @@ pub(crate) fn accept_in(
     };
     let (text, cursor) = {
         let composer = composer.read(cx);
-        (composer.value().to_string(), composer.cursor())
+        (composer.value(cx).to_string(), composer.cursor(cx))
     };
     let (text, caret) = autocomplete::accept(&text, cursor, &insert);
     completions.borrow_mut().close();
     window.update(cx, move |window, cx| {
         composer.update(cx, |composer, cx| {
             composer.set_value(text.clone(), window, cx);
-            composer.set_selected_range(caret..caret, cx);
+            composer.set_cursor(caret, cx);
         });
     });
     true

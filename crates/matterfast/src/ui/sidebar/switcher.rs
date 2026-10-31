@@ -1,11 +1,9 @@
+use gpui_adaptive::prim::{self, column, pressable, row, Scrolls as _};
+use gpui_adaptive::{ActiveColors as _, Avatar, Command, Popup};
 use std::rc::Rc;
 
-use gpui_kit::base::InteractiveElementExt as _;
-use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::popover::Popover;
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Sizable};
 use gpui_kit::prelude::*;
-use gpui_kit::{div, px, AnyElement, App, ElementId, FontWeight, Window};
+use gpui_kit::{div, px, rems, AnyElement, App, ElementId, FontWeight};
 
 use crate::ui::kit;
 use crate::ui::{Action, Ui};
@@ -23,30 +21,15 @@ pub(super) fn switcher(ui: &Rc<Ui>, cx: &App) -> AnyElement {
         )
     };
     let content_ui = ui.clone();
-    Popover::new("account")
-        .trigger(
-            Button::new("account-button")
-                .ghost()
-                .small()
-                .tooltip("Account and teams")
-                .child(kit::avatar_with_presence(
-                    ui, &me_id, &name, 24., presence, cx,
-                )),
-        )
-        .content(move |_, _, cx| {
+    // A choice made in it closes it, so that it registers as made.
+    Popup::new("account", Command::new("account-button", "Account and teams"), move |close, _, cx| {
             let ui = &content_ui;
-            let popover = cx.entity();
-            // Close the popover a button lives in, so the choice registers
-            // as made.
-            let close = move |window: &mut Window, cx: &mut App| {
-                popover.update(cx, |state, cx| state.dismiss(window, cx));
-            };
             let st = ui.state.borrow();
-            let theme = cx.theme();
+            let colors = cx.colors();
             let me = &st.me;
             let display = me.display_name(st.teammate_name_display());
 
-            let account = h_flex()
+            let account = row()
                 .gap_3()
                 .items_center()
                 .child(kit::avatar_with_presence(
@@ -58,7 +41,7 @@ pub(super) fn switcher(ui: &Rc<Ui>, cx: &App) -> AnyElement {
                     cx,
                 ))
                 .child(
-                    v_flex()
+                    column()
                         .min_w_0()
                         .child(
                             div()
@@ -70,14 +53,14 @@ pub(super) fn switcher(ui: &Rc<Ui>, cx: &App) -> AnyElement {
                             div()
                                 .truncate()
                                 .text_xs()
-                                .text_color(theme.muted_foreground)
+                                .text_color(colors.muted)
                                 .child(format!("@{}", me.username)),
                         ),
                 );
 
             // Setting your own status belongs with your own name, which is
             // here.
-            let mut statuses = h_flex().gap_1();
+            let mut statuses = row().gap_1();
             for (index, (label, value)) in [
                 ("Online", "online"),
                 ("Away", "away"),
@@ -89,12 +72,13 @@ pub(super) fn switcher(ui: &Rc<Ui>, cx: &App) -> AnyElement {
             {
                 let close = close.clone();
                 let ui = ui.clone();
-                statuses = statuses.child(
-                    Button::new(("status", index))
-                        .ghost()
-                        .small()
+                statuses = statuses.child(prim::testable(
+                    pressable(("status", index), cx)
                         .flex_1()
-                        .tooltip(label)
+                        .h(px(28.))
+                        .justify_center()
+                        .rounded_md()
+                        .tooltip(prim::tooltip(label))
                         .child(
                             div().size(px(10.)).rounded_full().bg(kit::presence_color(
                                 mattermost_api::models::Presence::from(value),
@@ -105,29 +89,25 @@ pub(super) fn switcher(ui: &Rc<Ui>, cx: &App) -> AnyElement {
                             close(window, cx);
                             ui.dispatch(Action::SetStatus(value.to_string()), cx);
                         }),
-                );
+                ));
             }
 
-            let mut teams = v_flex().gap_0p5();
+            let mut teams = column().gap_0p5();
             for team in st.teams.iter().filter(|t| t.delete_at == 0) {
                 let current = st.current_team.as_deref() == Some(team.id.as_str());
                 let close = close.clone();
                 let ui = ui.clone();
                 let team_id = team.id.clone();
-                let mut row = h_flex()
-                    .id(ElementId::Name(format!("team-{}", team.id).into()))
+                let mut row = pressable(ElementId::Name(format!("team-{}", team.id).into()), cx)
                     .h(px(34.))
                     .px_2()
                     .gap_3()
-                    .items_center()
                     .rounded_md()
-                    .cursor_pointer()
-                    .when(current, |row| row.bg(theme.accent))
-                    .hover(|style| style.bg(theme.list_hover))
+                    .when(current, |row| row.bg(colors.hover))
                     .child(
-                        gpui_kit::component::avatar::Avatar::new()
-                            .name(team.display_name.clone())
-                            .with_size(gpui_kit::component::Size::Size(px(24.))),
+                        Avatar::new(ElementId::Name(format!("team-face-{}", team.id).into()), kit::initials(&team.display_name))
+                            .size(rems(1.5))
+                            .square(),
                     )
                     .child(
                         div()
@@ -145,34 +125,35 @@ pub(super) fn switcher(ui: &Rc<Ui>, cx: &App) -> AnyElement {
                         row = row.child(kit::unread_dot(cx));
                     }
                 }
-                teams = teams.child(row.on_click(move |_, window, cx| {
+                teams = teams.child(prim::testable(row.on_click(move |_, window, cx| {
                     close(window, cx);
                     ui.dispatch(Action::SelectTeam(team_id.clone()), cx);
-                }));
+                })));
             }
 
-            v_flex()
+            column()
                 .w(px(260.))
                 .gap_2()
                 .child(account)
                 .child(statuses)
-                .child(div().h(px(1.)).bg(theme.border))
+                .child(div().h(px(1.)).bg(colors.border))
                 .child(
                     div()
                         .px_1()
                         .text_xs()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(theme.muted_foreground)
+                        .text_color(colors.muted)
                         .child("TEAMS"),
                 )
                 .child(
                     div()
                         .id("teams")
                         .max_h(px(320.))
-                        .overflow_y_scroll()
-                        .lock_scroll_axis()
+                        .scrolls_y()
                         .child(teams),
                 )
-        })
-        .into_any_element()
+                .into_any_element()
+    })
+    .face(kit::avatar_with_presence(ui, &me_id, &name, 24., presence, cx))
+    .into_any_element()
 }

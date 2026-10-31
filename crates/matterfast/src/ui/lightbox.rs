@@ -8,10 +8,11 @@
 //!
 //! The same surface shows a playing video when it is asked to fill the window.
 
+use gpui_adaptive::prim::row;
+use gpui_adaptive::ActiveColors as _;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use gpui_kit::component::{h_flex, ActiveTheme};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     div, img, AnyElement, App, ClipboardItem, Image, ImageFormat, ObjectFit, RenderImage,
@@ -134,22 +135,24 @@ pub fn render(ui: &Rc<Ui>, cx: &App) -> Option<AnyElement> {
     let is_image = image.is_some();
     let picture = image.or(video)?;
 
-    let mut buttons = h_flex().absolute().top_3().right_3().gap_1();
+    let mut buttons = row().absolute().top_3().right_3().gap_1();
     if is_image {
         buttons = buttons
             .child(
                 kit::icon_button("copy-image", Lucide::Copy, "Copy")
-                    .on_click(ui.click(|ui, cx| copy(ui, cx))),
+                    .on_trigger(ui.run(copy))
+                    .as_icon_button(),
             )
             .child(
                 kit::icon_button("save-image", Lucide::Download, "Save")
-                    .on_click(ui.click(|ui, cx| save(ui, cx))),
+                    .on_trigger(ui.run(save))
+                    .as_icon_button(),
             );
     }
     buttons = buttons.child(
-        kit::icon_button("close-lightbox", Lucide::X, "Close").on_click(ui.click(|ui, cx| {
+        kit::icon_button("close-lightbox", Lucide::X, "Close").on_trigger(ui.run(|ui, cx| {
             dismiss(ui, cx);
-        })),
+        })).as_icon_button(),
     );
 
     Some(
@@ -185,7 +188,7 @@ pub fn render(ui: &Rc<Ui>, cx: &App) -> Option<AnyElement> {
             .child(
                 div()
                     .rounded_md()
-                    .bg(cx.theme().background.opacity(0.9))
+                    .bg(cx.colors().surface.opacity(0.9))
                     .child(buttons),
             )
             .into_any_element(),

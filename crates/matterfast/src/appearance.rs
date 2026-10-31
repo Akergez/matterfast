@@ -18,7 +18,7 @@
 
 use std::sync::OnceLock;
 
-use gpui_kit::component::{Theme, ThemeMode};
+use gpui_adaptive::theme::{Theme, ThemeMode};
 use gpui_kit::{App, SharedString, Window};
 
 use crate::background::{set_setting, setting};

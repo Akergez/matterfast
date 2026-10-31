@@ -1,4 +1,4 @@
-use gpui_kit::component::ActiveTheme;
+use gpui_adaptive::ActiveColors as _;
 use gpui_kit::prelude::*;
 use gpui_kit::{div, AnyElement, App, FontWeight};
 
@@ -38,7 +38,7 @@ pub(super) fn link_preview(
         card = card.child(
             div()
                 .text_sm()
-                .text_color(cx.theme().muted_foreground)
+                .text_color(cx.colors().muted)
                 .line_clamp(3)
                 .child(description),
         );
@@ -46,7 +46,7 @@ pub(super) fn link_preview(
     Some(
         card.id(("link", index))
             .cursor_pointer()
-            .hover(|style| style.border_color(cx.theme().ring))
+            .hover(|style| style.border_color(cx.colors().focus))
             .on_click(move |_, _, cx| crate::open_url(&url, cx))
             .into_any_element(),
     )

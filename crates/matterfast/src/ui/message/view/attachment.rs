@@ -1,6 +1,7 @@
+use gpui_adaptive::prim::row;
+use gpui_adaptive::ActiveColors as _;
 use std::rc::Rc;
 
-use gpui_kit::component::{h_flex, ActiveTheme};
 use gpui_kit::prelude::*;
 use gpui_kit::{div, img, px, AnyElement, App, ObjectFit};
 
@@ -69,7 +70,7 @@ pub(super) fn attachment(
                 .into_any_element(),
             // The box is the picture's own size from the start, so the
             // conversation does not jump when it lands.
-            None => frame.bg(cx.theme().muted).into_any_element(),
+            None => frame.bg(cx.colors().sunken).into_any_element(),
         };
     }
 
@@ -79,12 +80,12 @@ pub(super) fn attachment(
     }
 
     // Everything that is not an image: a name, a size, and a way to get it.
-    h_flex()
+    row()
         .id(("file", index))
         .mt_1()
         .gap_1p5()
         .items_center()
-        .text_color(cx.theme().muted_foreground)
+        .text_color(cx.colors().muted)
         .child(kit::Lucide::Paperclip)
         .child(
             div()
@@ -94,10 +95,10 @@ pub(super) fn attachment(
                 .child(format!("{}  ·  {}", file.name, file.human_size())),
         )
         .child(
-            kit::icon_button("save", kit::Lucide::Download, "Save").on_click(ui.click({
+            kit::icon_button("save", kit::Lucide::Download, "Save").on_trigger(ui.run({
                 let file = file.clone();
                 move |ui, cx| ui.save_attachment(&file, cx)
-            })),
+            })).as_icon_button(),
         )
         .into_any_element()
 }

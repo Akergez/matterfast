@@ -1,7 +1,8 @@
+use gpui_adaptive::prim::{column, row};
+use gpui_adaptive::ActiveColors as _;
 use std::rc::Rc;
 
-use gpui_kit::base::InteractiveElementExt as _;
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Sizable};
+use gpui_adaptive::prim::Scrolls as _;
 use gpui_kit::prelude::*;
 use gpui_kit::{div, px, AnyElement, App, ElementId};
 
@@ -18,7 +19,7 @@ pub(super) fn roster(ui: &Rc<Ui>, cx: &App) -> AnyElement {
     let Some(call) = st.call.as_ref() else {
         return div().into_any_element();
     };
-    let theme = cx.theme();
+    let colors = cx.colors();
     let i_am_host = call.host_id == st.me.id;
     let people = st
         .active_calls
@@ -26,14 +27,14 @@ pub(super) fn roster(ui: &Rc<Ui>, cx: &App) -> AnyElement {
         .cloned()
         .unwrap_or_default();
 
-    let mut list = v_flex().w(px(280.)).gap_0p5();
+    let mut list = column().w(px(280.)).gap_0p5();
     for user_id in &people {
         let name = st
             .users
             .get(user_id)
             .map(|u| u.display_name(st.teammate_name_display()))
             .unwrap_or_else(|| "Someone".to_string());
-        let mut row = h_flex()
+        let mut row = row()
             .id(ElementId::Name(format!("participant-{user_id}").into()))
             .gap_2()
             .h(px(32.))
@@ -52,14 +53,14 @@ pub(super) fn roster(ui: &Rc<Ui>, cx: &App) -> AnyElement {
         if call.speaking.first() == Some(user_id) {
             row = row.child(kit::with_tooltip(
                 "talking",
-                div().text_color(theme.success).child(Lucide::Mic),
+                div().text_color(colors.success).child(Lucide::Mic),
                 "Talking",
             ));
         } else if call.muted_users.contains(user_id) {
             row = row.child(kit::with_tooltip(
                 "muted",
                 div()
-                    .text_color(theme.muted_foreground)
+                    .text_color(colors.muted)
                     .child(Lucide::MicOff),
                 "Muted",
             ));
@@ -84,10 +85,10 @@ pub(super) fn roster(ui: &Rc<Ui>, cx: &App) -> AnyElement {
                     };
                     row = row.child(
                         kit::icon_button(("host", index), host_icon(action), tooltip)
-                            .xsmall()
-                            .on_click(ui.click(move |ui, cx| {
+                            .on_trigger(ui.run(move |ui, cx| {
                                 ui.dispatch(Action::HostControl(target.clone(), action), cx)
-                            })),
+                            }))
+                            .as_icon_button().dense(),
                     );
                 }
             }
@@ -96,7 +97,7 @@ pub(super) fn roster(ui: &Rc<Ui>, cx: &App) -> AnyElement {
         if call.sharing.contains(user_id) {
             row = row.child(kit::with_tooltip(
                 "sharing",
-                div().text_color(theme.primary).child(Lucide::Monitor),
+                div().text_color(colors.accent).child(Lucide::Monitor),
                 "Sharing a screen",
             ));
         }
@@ -105,8 +106,7 @@ pub(super) fn roster(ui: &Rc<Ui>, cx: &App) -> AnyElement {
     div()
         .id("roster")
         .max_h(px(280.))
-        .overflow_y_scroll()
-        .lock_scroll_axis()
+        .scrolls_y()
         .child(list)
         .into_any_element()
 }

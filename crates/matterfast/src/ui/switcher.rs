@@ -8,11 +8,10 @@
 //! owns the focus for the dialog's whole life: Up and Down move the selection
 //! in the list without ever giving it focus.
 
+use gpui_adaptive::prim::{column, row, Scrolls as _};
+use gpui_adaptive::{ActiveColors as _, FieldEvent, FieldKey, Purpose, Sheet, TextField, TextFieldState};
 use std::rc::Rc;
 
-use gpui_kit::base::InteractiveElementExt as _;
-use gpui_kit::component::input::{Input, InputEvent, InputState, MoveDown, MoveUp};
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme, WindowExt};
 use gpui_kit::prelude::*;
 use gpui_kit::{div, px, App, Context, Entity, ScrollHandle, Subscription, Window};
 
@@ -37,7 +36,7 @@ pub struct Entry {
 }
 
 struct View {
-    search: Entity<InputState>,
+    search: Entity<TextFieldState>,
     entries: Vec<Entry>,
     /// Something is always selected, so Enter answers with the best match
     /// straight after typing, without a press spent picking a start.
@@ -62,33 +61,32 @@ impl View {
         };
         let target = entry.target.clone();
         let on_pick = self.on_pick.clone();
-        window.close_dialog(cx);
+        Sheet::close(window, cx);
         cx.defer(move |cx| on_pick(target, cx));
     }
 }
 
 impl Render for View {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme().clone();
-        let mut rows = v_flex()
+        let colors = cx.colors();
+        let mut rows = column()
             .id("switcher-results")
             .max_h(px(360.))
             .gap_0p5()
             .track_scroll(&self.scroll)
-            .overflow_y_scroll()
-            .lock_scroll_axis();
+            .scrolls_y();
         if self.entries.is_empty() {
             rows = rows.child(
                 div()
                     .py_6()
                     .text_center()
-                    .text_color(theme.muted_foreground)
+                    .text_color(colors.muted)
                     .child("No matches"),
             );
         }
         for (index, entry) in self.entries.iter().enumerate() {
             rows = rows.child(
-                h_flex()
+                row()
                     .id(("result", index))
                     .gap_2()
                     .px_2()
@@ -96,15 +94,15 @@ impl Render for View {
                     .items_center()
                     .rounded_md()
                     .cursor_pointer()
-                    .when(index == self.selected, |row| row.bg(theme.accent))
-                    .hover(|style| style.bg(theme.list_hover))
+                    .when(index == self.selected, |row| row.bg(colors.hover))
+                    .hover(|style| style.bg(colors.hover))
                     .child(match &entry.target {
                         Target::Channel(_) => {
                             super::channel_avatar::named(&entry.title, 24.).into_any_element()
                         }
                         Target::User(_) => div()
-                            .text_color(theme.muted_foreground)
-                            .child(entry.icon.clone())
+                            .text_color(colors.muted)
+                            .child(entry.icon)
                             .into_any_element(),
                     })
                     .child(div().flex_1().min_w_0().truncate().child(entry.title.clone()))
@@ -113,7 +111,7 @@ impl Render for View {
                             div()
                                 .flex_none()
                                 .text_sm()
-                                .text_color(theme.muted_foreground)
+                                .text_color(colors.muted)
                                 .child(entry.subtitle.clone()),
                         )
                     })
@@ -124,20 +122,18 @@ impl Render for View {
             );
         }
 
-        v_flex()
-            .gap_2()
-            // Swallowed here so the list never takes the focus off the box:
-            // everything else is typing, and typing belongs to it.
-            .capture_action(cx.listener(|view, _: &MoveUp, _, cx| {
-                view.step(-1, cx);
-                cx.stop_propagation();
-            }))
-            .capture_action(cx.listener(|view, _: &MoveDown, _, cx| {
-                view.step(1, cx);
-                cx.stop_propagation();
-            }))
-            .child(Input::new(&self.search).prefix(Lucide::Search))
-            .child(rows)
+        // Up and Down are taken by the list, so that it never takes the focus
+        // off the box: everything else is typing, and typing belongs to it.
+        let view = cx.entity().downgrade();
+        let search = TextField::new(&self.search).icon(Lucide::Search).on_key(move |key, _, cx| {
+            let delta = match key {
+                FieldKey::Up => -1,
+                FieldKey::Down => 1,
+                _ => return false,
+            };
+            view.update(cx, |view, cx| view.step(delta, cx)).is_ok()
+        });
+        column().gap_2().child(search).child(rows)
     }
 }
 
@@ -162,18 +158,20 @@ impl Switcher {
         let view = ui.with_window(cx, move |window, cx| {
             let view = cx.new(|cx| {
                 let search = cx.new(|cx| {
-                    InputState::new(window, cx).placeholder("Jump to a channel or person")
+                    let mut search = TextFieldState::new(Purpose::Plain, window, cx);
+                    search.set_placeholder("Jump to a channel or person", window, cx);
+                    search
                 });
                 let subscription = cx.subscribe_in(
                     &search,
                     window,
-                    move |view: &mut View, search, event: &InputEvent, window, cx| match event {
-                        InputEvent::Change => {
-                            let term = search.read(cx).value().trim().to_string();
+                    move |view: &mut View, search, event: &FieldEvent, window, cx| match event {
+                        FieldEvent::Change => {
+                            let term = search.read(cx).value(cx).trim().to_string();
                             let typed = typed.clone();
                             cx.defer(move |cx| typed(term, cx));
                         }
-                        InputEvent::PressEnter { .. } => view.pick(view.selected, window, cx),
+                        FieldEvent::Submit => view.pick(view.selected, window, cx),
                         _ => {}
                     },
                 );
@@ -187,10 +185,12 @@ impl Switcher {
                 }
             });
             let search = view.read(cx).search.clone();
-            let body = view.clone();
-            gpui_android_glue::back::open_dialog(window, cx, move |dialog, _, _| {
-                dialog.w(px(520.)).close_button(false).child(body.clone())
-            });
+            let options = gpui_adaptive::SheetOptions {
+                width: Some(gpui_kit::rems(32.5)),
+                no_close_button: true,
+                ..Default::default()
+            };
+            Sheet::open_with(view.clone(), options, window, cx);
             search.update(cx, |search, cx| search.focus(window, cx));
             view
         });
@@ -204,7 +204,7 @@ impl Switcher {
     pub fn term(&self, cx: &App) -> String {
         self.view
             .as_ref()
-            .map(|view| view.read(cx).search.read(cx).value().trim().to_string())
+            .map(|view| view.read(cx).search.read(cx).value(cx).trim().to_string())
             .unwrap_or_default()
     }
 

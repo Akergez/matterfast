@@ -30,8 +30,15 @@ futures-util.workspace = true
 # The colours: a Material You scheme from the system's colour as the theme,
 # and themes written for the Zed editor for whoever prefers one. Both are
 # pinned to the toolkit version below, key by key, and not on crates.io.
-gpui-adaptive-colors = { git = "https://github.com/Akergez/gpui-adaptive-colors", rev = "55e9997f9bf9858f7a9242bcf75a92cf15732596" }
-gpui-zed-themes = { git = "https://github.com/Akergez/gpui-adaptive-colors", rev = "55e9997f9bf9858f7a9242bcf75a92cf15732596" }
+# Named by branch, as gpui-adaptive names it, so that there is one copy;
+# Cargo.lock holds the revision.
+gpui-adaptive-colors = { git = "https://github.com/Akergez/gpui-adaptive-colors", branch = "main" }
+gpui-zed-themes = { git = "https://github.com/Akergez/gpui-adaptive-colors", branch = "main" }
+# The design system the whole UI is drawn with: intents that draw themselves
+# for a pointer or a finger, and the primitives for what is matterfast's own.
+# To work on it beside the application, swap this for the path variant.
+gpui-adaptive = { git = "https://github.com/Akergez/gpui-mobile-components", tag = "v0.2.0" }
+# gpui-adaptive = { path = "../../../gpui-mobile-components/crates/gpui-adaptive" }
 gpui-kit = "0.7.0"
 # The Android side shared with money-manager-ng and aiddiction: android_main,
 # the keyboard, back, the status bar, the insets, links. Every function of it

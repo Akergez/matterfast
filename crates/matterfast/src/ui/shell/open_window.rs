@@ -1,4 +1,3 @@
-use gpui_kit::component::TitleBar;
 use gpui_kit::{px, size, App, AppContext, Bounds, WindowBounds, WindowOptions};
 
 use super::matterfast::Matterfast;
@@ -14,7 +13,7 @@ pub fn open_window(cx: &mut App) {
         ))),
         window_min_size: Some(size(px(360.), px(400.))),
         app_id: Some(crate::APP_ID.to_string()),
-        ..TitleBar::window_options()
+        ..gpui_adaptive::AppFrame::window_options()
     };
     match gpui_kit::open_window(options, cx, |window, cx| {
         cx.new(|cx| Shell::new(window, cx))

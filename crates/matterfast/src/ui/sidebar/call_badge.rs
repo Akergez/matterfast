@@ -1,6 +1,7 @@
+use gpui_adaptive::prim::row;
+use gpui_adaptive::ActiveColors as _;
 use std::rc::Rc;
 
-use gpui_kit::component::{h_flex, ActiveTheme};
 use gpui_kit::prelude::*;
 use gpui_kit::{AnyElement, App};
 
@@ -23,11 +24,11 @@ pub(super) fn call_badge(ui: &Rc<Ui>, people: &[String], st: &AppState, cx: &App
     /// Beyond this the faces are unreadable at 16px and the count carries it.
     const FACES: usize = 3;
 
-    let mut badge = h_flex()
+    let mut badge = row()
         .gap_0p5()
         .items_center()
         .text_xs()
-        .text_color(cx.theme().success)
+        .text_color(cx.colors().success)
         .child(Lucide::Headphones);
     for user_id in people.iter().take(FACES) {
         let name = st

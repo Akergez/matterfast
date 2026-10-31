@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::rc::Rc;
 
-use gpui_kit::component::input::{InputEvent, InputState};
+use gpui_adaptive::{FieldEvent, Purpose, TextFieldState};
 use gpui_kit::{App, AppContext, Context, Entity, Subscription, Window};
 
 use super::row::Row;
@@ -54,11 +54,15 @@ impl List {
         cx: &mut Context<Self>,
     ) {
         let placeholder = placeholder.to_string();
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
+        let input = cx.new(|cx| {
+            let mut input = TextFieldState::new(Purpose::Plain, window, cx);
+            input.set_placeholder(placeholder, window, cx);
+            input
+        });
         let on_search = Rc::new(on_search);
-        let subscription = cx.subscribe(&input, move |_, input, event: &InputEvent, cx| {
-            if matches!(event, InputEvent::Change) {
-                let term = input.read(cx).value().trim().to_string();
+        let subscription = cx.subscribe(&input, move |_, input, event: &FieldEvent, cx| {
+            if *event == FieldEvent::Change {
+                let term = input.read(cx).value(cx).trim().to_string();
                 let on_search = on_search.clone();
                 cx.defer(move |cx| on_search(term, cx));
             }
@@ -74,7 +78,7 @@ impl List {
         self.sections
             .get(section)
             .and_then(|section| section.search.as_ref())
-            .map(|input| input.read(cx).value().trim().to_string())
+            .map(|input| input.read(cx).value(cx).trim().to_string())
             .unwrap_or_default()
     }
 

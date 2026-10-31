@@ -1,6 +1,6 @@
+use gpui_adaptive::prim::row;
 use std::rc::Rc;
 
-use gpui_kit::component::h_flex;
 use gpui_kit::prelude::*;
 use gpui_kit::{div, img, px, AnyElement, App, ObjectFit};
 
@@ -13,7 +13,7 @@ pub(super) fn videos(ui: &Rc<Ui>, cx: &App) -> Option<AnyElement> {
     if views.is_empty() {
         return None;
     }
-    let mut row = h_flex()
+    let mut row = row()
         .absolute()
         .left_3()
         .bottom_3()

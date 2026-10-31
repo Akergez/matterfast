@@ -1,16 +1,13 @@
 use std::rc::Rc;
 
-use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::dialog::{DialogAction, DialogClose, DialogFooter};
-use gpui_kit::component::ActiveTheme;
-use gpui_kit::prelude::*;
-use gpui_kit::{div, App, SharedString};
+use gpui_adaptive::{Command, Confirm};
+use gpui_kit::{App, SharedString};
 
 use super::callback::{run_later, Callback};
 use crate::ui::Ui;
 
 /// Asks a yes-or-no question. `danger` paints the confirming button as
-/// something that cannot be taken back.
+/// something that cannot be taken back, and then Enter does not confirm.
 pub fn confirm(
     ui: &Rc<Ui>,
     cx: &mut App,
@@ -21,33 +18,9 @@ pub fn confirm(
     on_ok: impl Fn(&mut App) + 'static,
 ) {
     let title: SharedString = title.to_string().into();
-    let body: SharedString = body.to_string().into();
-    let ok: SharedString = ok.to_string().into();
     let on_ok: Callback = Rc::new(on_ok);
-    ui.with_window(cx, move |window, cx| {
-        gpui_android_glue::back::open_dialog(window, cx, move |dialog, _, cx| {
-            let on_ok = on_ok.clone();
-            let confirm = Button::new("ok").label(ok.clone());
-            dialog
-                .title(title.clone())
-                .child(
-                    div()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(body.clone()),
-                )
-                .footer(
-                    DialogFooter::new()
-                        .child(DialogClose::new().child(Button::new("cancel").label("Cancel")))
-                        .child(DialogAction::new().child(if danger {
-                            confirm.danger()
-                        } else {
-                            confirm.primary()
-                        })),
-                )
-                .on_ok(move |_, _, cx| {
-                    run_later(&on_ok, cx);
-                    true
-                })
-        });
-    });
+    let command = Command::new("ok", ok.to_string()).on_trigger(move |_, cx| run_later(&on_ok, cx));
+    let command = if danger { command.destructive() } else { command.primary() };
+    let question = Confirm::new("confirm", title).body(body.to_string()).confirm(command);
+    ui.with_window(cx, move |window, cx| question.open(window, cx));
 }

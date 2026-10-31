@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use gpui_kit::component::input::{InputEvent, InputState};
+use gpui_adaptive::{FieldEvent, Purpose, TextFieldState};
 use gpui_kit::{App, AppContext, Entity, Subscription, Window};
 
 use crate::ui::Ui;
@@ -10,20 +10,24 @@ pub(crate) fn build(
     ui: &Rc<Ui>,
     window: &mut Window,
     cx: &mut App,
-) -> (Entity<InputState>, Subscription) {
-    let input = cx.new(|cx| InputState::new(window, cx).placeholder("Search messages"));
+) -> (Entity<TextFieldState>, Subscription) {
+    let input = cx.new(|cx| {
+        let mut input = TextFieldState::new(Purpose::Plain, window, cx);
+        input.set_placeholder("Search messages", window, cx);
+        input
+    });
     let weak = Rc::downgrade(ui);
-    let subscription = cx.subscribe(&input, move |_, event: &InputEvent, cx| {
+    let subscription = cx.subscribe(&input, move |_, event: &FieldEvent, cx| {
         let Some(ui) = weak.upgrade() else { return };
         match event {
-            InputEvent::Change => ui.later(cx, |ui, cx| ui.search_box.changed(ui, cx)),
+            FieldEvent::Change => ui.later(cx, |ui, cx| ui.search_box.changed(ui, cx)),
             // On Enter, not on every keystroke: a post search is a round trip
             // to the server, and searching per character would be a request
             // per character.
-            InputEvent::PressEnter { .. } => ui.later(cx, |ui, cx| ui.search_box.submit(ui, cx)),
+            FieldEvent::Submit => ui.later(cx, |ui, cx| ui.search_box.submit(ui, cx)),
             // The field can live inside a cached sidebar pane. Redraw its
             // owner so `render` reads the actual window focus and updates hints.
-            InputEvent::Focus | InputEvent::Blur => crate::ui::refresh(cx),
+            FieldEvent::Focus | FieldEvent::Blur => crate::ui::refresh(cx),
         }
     });
     (input, subscription)

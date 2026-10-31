@@ -27,7 +27,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use gpui_adaptive_colors::{AdaptiveColors, Color, Options, Seed};
-use gpui_kit::component::{ThemeConfig, ThemeMode};
+use gpui_adaptive::theme::{ThemeConfig, ThemeMode};
 use gpui_kit::{App, Global, SharedString};
 use gpui_zed_themes::{Registry, Store};
 

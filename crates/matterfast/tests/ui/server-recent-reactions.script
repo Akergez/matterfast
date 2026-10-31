@@ -20,7 +20,7 @@ wait:1000
 touch:end,500,759
 wait:600
 expect:sheet=open
-click:274,488
+click:644,112
 wait:1500
 expect:sheet=closed
 expect:quick-reactions=rocket|+1|-1|smile|tada|eyes|heart|white_check_mark
@@ -29,7 +29,7 @@ wait:1000
 touch:end,500,759
 wait:600
 # The search at the end of the row opens the whole table.
-click:355,488
+click:701,112
 wait:1000
 expect:dialog=open
 type:sunglasses

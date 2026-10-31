@@ -1,5 +1,6 @@
 # mode: demo
 # size: 400x800
+# input: touch
 #
 # A finger has no hover, so on a phone a message's actions — reacting,
 # replying, the "…" menu — come up in a sheet on a long press. A short tap
@@ -22,8 +23,8 @@ expect:sheet=open
 shot:message-sheet
 # Reply is the first entry: it opens the thread and puts the sheet away.
 expect:panel=hidden
-touch:start,50,494
-touch:end,50,494
+touch:start,50,372
+touch:end,50,372
 wait:1000
 expect:sheet=closed
 expect:panel=thread

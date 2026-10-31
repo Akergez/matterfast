@@ -1,7 +1,8 @@
 use std::rc::Rc;
 
+use gpui_adaptive::{Sheet, SheetOptions};
 use gpui_kit::prelude::*;
-use gpui_kit::{px, App, Context, Entity, SharedString, Window};
+use gpui_kit::{rems, App, Context, Entity, SharedString, Window};
 
 use super::list_body::List;
 use crate::ui::Ui;
@@ -21,10 +22,8 @@ pub(crate) fn open_list(
             build(&mut list, window, cx);
             list
         });
-        let body = view.clone();
-        gpui_android_glue::back::open_dialog(window, cx, move |dialog, _, _| {
-            dialog.title(title.clone()).w(px(520.)).child(body.clone())
-        });
+        let options = SheetOptions { title: Some(title), width: Some(rems(32.5)), ..Default::default() };
+        Sheet::open_with(view.clone(), options, window, cx);
         view
     })
 }

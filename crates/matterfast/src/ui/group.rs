@@ -1,10 +1,11 @@
 //! A mentioned group: who is in it, which is what pressing the mention shows.
 
+use gpui_adaptive::prim::{column, row};
+use gpui_adaptive::ActiveColors as _;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use gpui_kit::base::InteractiveElementExt as _;
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme, WindowExt};
+use gpui_adaptive::prim::Scrolls as _;
 use gpui_kit::prelude::*;
 use gpui_kit::{div, px, App, ElementId, FontWeight};
 use mattermost_api::models::{Group, User};
@@ -81,17 +82,17 @@ pub fn show(ui: &Rc<Ui>, group: Group, cx: &mut App) {
 
     let card_ui = ui.clone();
     ui.with_window(cx, move |window, cx| {
-        gpui_android_glue::back::open_dialog(window, cx, move |dialog, _, cx| {
-            dialog
-                .w(px(340.))
-                .child(card(&card_ui, &group, &roster.borrow(), cx))
+        let drawn = cx.new(|_| {
+            crate::ui::dialogs::Drawn::new(move |_, cx| card(&card_ui, &group, &roster.borrow(), cx))
         });
+        let options = gpui_adaptive::SheetOptions { width: Some(gpui_kit::rems(21.25)), ..Default::default() };
+        gpui_adaptive::Sheet::open_with(drawn, options, window, cx);
     });
 }
 
 fn card(ui: &Rc<Ui>, group: &Group, roster: &Roster, cx: &App) -> gpui_kit::AnyElement {
-    let muted = cx.theme().muted_foreground;
-    let heading = v_flex()
+    let muted = cx.colors().muted;
+    let heading = column()
         .gap_0p5()
         .child(
             div()
@@ -129,14 +130,14 @@ fn card(ui: &Rc<Ui>, group: &Group, roster: &Roster, cx: &App) -> gpui_kit::AnyE
             .into_any_element(),
         Roster::Here(members) => {
             let st = ui.state.borrow();
-            let hover = cx.theme().list_hover;
-            let mut list = v_flex().gap_0p5();
+            let hover = cx.colors().hover;
+            let mut list = column().gap_0p5();
             for user in members {
                 let name = st.display_name(user);
                 let presence = st.presence(&user.id);
                 let id = user.id.clone();
                 list = list.child(
-                    h_flex()
+                    row()
                         .id(ElementId::Name(format!("group-member-{id}").into()))
                         .px_1()
                         .py_1()
@@ -147,7 +148,7 @@ fn card(ui: &Rc<Ui>, group: &Group, roster: &Roster, cx: &App) -> gpui_kit::AnyE
                         .hover(move |style| style.bg(hover))
                         .child(kit::avatar_with_presence(ui, &user.id, &name, 28., presence, cx))
                         .child(
-                            v_flex()
+                            column()
                                 .flex_1()
                                 .min_w_0()
                                 .child(div().truncate().child(name))
@@ -162,7 +163,7 @@ fn card(ui: &Rc<Ui>, group: &Group, roster: &Roster, cx: &App) -> gpui_kit::AnyE
                         .on_click({
                             let ui = ui.clone();
                             move |_, window, cx| {
-                                window.close_dialog(cx);
+                                gpui_adaptive::Sheet::close(window, cx);
                                 let id = id.clone();
                                 ui.later(cx, move |ui, cx| ui.show_profile(&id, cx));
                             }
@@ -172,12 +173,11 @@ fn card(ui: &Rc<Ui>, group: &Group, roster: &Roster, cx: &App) -> gpui_kit::AnyE
             div()
                 .id("group-members")
                 .max_h(px(420.))
-                .overflow_y_scroll()
-                .lock_scroll_axis()
+                .scrolls_y()
                 .child(list)
                 .into_any_element()
         }
     };
 
-    v_flex().gap_3().child(heading).child(body).into_any_element()
+    column().gap_3().child(heading).child(body).into_any_element()
 }

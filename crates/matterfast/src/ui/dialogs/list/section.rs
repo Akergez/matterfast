@@ -1,4 +1,4 @@
-use gpui_kit::component::input::InputState;
+use gpui_adaptive::TextFieldState;
 use gpui_kit::Entity;
 
 use super::row::Row;
@@ -12,5 +12,5 @@ pub(crate) struct Section {
     pub(super) rows: Vec<Row>,
     pub(super) empty: Option<Empty>,
     /// A search box over this section's rows.
-    pub(crate) search: Option<Entity<InputState>>,
+    pub(crate) search: Option<Entity<TextFieldState>>,
 }

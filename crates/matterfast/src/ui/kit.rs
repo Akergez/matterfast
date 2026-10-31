@@ -3,31 +3,31 @@
 //!
 //! Nothing here holds state or knows what a channel is. These exist so that
 //! the same thing looks the same in the sidebar, the feed and the inbox
-//! without three copies of how.
+//! without three copies of how. They are the design system's (gpui-adaptive)
+//! parts with what Mattermost calls things.
 
 use std::rc::Rc;
 
-use gpui_kit::component::avatar::Avatar;
-use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Icon, Sizable, Size};
+use gpui_adaptive::prim::{row, tooltip};
+use gpui_adaptive::{ActiveColors as _, Command, Count, Empty, Icon, Text, Tone};
 use gpui_kit::prelude::*;
-use gpui_kit::{div, px, AnyElement, App, Div, ElementId, Hsla, SharedString, Window};
+use gpui_kit::{div, px, rems, AnyElement, App, Div, ElementId, FontWeight, Hsla, SharedString};
 use mattermost_api::models::Presence;
 
 use super::Ui;
 
 /// The full icon catalogue. The component library's own enum only carries the
 /// hundred icons its own widgets use.
-pub use gpui_kit::assets::IconName as Lucide;
+pub use gpui_adaptive::Lucide;
 
 /// What colour a presence is drawn in.
 pub fn presence_color(presence: Presence, cx: &App) -> Hsla {
+    let colors = cx.colors();
     match presence {
-        Presence::Online => cx.theme().success,
-        Presence::Away => cx.theme().warning,
-        Presence::Dnd => cx.theme().danger,
-        _ => cx.theme().muted_foreground.opacity(0.6),
+        Presence::Online => colors.success,
+        Presence::Away => colors.warning,
+        Presence::Dnd => colors.danger,
+        _ => colors.muted.opacity(0.6),
     }
 }
 
@@ -41,22 +41,43 @@ pub fn presence_label(presence: Presence) -> &'static str {
     }
 }
 
-/// Somebody's face at a given size: the picture when it has arrived, their
-/// initials until then. Asking for the picture is what starts it downloading.
+/// The design system's presence for Mattermost's.
+fn presence_of(presence: Presence) -> gpui_adaptive::Presence {
+    match presence {
+        Presence::Online => gpui_adaptive::Presence::Online,
+        Presence::Away => gpui_adaptive::Presence::Away,
+        Presence::Dnd => gpui_adaptive::Presence::Busy,
+        _ => gpui_adaptive::Presence::Offline,
+    }
+}
+
+/// The letters a face shows until its picture arrives: the first of the
+/// first two words.
+pub fn initials(name: &str) -> SharedString {
+    let letters: String = name
+        .split_whitespace()
+        .take(2)
+        .filter_map(|word| word.chars().next())
+        .flat_map(char::to_uppercase)
+        .collect();
+    letters.into()
+}
+
+/// The face of `user_id`, at `size` pixels: the picture when it has
+/// arrived, their initials until then. Asking for the picture is what
+/// starts it downloading.
+fn face(ui: &Rc<Ui>, user_id: &str, name: &str, size: f32) -> gpui_adaptive::Avatar {
+    let face = gpui_adaptive::Avatar::new(SharedString::from(format!("avatar-{user_id}")), initials(name))
+        .size(rems(size / 16.));
+    match ui.avatars.texture(user_id) {
+        Some(picture) => face.picture(picture),
+        None => face,
+    }
+}
+
+/// Somebody's face at a given size.
 pub fn avatar(ui: &Rc<Ui>, user_id: &str, name: &str, size: f32) -> Div {
-    let avatar = Avatar::new()
-        .name(SharedString::from(name.to_string()))
-        .with_size(Size::Size(px(size)));
-    // The component scales the box the initials sit in with the avatar but
-    // leaves the letters at the surrounding text size, so at 16px they spill
-    // out of the circle. The letters are scaled here instead.
-    div()
-        .flex_none()
-        .text_size(px((size * 0.34).max(7.0)))
-        .child(match ui.avatars.texture(user_id) {
-            Some(picture) => avatar.src(picture),
-            None => avatar,
-        })
+    div().flex_none().child(face(ui, user_id, name, size))
 }
 
 /// A face with the status dot on its corner.
@@ -66,51 +87,18 @@ pub fn avatar_with_presence(
     name: &str,
     size: f32,
     presence: Presence,
-    cx: &App,
+    _: &App,
 ) -> AnyElement {
-    let dot = (size / 3.4).max(7.0);
-    div()
-        .relative()
-        .flex_none()
-        .child(avatar(ui, user_id, name, size))
-        .child(
-            div()
-                .absolute()
-                .right(px(-1.))
-                .bottom(px(-1.))
-                .size(px(dot))
-                .rounded_full()
-                .border_2()
-                .border_color(cx.theme().background)
-                .bg(presence_color(presence, cx)),
-        )
+    face(ui, user_id, name, size)
+        .presence(presence_of(presence))
         .into_any_element()
 }
 
 /// The count of things that named you: a pill, red when it is urgent.
-pub fn mention_badge(count: i64, urgent: bool, cx: &App) -> AnyElement {
+pub fn mention_badge(count: i64, urgent: bool, _: &App) -> AnyElement {
     div()
         .flex_none()
-        .px_1p5()
-        .min_w(px(18.))
-        .h(px(18.))
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded_full()
-        .text_xs()
-        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-        .bg(if urgent {
-            cx.theme().danger
-        } else {
-            cx.theme().primary
-        })
-        .text_color(if urgent {
-            cx.theme().danger_foreground
-        } else {
-            cx.theme().primary_foreground
-        })
-        .child(count.to_string())
+        .child(Count::new(count.max(0) as usize).urgent(urgent))
         .into_any_element()
 }
 
@@ -121,36 +109,32 @@ pub fn unread_dot(cx: &App) -> AnyElement {
         .flex_none()
         .size(px(8.))
         .rounded_full()
-        .bg(cx.theme().primary)
+        .bg(cx.colors().accent)
         .into_any_element()
 }
 
 /// A small tag such as URGENT, in the colour of what it warns about.
-pub fn tag(text: &'static str, color: Hsla, foreground: Hsla) -> AnyElement {
+pub fn tag(text: &'static str, tone: Tone, cx: &App) -> AnyElement {
+    let color = cx.colors().tone(tone);
     div()
         .flex_none()
         .px_1p5()
         .rounded_sm()
-        .text_xs()
-        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-        .bg(color)
-        .text_color(foreground)
-        .child(text)
+        .bg(color.opacity(0.15))
+        .child(Text::small(text).tone(tone).strong())
         .into_any_element()
 }
 
-/// A flat icon button with a tooltip — the shape nearly every toolbar button
-/// in the window has.
+/// A command shown as an icon with its label in the tooltip: the shape
+/// nearly every toolbar button in the window has. Give it its work with
+/// `on_trigger` and place it with `as_icon_button`, or put it behind a
+/// [`gpui_adaptive::Menu`] or a [`gpui_adaptive::Popup`].
 pub fn icon_button(
     id: impl Into<ElementId>,
     icon: impl Into<Icon>,
-    tooltip: impl Into<SharedString>,
-) -> Button {
-    Button::new(id)
-        .icon(icon.into())
-        .ghost()
-        .small()
-        .tooltip(tooltip)
+    label: impl Into<SharedString>,
+) -> Command {
+    Command::new(id, label).icon(icon)
 }
 
 /// A page that says why there is nothing here instead of leaving a blank gap.
@@ -158,56 +142,29 @@ pub fn empty_state(
     icon: impl Into<Icon>,
     title: impl Into<SharedString>,
     description: impl Into<SharedString>,
-    cx: &App,
+    _: &App,
 ) -> AnyElement {
-    v_flex()
-        .size_full()
-        .items_center()
-        .justify_center()
-        .gap_2()
-        .p_6()
-        .child(
-            icon.into()
-                .with_size(Size::Size(px(40.)))
-                .text_color(cx.theme().muted_foreground.opacity(0.6)),
-        )
-        .child(
-            div()
-                .text_lg()
-                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                .child(title.into()),
-        )
-        .child(
-            div()
-                .text_sm()
-                .text_center()
-                .text_color(cx.theme().muted_foreground)
-                .child(description.into()),
-        )
-        .into_any_element()
+    Empty::new(icon, title).body(description).into_any_element()
 }
 
-/// A rule with a label in the middle of it: the day, or "New messages".
-pub fn labelled_rule(label: impl Into<SharedString>, color: Hsla, cx: &App) -> AnyElement {
+/// A rule with a label in the middle of it: the day, or "New messages",
+/// in the colour of `tone` or quiet without one.
+pub fn labelled_rule(label: impl Into<SharedString>, tone: Option<Tone>, cx: &App) -> AnyElement {
+    let colors = cx.colors();
+    let color = tone.map_or(colors.border, |tone| colors.tone(tone));
     let line = || div().flex_1().h(px(1.)).bg(color.opacity(0.35));
-    h_flex()
+    let label = div()
+        .flex_none()
+        .text_xs()
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(tone.map_or(colors.muted, |tone| colors.tone(tone)))
+        .child(label.into());
+    row()
         .w_full()
-        .items_center()
         .gap_2()
         .py_1()
         .child(line())
-        .child(
-            div()
-                .flex_none()
-                .text_xs()
-                .font_weight(gpui_kit::FontWeight::MEDIUM)
-                .text_color(if color == cx.theme().border {
-                    cx.theme().muted_foreground
-                } else {
-                    color
-                })
-                .child(label.into()),
-        )
+        .child(label)
         .child(line())
         .into_any_element()
 }
@@ -216,15 +173,12 @@ pub fn labelled_rule(label: impl Into<SharedString>, color: Hsla, cx: &App) -> A
 pub fn with_tooltip(
     id: impl Into<ElementId>,
     child: impl IntoElement,
-    tooltip: impl Into<SharedString>,
+    text: impl Into<SharedString>,
 ) -> AnyElement {
-    let tooltip: SharedString = tooltip.into();
     div()
         .id(id)
         .flex_none()
         .child(child)
-        .tooltip(move |window: &mut Window, cx: &mut App| {
-            Tooltip::new(tooltip.clone()).build(window, cx)
-        })
+        .tooltip(tooltip(text))
         .into_any_element()
 }

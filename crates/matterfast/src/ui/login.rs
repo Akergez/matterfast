@@ -4,18 +4,14 @@
 //! comes back in the `Token` **response header** — the body is just the user.
 //! Single sign-on takes a different route entirely; see [`super::sso`].
 
+use gpui_adaptive::prim::{column, row, scroll_y, spinner};
+use gpui_adaptive::{
+    ActiveColors as _, Command, FieldEvent, Purpose, Text, TextField, TextFieldState, Toggle,
+};
 use std::rc::Rc;
 
-use gpui_kit::base::InteractiveElementExt as _;
-use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::switch::Switch;
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Disableable};
 use gpui_kit::prelude::*;
-use gpui_kit::{
-    div, img, px, App, Context, Entity, FontWeight, Image, ImageFormat, Subscription, Window,
-};
+use gpui_kit::{div, img, px, App, Context, Entity, Image, ImageFormat, Subscription, Window};
 use mattermost_api::{Client, Error, User};
 
 use crate::runtime;
@@ -64,10 +60,10 @@ fn credentials(url: &str, user: &str, password: &str, mfa: &str) -> Result<Crede
 }
 
 pub struct LoginView {
-    server: Entity<InputState>,
-    login_id: Entity<InputState>,
-    password: Entity<InputState>,
-    mfa: Entity<InputState>,
+    server: Entity<TextFieldState>,
+    login_id: Entity<TextFieldState>,
+    password: Entity<TextFieldState>,
+    mfa: Entity<TextFieldState>,
     ldap: bool,
     busy: bool,
     /// Nothing more happens until the browser sends us back, and the button
@@ -88,35 +84,28 @@ impl LoginView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let server = cx.new(|cx| {
-            InputState::new(window, cx)
-                .default_value("https://")
-                .placeholder("https://mattermost.example.com")
-        });
-        let login_id = cx.new(|cx| InputState::new(window, cx).placeholder("Email or username"));
-        let password = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("Password")
-                .masked(true)
-        });
-        let mfa = cx.new(|cx| InputState::new(window, cx).placeholder("MFA code (if enabled)"));
+        // Each field has a keyboard that suits it, where the keyboard is on
+        // the screen: one for prose would start an address with a capital
+        // and offer to correct a password.
+        let mut field = |purpose, placeholder: &'static str| {
+            cx.new(|cx| {
+                let mut field = TextFieldState::new(purpose, window, cx);
+                field.set_placeholder(placeholder, window, cx);
+                field
+            })
+        };
+        let server = field(Purpose::Address, "https://mattermost.example.com");
+        let login_id = field(Purpose::Login, "Email or username");
+        let password = field(Purpose::Password, "Password");
+        let mfa = field(Purpose::Plain, "MFA code (if enabled)");
+        server.update(cx, |field, cx| field.set_value("https://", window, cx));
 
-        // Enter in any field is the same as the button. And each field has a
-        // keyboard that suits it, where the keyboard is on the screen: one
-        // for prose would start an address with a capital and offer to
-        // correct a password.
-        use gpui_android_glue::keyboard::Purpose;
-        let subscriptions = [
-            (&server, Purpose::Address),
-            (&login_id, Purpose::Login),
-            (&password, Purpose::Password),
-            (&mfa, Purpose::Plain),
-        ]
-        .into_iter()
-            .map(|(field, purpose)| {
-                cx.subscribe(field, move |view: &mut LoginView, field, event: &InputEvent, cx| {
-                    gpui_android_glue::keyboard::follow(field.entity_id(), event, purpose);
-                    if matches!(event, InputEvent::PressEnter { .. }) {
+        // Enter in any field is the same as the button.
+        let subscriptions = [&server, &login_id, &password, &mfa]
+            .into_iter()
+            .map(|field| {
+                cx.subscribe(field, |view: &mut LoginView, _, event: &FieldEvent, cx| {
+                    if *event == FieldEvent::Submit {
                         view.submit(cx);
                     }
                 })
@@ -143,10 +132,10 @@ impl LoginView {
             return;
         }
         let credentials = match credentials(
-            &self.server.read(cx).value(),
-            &self.login_id.read(cx).value(),
-            &self.password.read(cx).value(),
-            &self.mfa.read(cx).value(),
+            &self.server.read(cx).value(cx),
+            &self.login_id.read(cx).value(cx),
+            &self.password.read(cx).value(cx),
+            &self.mfa.read(cx).value(cx),
         ) {
             Ok(credentials) => credentials,
             Err(message) => {
@@ -206,7 +195,7 @@ impl LoginView {
     /// SSO needs nothing but the server: the browser collects the credentials
     /// and the answer comes back through the `mattermost-dev://` scheme.
     fn single_sign_on(&mut self, cx: &mut Context<Self>) {
-        let url = self.server.read(cx).value().trim().to_string();
+        let url = self.server.read(cx).value(cx).trim().to_string();
         if url.is_empty() || url == "https://" {
             self.error = Some("Fill in the server URL first.".to_string());
             cx.notify();
@@ -290,124 +279,101 @@ impl LoginView {
 
 impl Render for LoginView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme().clone();
-        let field = |label: &'static str, input: &Entity<InputState>| {
-            v_flex()
-                .gap_1()
-                .child(div().text_sm().font_weight(FontWeight::MEDIUM).child(label))
-                .child(Input::new(input))
+        let colors = cx.colors();
+        let view = cx.entity().downgrade();
+        let run = move |f: fn(&mut LoginView, &mut Context<LoginView>)| {
+            let view = view.clone();
+            move |_: &mut Window, cx: &mut App| {
+                let _ = view.update(cx, f);
+            }
         };
 
-        let form = v_flex()
+        let form = column()
             .w(px(420.))
             .max_w_full()
             .gap_3()
             .child(
-                v_flex()
+                column()
                     .items_center()
                     .gap_2()
                     .child(img(app_icon()).size(px(96.)))
+                    .child(Text::title("Sign in to Mattermost"))
                     .child(
-                        div()
-                            .text_xl()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("Sign in to Mattermost"),
-                    )
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_center()
-                            .text_color(theme.muted_foreground)
-                            .child(
-                                "Your credentials are sent only to the server you name here.",
-                            ),
+                        Text::small("Your credentials are sent only to the server you name here.")
+                            .muted()
+                            .center(),
                     ),
             )
-            .child(field("Server URL", &self.server))
-            .child(field("Email or username", &self.login_id))
-            .child(field("Password", &self.password))
-            .child(field("MFA code (if enabled)", &self.mfa))
+            .child(TextField::new(&self.server).label("Server URL"))
+            .child(TextField::new(&self.login_id).label("Email or username"))
+            .child(TextField::new(&self.password).label("Password"))
+            .child(TextField::new(&self.mfa).label("MFA code (if enabled)"))
             .child(
-                h_flex()
-                    .gap_3()
-                    .items_center()
-                    .child(
-                        v_flex()
-                            .flex_1()
-                            .child("Domain (LDAP) sign-in")
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(theme.muted_foreground)
-                                    .child("For servers using the LDAP auth plugin"),
-                            ),
-                    )
-                    .child(Switch::new("ldap").checked(self.ldap).on_click(cx.listener(
-                        |view, on: &bool, _, cx| {
-                            view.ldap = *on;
-                            cx.notify();
-                        },
-                    ))),
+                Toggle::new("ldap", "Domain (LDAP) sign-in", self.ldap)
+                    .description("For servers using the LDAP auth plugin")
+                    .immediate(true)
+                    .on_change({
+                        let view = cx.entity().downgrade();
+                        move |on, _, cx| {
+                            let _ = view.update(cx, |view, cx| {
+                                view.ldap = on;
+                                cx.notify();
+                            });
+                        }
+                    }),
             )
             .child(
-                Button::new("sign-in")
-                    .label("Sign in")
+                Command::new("sign-in", "Sign in")
                     .primary()
-                    .w_full()
                     .disabled(self.busy)
-                    .on_click(cx.listener(|view, _, _, cx| view.submit(cx))),
+                    .on_trigger(run(|view, cx| view.submit(cx)))
+                    .as_button()
+                    .full_width(),
             )
             .child(
-                Button::new("sso")
-                    .label(if self.waiting_for_browser {
-                        "Waiting for the browser…"
-                    } else {
-                        "Single sign-on"
-                    })
-                    .w_full()
-                    .disabled(self.waiting_for_browser || self.busy)
-                    .on_click(cx.listener(|view, _, _, cx| view.single_sign_on(cx))),
+                Command::new(
+                    "sso",
+                    if self.waiting_for_browser { "Waiting for the browser…" } else { "Single sign-on" },
+                )
+                .disabled(self.waiting_for_browser || self.busy)
+                .on_trigger(run(|view, cx| view.single_sign_on(cx)))
+                .as_button()
+                .full_width(),
             )
             .children(self.providers.iter().enumerate().map(|(index, provider)| {
                 let provider = provider.clone();
-                Button::new(("provider", index))
-                    .label(format!("Sign in with {}", provider.name))
-                    .w_full()
+                let view = cx.entity().downgrade();
+                Command::new(("provider", index), format!("Sign in with {}", provider.name))
                     .disabled(self.waiting_for_browser)
-                    .on_click(cx.listener(move |view, _, _, cx| {
-                        let url = view.server.read(cx).value().trim().to_string();
-                        if let Ok(client) = Client::new(&url) {
-                            view.open_browser(client, provider.clone(), cx);
-                        }
-                    }))
+                    .on_trigger(move |_, cx| {
+                        let _ = view.update(cx, |view, cx| {
+                            let url = view.server.read(cx).value(cx).trim().to_string();
+                            if let Ok(client) = Client::new(&url) {
+                                view.open_browser(client, provider.clone(), cx);
+                            }
+                        });
+                    })
+                    .as_button()
+                    .full_width()
             }))
             .when(self.busy, |form| {
-                form.child(h_flex().justify_center().child(Spinner::new()))
+                form.child(row().justify_center().child(spinner()))
             })
             .when_some(self.error.clone(), |form, error| {
-                form.child(
-                    div()
-                        .text_center()
-                        .text_color(theme.danger)
-                        .child(error),
-                )
+                form.child(div().text_center().text_color(colors.danger).child(error))
             });
 
-        div()
-            .id("login")
-            .size_full()
-            .overflow_y_scroll()
-            .lock_scroll_axis()
-            .bg(theme.background)
-            .child(
-                div()
-                    .min_h_full()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .p_6()
-                    .child(form),
-            )
+        div().size_full().bg(colors.surface).child(scroll_y(
+            "login",
+            cx,
+            div()
+                .min_h_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .p_6()
+                .child(form),
+        ))
     }
 }
 

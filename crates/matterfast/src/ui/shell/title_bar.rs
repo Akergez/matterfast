@@ -1,4 +1,5 @@
-use gpui_kit::component::{h_flex, ActiveTheme, Selectable};
+use gpui_adaptive::prim::row;
+use gpui_adaptive::ActiveColors as _;
 use gpui_kit::prelude::*;
 use gpui_kit::{div, img, px, AnyElement, Context, FontWeight, MouseButton, Window};
 
@@ -19,13 +20,13 @@ impl Shell {
     /// It is painted as the channel sidebar is: the two are one frame around
     /// the conversation, in one colour, and everything else is the page.
     pub(super) fn title_bar(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let theme = cx.theme().clone();
+        let colors = cx.colors();
         let width = f32::from(window.viewport_size().width);
         let roomy = width >= SIDEBAR_PAGE_BELOW;
         // A window that is not the one being typed into says so quietly.
         let active = window.is_window_active();
 
-        let mut name = h_flex()
+        let mut name = row()
             .flex_1()
             .min_w_0()
             .gap_2()
@@ -36,26 +37,26 @@ impl Shell {
                     .flex_none()
                     .text_sm()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .when(!active, |name| name.text_color(theme.muted_foreground))
+                    .when(!active, |name| name.text_color(colors.muted))
                     .child("Matterfast"),
             );
-        let mut actions = h_flex()
+        let mut actions = row()
             .flex_1()
             .min_w_0()
             .pr_1()
             .gap_1()
             .items_center()
             .justify_end();
-        let mut bar = h_flex().size_full().gap_3().items_center();
+        let mut bar = row().size_full().gap_3().items_center();
 
         // The toolkit's bar is a gradient of its own colour; a flat fill in
         // the sidebar's is what makes the two read as one surface. On a phone
         // it is a plain strip, tall enough for a finger, with the status bar
         // already made room for above it (see `render`).
         let frame = gpui_android_glue::chrome::Frame {
-            background: Some(theme.sidebar),
-            border: Some(theme.sidebar_border),
-            foreground: Some(theme.sidebar_foreground),
+            background: Some(colors.nav),
+            border: Some(colors.nav_border),
+            foreground: Some(colors.on_nav),
             height: Some(px(44.)),
             below_status_bar: false,
         };
@@ -72,7 +73,7 @@ impl Shell {
                     .min_w_0()
                     .truncate()
                     .text_xs()
-                    .text_color(theme.muted_foreground)
+                    .text_color(colors.muted)
                     .child(server),
             );
         }
@@ -89,7 +90,7 @@ impl Shell {
 
         let inbox_open = ui.channels.showing_inbox();
         actions = actions.child(
-            h_flex()
+            row()
                 .id("title-inbox")
                 .flex_none()
                 .gap_1()
@@ -100,11 +101,14 @@ impl Shell {
                 })
                 .child(
                     kit::icon_button("title-inbox-button", Lucide::Inbox, "Inbox")
-                        .selected(inbox_open)
-                        .on_click(cx.listener(|shell, _, _, cx| {
-                            cx.stop_propagation();
-                            shell.menu(MenuAction::OpenInbox, cx)
-                        })),
+                        .checked(inbox_open)
+                        .on_trigger({
+                            let shell = cx.weak_entity();
+                            move |_, cx| {
+                                shell.update(cx, |shell, cx| shell.menu(MenuAction::OpenInbox, cx)).ok();
+                            }
+                        })
+                        .as_icon_button(),
                 ),
         );
 

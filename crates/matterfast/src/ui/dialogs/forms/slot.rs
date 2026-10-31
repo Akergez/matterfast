@@ -1,11 +1,11 @@
-use gpui_kit::component::input::InputState;
+use gpui_adaptive::TextFieldState;
 use gpui_kit::Entity;
 
 /// A field as the form holds it while it is open.
 pub(super) enum Slot {
     Text {
         label: String,
-        input: Entity<InputState>,
+        input: Entity<TextFieldState>,
     },
     Switch {
         label: String,

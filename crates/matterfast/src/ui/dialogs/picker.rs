@@ -1,6 +1,5 @@
 use std::rc::Rc;
 
-use gpui_kit::component::WindowExt;
 use gpui_kit::{App, Entity};
 
 use super::list::{open_list, List, Row};
@@ -72,7 +71,7 @@ impl Picker {
                     .subtitle(subtitle)
                     .on_activate(move |cx| {
                         on_pick(id.clone(), cx);
-                        ui.with_window(cx, |window, cx| window.close_dialog(cx));
+                        ui.with_window(cx, gpui_adaptive::Sheet::close);
                     })
             })
             .collect();

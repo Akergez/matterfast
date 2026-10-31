@@ -17,7 +17,6 @@ pub struct Shell {
     /// for as long as this window shows it.
     pub(super) session_subscriptions: Vec<Subscription>,
     /// What a right click on a link in a message opened, while it is open.
-    pub(super) link_menu: Option<super::link_menu::LinkMenu>,
     /// The desktop switching between light and dark, which a "System" theme
     /// has to follow while the window is open.
     _appearance: Subscription,
@@ -61,7 +60,6 @@ impl Shell {
             phone_panel_restore_focus: None,
             notice: RefCell::new(None),
             session_subscriptions: Vec::new(),
-            link_menu: None,
             back: None,
         }
     }

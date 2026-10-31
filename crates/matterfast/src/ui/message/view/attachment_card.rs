@@ -1,6 +1,7 @@
+use gpui_adaptive::prim::{column, row};
+use gpui_adaptive::ActiveColors as _;
 use std::rc::Rc;
 
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme};
 use gpui_kit::prelude::*;
 use gpui_kit::{div, px, AnyElement, App, FontWeight};
 
@@ -18,8 +19,8 @@ pub(super) fn attachment_card(
     card: &mattermost_api::models::MessageAttachment,
     cx: &App,
 ) -> AnyElement {
-    let muted = cx.theme().muted_foreground;
-    let mut content = v_flex().flex_1().min_w_0().gap_0p5().pl_2p5();
+    let muted = cx.colors().muted;
+    let mut content = column().flex_1().min_w_0().gap_0p5().pl_2p5();
     let mut empty = true;
 
     if !card.author_name.is_empty() {
@@ -39,7 +40,7 @@ pub(super) fn attachment_card(
             let url = card.title_link.clone();
             title
                 .id("title")
-                .text_color(cx.theme().link)
+                .text_color(cx.colors().link)
                 .cursor_pointer()
                 .hover(|style| style.underline())
                 .child(card.title.clone())
@@ -61,7 +62,7 @@ pub(super) fn attachment_card(
         if field.title.is_empty() && value.is_empty() {
             continue;
         }
-        let mut row = v_flex().mt_1();
+        let mut row = column().mt_1();
         if !field.title.is_empty() {
             row = row.child(
                 div()
@@ -78,7 +79,7 @@ pub(super) fn attachment_card(
     }
 
     if !card.actions.is_empty() {
-        let mut row = h_flex().mt_1p5().gap_1p5().flex_wrap();
+        let mut row = row().mt_1p5().gap_1p5().flex_wrap();
         for action in card.actions.iter().filter(|action| !action.id.is_empty()) {
             row = row.child(card_action(ui, post_id, index, action, cx));
         }
@@ -98,8 +99,8 @@ pub(super) fn attachment_card(
     // The sender's colour, where they gave one — it usually encodes the status
     // of whatever the card reports, so it carries meaning. Without one, a
     // muted version of the text colour, so it still reads as a card.
-    let stripe = card_color(&card.color, cx).unwrap_or(cx.theme().foreground.opacity(0.3));
-    h_flex()
+    let stripe = card_color(&card.color, cx).unwrap_or(cx.colors().text.opacity(0.3));
+    row()
         .id(("card", index))
         .w_full()
         .items_stretch()

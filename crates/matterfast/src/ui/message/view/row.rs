@@ -1,6 +1,8 @@
+use gpui_adaptive::Tone;
+use gpui_adaptive::prim;
+use gpui_adaptive::ActiveColors as _;
 use std::rc::Rc;
 
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme};
 use gpui_kit::prelude::*;
 use gpui_kit::{div, px, AnyElement, App, ElementId, FontWeight, SharedString};
 use mattermost_api::models::Post;
@@ -45,13 +47,13 @@ pub fn row(
     let mine = post.user_id == st.me.id;
     let saved = st.saved_posts.contains(&post.id);
 
-    let theme = cx.theme();
-    let muted = theme.muted_foreground;
+    let colors = cx.colors();
+    let muted = colors.muted;
 
-    let mut content = v_flex().flex_1().min_w_0().gap_0p5();
+    let mut content = prim::column().flex_1().min_w_0().gap_0p5();
 
     if !options.grouped {
-        let mut meta = h_flex().gap_1p5().items_center().child(
+        let mut meta = prim::row().gap_1p5().items_center().child(
             div()
                 .id("author")
                 .font_weight(FontWeight::SEMIBOLD)
@@ -84,9 +86,9 @@ pub fn row(
 
         if let Some(priority) = post.priority() {
             if priority.is_urgent() {
-                meta = meta.child(kit::tag("URGENT", theme.danger, theme.danger_foreground));
+                meta = meta.child(kit::tag("URGENT", Tone::Danger, cx));
             } else if priority.is_important() {
-                meta = meta.child(kit::tag("IMPORTANT", theme.primary, theme.primary_foreground));
+                meta = meta.child(kit::tag("IMPORTANT", Tone::Info, cx));
             }
         }
         content = content.child(frame_log::timed("meta", meta));
@@ -149,7 +151,7 @@ pub fn row(
     // button in the hover bar, and a permanent "Reply" under every message is
     // just noise.
 
-    let theme = cx.theme();
+    let colors = cx.colors();
     let leading: AnyElement = if options.grouped {
         // Keep the text aligned with the messages above it.
         div().w(px(40.)).flex_none().into_any_element()
@@ -181,7 +183,7 @@ pub fn row(
         .then(|| hover_actions(ui, post, options.show_thread_footer, mine, saved, cx));
     drop(st);
 
-    h_flex()
+    prim::row()
         .id(ElementId::Name(format!("post-{}", post.id).into()))
         .group("message")
         .relative()
@@ -192,8 +194,8 @@ pub fn row(
         .py_0p5()
         .when(!options.grouped, |row| row.mt_2())
         .rounded_md()
-        .hover(|style| style.bg(theme.list_hover))
-        .when(options.highlight, |row| row.bg(theme.accent))
+        .hover(|style| style.bg(colors.hover))
+        .when(options.highlight, |row| row.bg(colors.hover))
         // An unconfirmed send stays dimmed until the server echoes it back.
         .when(post.is_pending(), |row| row.opacity(0.55))
         // First, so that it lies under what the row holds.

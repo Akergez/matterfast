@@ -1,6 +1,6 @@
-use gpui_kit::component::input::Escape;
-use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::{v_flex, ActiveTheme, Sizable, WindowExt};
+use gpui_adaptive::prim::{column, spinner};
+use gpui_adaptive::{ActiveColors as _, AppFrame, Notice, Sheet};
+use gpui_adaptive::keys::Escape;
 use gpui_kit::prelude::*;
 use gpui_kit::{div, px, Context, Focusable, Window};
 
@@ -19,13 +19,10 @@ use crate::ui::MenuAction;
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::ui::frame_log::begin();
-        let theme = cx.theme().clone();
+        let colors = cx.colors();
         let notice = self.notice.borrow_mut().take();
         if let Some(notice) = notice {
-            window.push_notification(
-                gpui_kit::component::notification::Notification::new().message(notice),
-                cx,
-            );
+            Notice::new(notice).push(window, cx);
         }
 
         let phone_session = self.session().is_some()
@@ -86,7 +83,7 @@ impl Render for Shell {
             .is_some_and(|ui| {
                 ui.split.collapsed.get()
                     && !crate::ui::lightbox::is_open(ui)
-                    && !window.has_active_sheet(cx)
+                    && !Sheet::is_open(window, cx)
             })
             .then(|| self.back.as_ref().and_then(|back| back.gesture(window, cx)))
             .flatten()
@@ -97,7 +94,6 @@ impl Render for Shell {
             ui.split.follow_back(gesture.filter(|_| !panel));
         }
         let title_bar = (!phone_session).then(|| self.title_bar(window, cx));
-        let link_menu = self.link_menu_layer(window);
         let (bars_top, bars_bottom) = system_bars(window);
         let body = match &self.stage {
             Stage::Loading => div()
@@ -105,20 +101,18 @@ impl Render for Shell {
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(Spinner::new().large())
+                .child(spinner())
                 .into_any_element(),
             Stage::Login(view) => view.clone().into_any_element(),
             Stage::ChooseServer(servers) => choose_server(&servers.clone(), cx),
             Stage::Session(ui, panes) => session(&ui.clone(), panes, window, cx),
         };
 
-        v_flex()
+        let shell = column()
             .id("matterfast")
             .key_context(CONTEXT)
             .track_focus(&self.focus)
             .size_full()
-            .bg(theme.background)
-            .text_color(theme.foreground)
             .on_action(cx.listener(|shell, _: &QuickSwitch, _, cx| {
                 shell.menu(MenuAction::QuickSwitch, cx)
             }))
@@ -150,7 +144,7 @@ impl Render for Shell {
             // or an open panel, outranks that; a dialog or a completion list
             // does not, and gets the key as usual.
             .capture_action(cx.listener(|shell, _: &Escape, window, cx| {
-                let busy = window.has_active_dialog(cx)
+                let busy = Sheet::is_open(window, cx)
                     || shell
                         .session()
                         .is_some_and(|ui| ui.chat.completing() || ui.right.completing());
@@ -160,15 +154,21 @@ impl Render for Shell {
             }))
             // Under the status bar, in the title bar's colour so that the two
             // read as one.
-            .child(div().flex_none().h(px(bars_top)).w_full().bg(theme.sidebar))
+            .child(div().flex_none().h(px(bars_top)).w_full().bg(colors.nav))
             .when_some(title_bar, |shell, title| {
                 shell.child(crate::ui::frame_log::timed("title", title))
             })
             .child(div().flex_1().min_h_0().w_full().child(body))
             .pb(px(bars_bottom))
-            .when_some(link_menu, |shell, menu| shell.child(menu))
             .when(crate::ui::frame_log::enabled(), |shell| {
                 shell.child(crate::ui::frame_log::end())
-            })
+            });
+        // The shell draws its own title bar and keeps clear of the system's
+        // bars; the frame gives it the window's colours and the layers the
+        // design system's sheets and snackbars are drawn on.
+        AppFrame::new("Matterfast")
+            .under_status_bar(true)
+            .edge_to_edge(true)
+            .child(shell)
     }
 }

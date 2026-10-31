@@ -9,8 +9,8 @@
 
 use std::rc::Rc;
 
-use gpui_kit::component::input::TextareaState;
-use gpui_kit::{App, ClipboardItem, Entity, Focusable, Window};
+use gpui_adaptive::TextFieldState;
+use gpui_kit::{App, ClipboardItem, Entity, Window};
 
 use super::autocomplete::Composer;
 use super::Ui;
@@ -67,11 +67,11 @@ pub(crate) fn pasted(
     let Some(pasted) = item.text() else {
         return false;
     };
-    let selected = composer.read(cx).selected_text().to_string();
+    let selected = composer.read(cx).selected_text(cx);
     let Some(link) = link_over(&selected, &pasted) else {
         return false;
     };
-    composer.update(cx, |composer, cx| composer.replace(link, window, cx));
+    composer.update(cx, |composer, cx| composer.replace_selection(link, window, cx));
     // The text changed without the box saying so: the draft and the
     // completion list have to hear of it all the same.
     ui.later(cx, move |ui, cx| match which {
@@ -83,10 +83,10 @@ pub(crate) fn pasted(
 
 /// The composer that has the keyboard, if one of them does.
 pub(crate) fn focused(ui: &Rc<Ui>, window: &Window, cx: &App) -> Option<Composer> {
-    let has_focus = |composer: &Option<Entity<TextareaState>>| {
+    let has_focus = |composer: &Option<Entity<TextFieldState>>| {
         composer
             .as_ref()
-            .is_some_and(|composer| composer.focus_handle(cx).is_focused(window))
+            .is_some_and(|composer| composer.read(cx).is_focused(window, cx))
     };
     if has_focus(&ui.chat.composer.borrow()) {
         Some(Composer::Channel)

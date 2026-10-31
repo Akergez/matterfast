@@ -1,6 +1,7 @@
+use gpui_adaptive::prim::row;
+use gpui_adaptive::ActiveColors as _;
 use std::rc::Rc;
 
-use gpui_kit::component::{h_flex, ActiveTheme};
 use gpui_kit::prelude::*;
 use gpui_kit::{div, AnyElement, App, FontWeight};
 use mattermost_api::models::Post;
@@ -47,9 +48,9 @@ pub(super) fn embed_preview(
         .channel(&quoted.channel_id)
         .map(|c| st.channel_title(c))
         .unwrap_or_default();
-    let muted = cx.theme().muted_foreground;
+    let muted = cx.colors().muted;
 
-    let mut header = h_flex()
+    let mut header = row()
         .gap_1p5()
         .items_center()
         .child(kit::avatar(ui, &quoted.user_id, &author, 20.))
@@ -75,7 +76,7 @@ pub(super) fn embed_preview(
         preview_card(cx)
             .id(("quote", index))
             .cursor_pointer()
-            .hover(|style| style.border_color(cx.theme().ring))
+            .hover(|style| style.border_color(cx.colors().focus))
             .child(header)
             .child(markdown(
                 eid("quoted"),

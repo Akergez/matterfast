@@ -1,6 +1,6 @@
+use gpui_adaptive::ActiveColors as _;
 use std::rc::Rc;
 
-use gpui_kit::component::ActiveTheme;
 use gpui_kit::prelude::*;
 use gpui_kit::{div, px, AnyElement, App, Context, Window};
 
@@ -21,7 +21,7 @@ impl Render for DividerGhost {
 /// the pointer is on it. A double click gives the column back its share.
 pub(super) fn divider(ui: &Rc<Ui>, which: Divider, offset: f32, cx: &App) -> AnyElement {
     const GRIP: f32 = 7.0;
-    let line = cx.theme().ring;
+    let line = cx.colors().focus;
     let strip = div()
         .id(match which {
             Divider::Sidebar => "divider-sidebar",

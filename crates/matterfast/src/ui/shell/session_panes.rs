@@ -1,6 +1,6 @@
+use gpui_adaptive::prim::row;
 use std::rc::Rc;
 
-use gpui_kit::component::{h_flex, WindowExt};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     canvas, div, px, AnyElement, App, DispatchPhase, DragMoveEvent, ScrollWheelEvent, Window,
@@ -70,7 +70,7 @@ pub(super) fn session(
             most,
         )
     };
-    let mut panes = h_flex().relative().size_full().min_h_0().on_drag_move({
+    let mut panes = row().relative().size_full().min_h_0().on_drag_move({
         let ui = ui.clone();
         move |moved: &DragMoveEvent<Divider>, _, cx| {
             let which = *moved.drag(cx);
@@ -114,7 +114,7 @@ pub(super) fn session(
         // keeps its own swipes. A script may swipe on any system: it is how
         // this is tested where there is no finger.
         let swipes = cfg!(target_os = "android") || crate::ui::script::playing();
-        if swipes && !ui.overlay.shown() && !window.has_active_dialog(cx) {
+        if swipes && !ui.overlay.shown() && !gpui_adaptive::Sheet::is_open(window, cx) {
             let ui = ui.clone();
             panes = panes.child(
                 canvas(

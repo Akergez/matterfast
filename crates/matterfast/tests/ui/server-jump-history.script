@@ -40,9 +40,9 @@ wait:3000
 expect:held=91
 expect:behind=yes
 # The button at the bottom right of the feed.
-move:1288,758
+move:1288,774
 wait:300
-click:1288,758
+click:1288,774
 wait:3000
 expect:behind=no
 expect:held=60

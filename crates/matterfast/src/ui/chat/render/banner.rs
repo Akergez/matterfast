@@ -1,4 +1,5 @@
-use gpui_kit::component::{h_flex, ActiveTheme};
+use gpui_adaptive::prim::row;
+use gpui_adaptive::ActiveColors as _;
 use gpui_kit::prelude::*;
 use gpui_kit::{div, App, SharedString};
 
@@ -9,7 +10,7 @@ pub(super) fn banner(
     color: gpui_kit::Hsla,
     cx: &App,
 ) -> gpui_kit::Div {
-    h_flex()
+    row()
         .flex_none()
         .w_full()
         .px_3()
@@ -19,6 +20,6 @@ pub(super) fn banner(
         .text_sm()
         .bg(color.opacity(0.14))
         .border_b_1()
-        .border_color(cx.theme().border)
+        .border_color(cx.colors().border)
         .child(div().flex_1().min_w_0().child(text.into()))
 }

@@ -1,8 +1,8 @@
-use gpui_kit::component::select::SearchableVec;
-use gpui_kit::component::ThemeMode;
+use gpui_adaptive::theme::ThemeMode;
 use gpui_kit::{Context, Window};
 
 use super::dialog::Settings;
+use super::names::options;
 use crate::{appearance, themes};
 
 impl Settings {
@@ -16,10 +16,7 @@ impl Settings {
         for (state, mode) in [(&self.light, ThemeMode::Light), (&self.dark, ThemeMode::Dark)] {
             let names = themes::names(mode, cx);
             let worn = appearance::theme_for(mode, cx);
-            state.update(cx, |state, cx| {
-                state.set_items(SearchableVec::new(names), window, cx);
-                state.set_selected_value(&worn, window, cx);
-            });
+            state.update(cx, |state, cx| state.set_options(options(names), Some(worn), window, cx));
         }
         cx.notify();
     }

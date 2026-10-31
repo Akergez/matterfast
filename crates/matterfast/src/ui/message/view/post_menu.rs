@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
+use gpui_adaptive::{Command, Menu};
 use gpui_kit::{AnyElement, IntoElement};
 use mattermost_api::models::Post;
 
@@ -40,19 +40,17 @@ pub(super) fn post_menu_entries(post: &Post, mine: bool) -> Vec<(&'static str, P
 }
 
 pub(super) fn overflow_menu(ui: &Rc<Ui>, post: &Post, mine: bool) -> AnyElement {
-    let entries = post_menu_entries(post, mine);
-    let post_id = post.id.clone();
-    let ui = ui.clone();
-    kit::icon_button("more-actions", Lucide::Ellipsis, "More actions")
-        .dropdown_menu(move |mut menu, _, _| {
-            for (label, action) in &entries {
-                let action = *action;
-                let post_id = post_id.clone();
-                menu = menu.item(PopupMenuItem::new(*label).on_click(ui.click(
-                    move |ui, cx| ui.dispatch(Action::Post(post_id.clone(), action), cx),
-                )));
-            }
-            menu
-        })
+    let commands = post_menu_entries(post, mine).into_iter().map(|(label, action)| {
+        let post_id = post.id.clone();
+        let command = Command::new(label, label)
+            .on_trigger(ui.run(move |ui, cx| ui.dispatch(Action::Post(post_id.clone(), action), cx)));
+        if action == PostAction::Delete {
+            command.destructive()
+        } else {
+            command
+        }
+    });
+    Menu::new(kit::icon_button("more-actions", Lucide::Ellipsis, "More actions"))
+        .commands(commands)
         .into_any_element()
 }

@@ -44,7 +44,7 @@ impl SearchBox {
         };
         let (text, cursor) = {
             let input = input.read(cx);
-            (input.value().to_string(), input.cursor())
+            (input.value(cx).to_string(), input.cursor(cx))
         };
         let hint = hint_at(&text, cursor.min(text.len()));
         let rows = hint.as_ref().map_or_else(Vec::new, |hint| {
@@ -85,13 +85,13 @@ impl SearchBox {
         };
         let (text, cursor) = {
             let input = input.read(cx);
-            (input.value().to_string(), input.cursor())
+            (input.value(cx).to_string(), input.cursor(cx))
         };
         let (text, caret) = accept(&text, cursor, &picked);
         self.window.update(cx, move |window, cx| {
             input.update(cx, |input, cx| {
                 input.set_value(text.clone(), window, cx);
-                input.set_selected_range(caret..caret, cx);
+                input.set_cursor(caret, cx);
                 input.focus(window, cx);
             });
         });
@@ -103,7 +103,7 @@ impl SearchBox {
         let Some(input) = self.input.borrow().clone() else {
             return;
         };
-        let terms = input.read(cx).value().trim().to_string();
+        let terms = input.read(cx).value(cx).trim().to_string();
         if terms.is_empty() {
             return;
         }

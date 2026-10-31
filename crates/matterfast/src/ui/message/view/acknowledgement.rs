@@ -1,7 +1,7 @@
+use gpui_adaptive::prim::row;
+use gpui_adaptive::{ActiveColors as _, Command};
 use std::rc::Rc;
 
-use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::{h_flex, ActiveTheme, Sizable};
 use gpui_kit::prelude::*;
 use gpui_kit::{div, AnyElement, App};
 use mattermost_api::models::Post;
@@ -20,12 +20,11 @@ pub(super) fn acknowledgement(ui: &Rc<Ui>, post: &Post, st: &AppState, cx: &App)
         .unwrap_or_default();
     let mine = acks.iter().any(|a| a.user_id == st.me.id);
 
-    let button = Button::new("acknowledge")
-        .label(if mine { "Acknowledged" } else { "Acknowledge" })
-        .small()
-        .when(mine, |button| button.success())
-        .when(!mine, |button| button.primary())
-        .on_click(ui.click({
+    let button = Command::new("acknowledge", if mine { "Acknowledged" } else { "Acknowledge" })
+        .checked(mine);
+    let button = if mine { button } else { button.primary() };
+    let button = button
+        .on_trigger(ui.run({
             let post_id = post.id.clone();
             move |ui, cx| {
                 ui.dispatch(
@@ -40,9 +39,10 @@ pub(super) fn acknowledgement(ui: &Rc<Ui>, post: &Post, st: &AppState, cx: &App)
                     cx,
                 )
             }
-        }));
+        }))
+        .as_button();
 
-    let mut row = h_flex().gap_2().items_center().mt_1().child(button);
+    let mut row = row().gap_2().items_center().mt_1().child(button);
     if !acks.is_empty() {
         let names: Vec<String> = acks
             .iter()
@@ -53,7 +53,7 @@ pub(super) fn acknowledgement(ui: &Rc<Ui>, post: &Post, st: &AppState, cx: &App)
             "acknowledged",
             div()
                 .text_sm()
-                .text_color(cx.theme().muted_foreground)
+                .text_color(cx.colors().muted)
                 .child(format!("{} acknowledged", acks.len())),
             names.join(", "),
         ));

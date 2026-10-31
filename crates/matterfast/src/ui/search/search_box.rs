@@ -1,7 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use gpui_kit::component::input::InputState;
+use gpui_adaptive::TextFieldState;
 use gpui_kit::{App, Entity};
 
 use super::hint::Hint;
@@ -12,7 +12,7 @@ use crate::ui::WindowSlot;
 pub struct SearchBox {
     pub(super) window: Rc<WindowSlot>,
     /// The field, while there is a window to put it in.
-    pub(super) input: RefCell<Option<Entity<InputState>>>,
+    pub(super) input: RefCell<Option<Entity<TextFieldState>>>,
     /// What the word under the cursor asks for; `None` closes the list.
     pub(super) hint: RefCell<Option<Hint>>,
     pub(super) rows: RefCell<Vec<Suggestion>>,
@@ -40,7 +40,7 @@ impl SearchBox {
         }
     }
 
-    pub(crate) fn attach(&self, input: Entity<InputState>) {
+    pub(crate) fn attach(&self, input: Entity<TextFieldState>) {
         *self.input.borrow_mut() = Some(input);
     }
 
@@ -93,7 +93,7 @@ impl SearchBox {
         self.input
             .borrow()
             .as_ref()
-            .map(|input| input.read(cx).value().to_string())
+            .map(|input| input.read(cx).value(cx).to_string())
             .unwrap_or_default()
     }
 

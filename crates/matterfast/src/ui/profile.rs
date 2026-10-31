@@ -1,10 +1,10 @@
 //! The profile card, the way Mattermost shows it when you click a name.
 
+use gpui_adaptive::{Command, prim};
+use gpui_adaptive::ActiveColors as _;
 use std::rc::Rc;
 
 use chrono::Utc;
-use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme, WindowExt};
 use gpui_kit::prelude::*;
 use gpui_kit::{div, px, App, FontWeight};
 use mattermost_api::models::{Presence, User};
@@ -25,23 +25,23 @@ pub fn show(ui: &Rc<Ui>, user_id: &str, cx: &mut App) -> bool {
     let user_id = user_id.to_string();
     let card_ui = ui.clone();
     ui.with_window(cx, move |window, cx| {
-        gpui_android_glue::back::open_dialog(window, cx, move |dialog, _, cx| {
-            // Read on every draw: presence and the picture both change while
-            // the card is up.
-            dialog.w(px(320.)).child(card(&card_ui, &user_id, cx))
-        });
+        // Read on every draw: presence and the picture both change while
+        // the card is up.
+        let drawn = cx.new(|_| crate::ui::dialogs::Drawn::new(move |_, cx| card(&card_ui, &user_id, cx)));
+        let options = gpui_adaptive::SheetOptions { width: Some(gpui_kit::rems(20.)), ..Default::default() };
+        gpui_adaptive::Sheet::open_with(drawn, options, window, cx);
     });
     true
 }
 
 fn detail_row(label: &'static str, value: String, cx: &App) -> gpui_kit::Div {
-    h_flex()
+    prim::row()
         .gap_2()
         .text_xs()
         .child(
             div()
                 .flex_none()
-                .text_color(cx.theme().muted_foreground)
+                .text_color(cx.colors().muted)
                 .child(label),
         )
         .child(div().flex_1().min_w_0().truncate().text_right().child(value))
@@ -58,8 +58,8 @@ fn card(ui: &Rc<Ui>, user_id: &str, cx: &App) -> gpui_kit::AnyElement {
     let last_seen = st.last_seen.get(user_id).copied().filter(|at| *at > 0);
     drop(st);
 
-    let muted = cx.theme().muted_foreground;
-    let mut column = v_flex()
+    let muted = cx.colors().muted;
+    let mut column = prim::column()
         .items_center()
         .gap_1()
         .child(kit::avatar(ui, &user.id, &display, 72.))
@@ -79,7 +79,7 @@ fn card(ui: &Rc<Ui>, user_id: &str, cx: &App) -> gpui_kit::AnyElement {
         // Presence, as a coloured dot plus a word — colour alone would not
         // survive a high-contrast theme or a colour-blind reader.
         .child(
-            h_flex()
+            prim::row()
                 .mt_1()
                 .gap_1p5()
                 .items_center()
@@ -134,7 +134,7 @@ fn card(ui: &Rc<Ui>, user_id: &str, cx: &App) -> gpui_kit::AnyElement {
         );
     }
 
-    let mut details = v_flex().w_full().mt_3().gap_1();
+    let mut details = prim::column().w_full().mt_3().gap_1();
     if let Some(local) = local_time(&user) {
         details = details.child(detail_row("Local time", local, cx));
     }
@@ -146,17 +146,18 @@ fn card(ui: &Rc<Ui>, user_id: &str, cx: &App) -> gpui_kit::AnyElement {
     if !is_me {
         let id = user.id.clone();
         column = column.child(
-            Button::new("send-message")
-                .label("Send message")
-                .primary()
-                .mt_3()
-                .on_click({
-                    let ui = ui.clone();
-                    move |_, window, cx| {
-                        window.close_dialog(cx);
-                        ui.dispatch(Action::OpenDirectMessage(id.clone()), cx);
-                    }
-                }),
+            div().mt_3().child(
+                Command::new("send-message", "Send message")
+                    .primary()
+                    .on_trigger({
+                        let ui = ui.clone();
+                        move |window, cx| {
+                            gpui_adaptive::Sheet::close(window, cx);
+                            ui.dispatch(Action::OpenDirectMessage(id.clone()), cx);
+                        }
+                    })
+                    .as_button(),
+            ),
         );
     }
     column.into_any_element()

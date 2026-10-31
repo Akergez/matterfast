@@ -1,9 +1,7 @@
+use gpui_adaptive::prim::{column, row};
+use gpui_adaptive::{ActiveColors as _, Command, TextField};
 use std::rc::Rc;
 
-use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::input::Textarea;
-use gpui_kit::component::scroll::ScrollableElement;
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme};
 use gpui_kit::prelude::*;
 use gpui_kit::{div, list, AnyElement, App};
 
@@ -22,7 +20,7 @@ pub(super) fn thread_view(ui: &Rc<Ui>, cx: &App) -> AnyElement {
             .flex()
             .items_center()
             .justify_center()
-            .text_color(cx.theme().muted_foreground)
+            .text_color(cx.colors().muted)
             .child("Loading thread…")
             .into_any_element();
     }
@@ -35,7 +33,7 @@ pub(super) fn thread_view(ui: &Rc<Ui>, cx: &App) -> AnyElement {
             Some(ThreadRow::Divider(label)) => div()
                 .px_3()
                 .pt_2()
-                .child(kit::labelled_rule(label.clone(), cx.theme().border, cx))
+                .child(kit::labelled_rule(label.clone(), None, cx))
                 .into_any_element(),
             Some(ThreadRow::Post {
                 post,
@@ -59,16 +57,13 @@ pub(super) fn thread_view(ui: &Rc<Ui>, cx: &App) -> AnyElement {
     .size_full()
     .py_3();
 
-    let mut pane = v_flex().flex_1().min_h_0().child(
+    let mut pane = column().flex_1().min_h_0().child(
         div()
             .relative()
             .flex_1()
             .min_h_0()
             .child(
-                div()
-                    .size_full()
-                    .child(rows)
-                    .vertical_scrollbar(&list_state),
+                gpui_adaptive::prim::list_scrollbar(div().size_full().child(rows), &list_state, cx),
             )
             // Over the bottom of the replies, just above the box it answers.
             .when_some(completion_list(ui, Composer::Thread, cx), |replies, list| {
@@ -78,7 +73,7 @@ pub(super) fn thread_view(ui: &Rc<Ui>, cx: &App) -> AnyElement {
 
     if let Some(composer) = panel.composer.borrow().clone() {
         pane = pane.child(
-            h_flex()
+            row()
                 .flex_none()
                 .gap_2()
                 .px_3()
@@ -86,8 +81,8 @@ pub(super) fn thread_view(ui: &Rc<Ui>, cx: &App) -> AnyElement {
                 .pb_3()
                 .items_center()
                 .child(
-                    completion_keys(ui, Composer::Thread, div().flex_1().min_w_0()).child(
-                        Textarea::new(&composer).on_paste({
+                    div().flex_1().min_w_0().child(
+                        TextField::new(&composer).on_key(completion_keys(ui, Composer::Thread)).on_paste({
                             let ui = ui.clone();
                             move |item, window, cx| {
                                 crate::ui::paste_link::pasted(
@@ -102,11 +97,11 @@ pub(super) fn thread_view(ui: &Rc<Ui>, cx: &App) -> AnyElement {
                     ),
                 )
                 .child(
-                    Button::new("reply")
+                    Command::new("reply", "Reply  (Enter)")
                         .icon(Lucide::SendHorizontal)
                         .primary()
-                        .tooltip("Reply  (Enter)")
-                        .on_click(ui.click(|ui, cx| ui.right.submit(ui, cx))),
+                        .on_trigger(ui.run(|ui, cx| ui.right.submit(ui, cx)))
+                        .as_icon_button(),
                 ),
         );
     }

@@ -3,8 +3,6 @@
 
 use std::rc::Rc;
 
-use gpui_kit::component::notification::Notification;
-use gpui_kit::component::WindowExt;
 use gpui_kit::{AnyWindowHandle, App, ClickEvent, Window};
 
 use super::ui::Ui;
@@ -27,6 +25,18 @@ impl Ui {
         let ui = self.clone();
         let f = Rc::new(f);
         move |_, _, cx| {
+            let ui = ui.clone();
+            let f = f.clone();
+            cx.defer(move |cx| f(&ui, cx));
+        }
+    }
+
+    /// A command's work that runs `f` with the session, later: what
+    /// [`Self::click`] is to a click, for `Command::on_trigger`.
+    pub fn run(self: &Rc<Self>, f: impl Fn(&Rc<Ui>, &mut App) + 'static) -> impl Fn(&mut Window, &mut App) + 'static {
+        let ui = self.clone();
+        let f = Rc::new(f);
+        move |_, cx| {
             let ui = ui.clone();
             let f = f.clone();
             cx.defer(move |cx| f(&ui, cx));
@@ -78,7 +88,7 @@ impl Ui {
     pub fn toast(&self, message: &str, cx: &mut App) {
         let message = message.to_string();
         self.window.update(cx, move |window, cx| {
-            window.push_notification(Notification::new().message(message.clone()), cx);
+            gpui_adaptive::Notice::new(message.clone()).push(window, cx);
         });
     }
 

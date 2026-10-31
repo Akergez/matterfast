@@ -1,22 +1,20 @@
-use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::{Icon, Sizable};
-use gpui_kit::prelude::*;
+use gpui_adaptive::Command;
 
 use crate::ui::kit::Lucide;
 
-/// A dock button that shows whether its feature is on.
+/// A dock button that shows whether its feature is on: filled while it is,
+/// in the danger colour when being on is something to notice (recording).
 pub(super) fn toggle(
     id: &'static str,
     icon: Lucide,
     tooltip: &'static str,
     on: bool,
     danger: bool,
-) -> Button {
-    Button::new(id)
-        .icon(Icon::from(icon))
-        .small()
-        .tooltip(tooltip)
-        .when(on && danger, |button| button.danger())
-        .when(on && !danger, |button| button.primary())
-        .when(!on, |button| button.ghost())
+) -> Command {
+    let command = Command::new(id, tooltip).icon(icon);
+    match (on, danger) {
+        (true, true) => command.destructive(),
+        (true, false) => command.primary(),
+        (false, _) => command,
+    }
 }

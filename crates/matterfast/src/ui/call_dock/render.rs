@@ -1,10 +1,9 @@
 use std::rc::Rc;
 
-use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::popover::Popover;
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Icon, Sizable};
+use gpui_adaptive::prim::{column, pressable, row, tooltip};
+use gpui_adaptive::{ActiveColors as _, ActiveScale as _, Command, Popup, Text};
 use gpui_kit::prelude::*;
-use gpui_kit::{div, px, AnyElement, App, FontWeight};
+use gpui_kit::{div, px, AnyElement, App};
 
 use super::constants::CALL_REACTIONS;
 use super::host_action::HostAction;
@@ -18,7 +17,7 @@ use crate::ui::{Action, Ui};
 pub fn render(ui: &Rc<Ui>, cx: &App) -> Option<AnyElement> {
     let st = ui.state.borrow();
     let call = st.call.as_ref()?;
-    let theme = cx.theme();
+    let colors = cx.colors();
     let (speaker, title, subtitle) = summary(call, &st);
     let i_am_host = call.host_id == st.me.id;
     let muted = call.muted;
@@ -39,84 +38,66 @@ pub fn render(ui: &Rc<Ui>, cx: &App) -> Option<AnyElement> {
             .items_center()
             .justify_center()
             .rounded_full()
-            .bg(theme.muted)
+            .bg(colors.sunken)
             .child(Lucide::Headphones)
             .into_any_element(),
     };
 
     // The whole summary is the way back to the call's channel — a chevron
     // alone would be a very small target for the most likely click here.
-    let summary = h_flex()
-        .id("call-summary")
+    let summary = pressable("call-summary", cx)
         .flex_1()
         .min_w_0()
         .gap_2p5()
         .p_1()
-        .items_center()
         .rounded_md()
-        .cursor_pointer()
-        .hover(|style| style.bg(theme.list_hover))
         .child(face)
         .child(
-            v_flex()
+            column()
                 .flex_1()
                 .min_w_0()
-                .child(
-                    div()
-                        .truncate()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(title),
-                )
-                .child(
-                    div()
-                        .truncate()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child(subtitle),
-                ),
+                .child(Text::title(title).truncate())
+                .child(Text::small(subtitle).muted().truncate()),
         )
         .child(Lucide::ChevronRight)
         .on_click(ui.click(|ui, cx| ui.dispatch(Action::OpenCallChannel, cx)));
 
     // Who is actually in there, with their hands and microphones. A count
     // answers "is it worth joining"; the list answers "who is that".
-    let people = Popover::new("call-people")
-        .trigger(kit::icon_button(
-            "people",
-            Lucide::Users,
-            "Who is in the call",
-        ))
-        .content({
-            let ui = ui.clone();
-            move |_, _, cx| roster(&ui, cx)
-        });
+    let people = Popup::new("call-people", kit::icon_button("people", Lucide::Users, "Who is in the call"), {
+        let ui = ui.clone();
+        move |_, _, cx| roster(&ui, cx)
+    });
 
-    let react = Popover::new("call-react")
-        .trigger(kit::icon_button("react", Lucide::FaceSlightlySmiling, "React"))
-        .content({
-            let ui = ui.clone();
-            move |_, _, _| {
-                let mut row = h_flex().gap_0p5();
-                for (index, (name, glyph)) in CALL_REACTIONS.into_iter().enumerate() {
-                    row = row.child(
-                        Button::new(("call-reaction", index))
-                            .ghost()
-                            .small()
-                            .label(glyph)
-                            .tooltip(format!(":{name}:"))
-                            .on_click(ui.click(move |ui, cx| {
-                                ui.dispatch(
-                                    Action::CallReaction(name.to_string(), glyph.to_string()),
-                                    cx,
-                                )
-                            })),
-                    );
-                }
-                row
+    let react = Popup::new("call-react", kit::icon_button("react", Lucide::FaceSlightlySmiling, "React"), {
+        let ui = ui.clone();
+        move |close, _, cx| {
+            let scale = cx.scale();
+            let mut reactions = row().gap_0p5();
+            for (index, (name, glyph)) in CALL_REACTIONS.into_iter().enumerate() {
+                let close = close.clone();
+                let react = ui.run(move |ui, cx| {
+                    ui.dispatch(Action::CallReaction(name.to_string(), glyph.to_string()), cx)
+                });
+                reactions = reactions.child(
+                    pressable(("call-reaction", index), cx)
+                        .justify_center()
+                        .size(scale.target)
+                        .rounded(scale.radius_control)
+                        .text_size(scale.title)
+                        .child(glyph)
+                        .tooltip(tooltip(format!(":{name}:")))
+                        .on_click(move |_, window, cx| {
+                            close(window, cx);
+                            react(window, cx);
+                        }),
+                );
             }
-        });
+            reactions.into_any_element()
+        }
+    });
 
-    let mut controls = h_flex()
+    let mut controls = row()
         .gap_0p5()
         .items_center()
         .child(react)
@@ -128,7 +109,8 @@ pub fn render(ui: &Rc<Ui>, cx: &App) -> Option<AnyElement> {
                 !muted,
                 false,
             )
-            .on_click(ui.click(|ui, cx| ui.dispatch(Action::ToggleMute, cx))),
+            .on_trigger(ui.run(|ui, cx| ui.dispatch(Action::ToggleMute, cx)))
+            .as_icon_button(),
         )
         .child(
             toggle(
@@ -142,7 +124,8 @@ pub fn render(ui: &Rc<Ui>, cx: &App) -> Option<AnyElement> {
                 sharing,
                 false,
             )
-            .on_click(ui.click(|ui, cx| ui.dispatch(Action::ToggleScreen, cx))),
+            .on_trigger(ui.run(|ui, cx| ui.dispatch(Action::ToggleScreen, cx)))
+            .as_icon_button(),
         )
         .child(
             toggle(
@@ -156,7 +139,8 @@ pub fn render(ui: &Rc<Ui>, cx: &App) -> Option<AnyElement> {
                 camera,
                 false,
             )
-            .on_click(ui.click(|ui, cx| ui.dispatch(Action::ToggleCamera, cx))),
+            .on_trigger(ui.run(|ui, cx| ui.dispatch(Action::ToggleCamera, cx)))
+            .as_icon_button(),
         )
         .child(
             toggle(
@@ -170,7 +154,8 @@ pub fn render(ui: &Rc<Ui>, cx: &App) -> Option<AnyElement> {
                 my_hand,
                 false,
             )
-            .on_click(ui.click(|ui, cx| ui.dispatch(Action::ToggleHand, cx))),
+            .on_trigger(ui.run(|ui, cx| ui.dispatch(Action::ToggleHand, cx)))
+            .as_icon_button(),
         )
         .child(
             toggle(
@@ -184,7 +169,8 @@ pub fn render(ui: &Rc<Ui>, cx: &App) -> Option<AnyElement> {
                 recording,
                 true,
             )
-            .on_click(ui.click(|ui, cx| ui.dispatch(Action::ToggleRecording, cx))),
+            .on_trigger(ui.run(|ui, cx| ui.dispatch(Action::ToggleRecording, cx)))
+            .as_icon_button(),
         );
 
     // Host-only, and destructive for everyone else in the call, so they sit
@@ -192,50 +178,48 @@ pub fn render(ui: &Rc<Ui>, cx: &App) -> Option<AnyElement> {
     if i_am_host {
         controls = controls
             .child(
-                kit::icon_button("mute-others", Lucide::MicOff, "Mute everyone else").on_click(
-                    ui.click(|ui, cx| {
+                kit::icon_button("mute-others", Lucide::MicOff, "Mute everyone else").on_trigger(
+                    ui.run(|ui, cx| {
                         // These take no target: they apply to the whole call.
                         ui.dispatch(
                             Action::HostControl(String::new(), HostAction::MuteOthers),
                             cx,
                         )
                     }),
-                ),
+                ).as_icon_button(),
             )
             .child(
-                Button::new("end-call")
-                    .icon(Icon::from(Lucide::X))
-                    .small()
-                    .danger()
-                    .tooltip("End the call for everyone")
-                    .on_click(ui.click(|ui, cx| {
+                Command::new("end-call", "End the call for everyone")
+                    .icon(Lucide::X)
+                    .destructive()
+                    .on_trigger(ui.run(|ui, cx| {
                         ui.dispatch(Action::HostControl(String::new(), HostAction::EndCall), cx)
-                    })),
+                    }))
+                    .as_icon_button(),
             );
     }
 
     controls = controls.child(div().flex_1()).child(
-        Button::new("leave")
-            .icon(Icon::from(Lucide::PhoneOff))
-            .small()
-            .danger()
-            .tooltip("Leave the call")
-            .on_click(ui.click(|ui, cx| ui.dispatch(Action::ToggleCall, cx))),
+        Command::new("leave", "Leave the call")
+            .icon(Lucide::PhoneOff)
+            .destructive()
+            .on_trigger(ui.run(|ui, cx| ui.dispatch(Action::ToggleCall, cx)))
+            .as_icon_button(),
     );
 
     let caption = ui.dock.caption.borrow().clone();
     Some(
-        v_flex()
+        column()
             .id("call-dock")
             .flex_none()
             .w_full()
             .gap_1()
             .p_1p5()
             .border_t_1()
-            .border_color(theme.border)
-            .bg(theme.background)
-            .text_color(theme.foreground)
-            .child(h_flex().gap_0p5().items_center().child(summary).child(people))
+            .border_color(colors.border)
+            .bg(colors.surface)
+            .text_color(colors.text)
+            .child(row().gap_0p5().items_center().child(summary).child(people))
             // It takes no space when the server is not captioning.
             .when(!caption.is_empty(), |dock| {
                 dock.child(
@@ -243,7 +227,7 @@ pub fn render(ui: &Rc<Ui>, cx: &App) -> Option<AnyElement> {
                         .px_1()
                         .text_xs()
                         .line_clamp(2)
-                        .text_color(theme.muted_foreground)
+                        .text_color(colors.muted)
                         .child(caption),
                 )
             })

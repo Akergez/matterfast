@@ -67,10 +67,10 @@
 //! Coordinates are divided by `MATTERFAST_SCRIPT_SCALE`, so they can be read
 //! straight off a screenshot taken on a scaled display.
 
+use gpui_adaptive::ActiveColors as _;
 use std::collections::VecDeque;
 use std::time::Duration;
 
-use gpui_kit::component::{ActiveTheme as _, WindowExt as _};
 use gpui_kit::{
     point, px, AnyWindowHandle, App, Keystroke, Modifiers, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, Pixels, PlatformInput, Point, ScrollDelta, ScrollWheelEvent,
@@ -245,9 +245,9 @@ fn observe(what: &str, window: &mut Window, cx: &mut App) -> Option<String> {
                 Some(state.channel_title(channel))
             })
             .unwrap_or_default(),
-        "dialog" => if window.has_active_dialog(cx) { "open" } else { "closed" }.to_string(),
-        "theme" => if cx.theme().mode.is_dark() { "dark" } else { "light" }.to_string(),
-        "theme-name" => cx.theme().theme_name().to_string(),
+        "dialog" => if gpui_adaptive::Sheet::is_open(window, cx) { "open" } else { "closed" }.to_string(),
+        "theme" => if cx.colors().dark { "dark" } else { "light" }.to_string(),
+        "theme-name" => theme_name(cx),
         "category-offset" => ui.map(|ui| ui.channels.swipe_offset().round() as i32).unwrap_or(0).to_string(),
         "sidebar-body-top" => ui.map(|ui| ui.channels.body_top().round() as i32).unwrap_or(0).to_string(),
         "panel-sliding" => ui.is_some_and(|ui| !ui.overlay.shown() && ui.overlay.visible() > 0.0).to_string(),
@@ -335,7 +335,7 @@ fn observe(what: &str, window: &mut Window, cx: &mut App) -> Option<String> {
         "quick-reactions" => ui
             .map(|ui| ui.state.borrow().quick_reactions().join("|"))
             .unwrap_or_default(),
-        "sheet" =>if window.has_active_sheet(cx) { "open" } else { "closed" }.to_string(),
+        "sheet" => if gpui_adaptive::Sheet::is_open(window, cx) { "open" } else { "closed" }.to_string(),
         "page-offset" => ui
             .map(|ui| (ui.split.open() * f32::from(window.viewport_size().width)).round() as i32)
             .unwrap_or(0)
@@ -344,7 +344,7 @@ fn observe(what: &str, window: &mut Window, cx: &mut App) -> Option<String> {
             .map(|ui| (-f32::from(ui.channels.tabs_scroll.offset().x)).round() as i32)
             .unwrap_or(0)
             .to_string(),
-        "link-menu" =>if super::shell::link_menu_open(cx) { "open" } else { "closed" }.to_string(),
+        "link-menu" =>if super::shell::link_menu_open(window, cx) { "open" } else { "closed" }.to_string(),
         _ => return None,
     })
 }
@@ -592,4 +592,9 @@ mod tests {
             ]
         );
     }
+}
+
+/// The name of the theme worn, which a scenario checks after installing one.
+fn theme_name(cx: &App) -> String {
+    gpui_adaptive::theme::name(cx).to_string()
 }

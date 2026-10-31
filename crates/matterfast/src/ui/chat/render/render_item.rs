@@ -1,6 +1,7 @@
+use gpui_adaptive::Tone;
+use gpui_adaptive::ActiveColors as _;
 use std::rc::Rc;
 
-use gpui_kit::component::ActiveTheme;
 use gpui_kit::prelude::*;
 use gpui_kit::{div, px, AnyElement, App};
 
@@ -19,7 +20,7 @@ pub(super) fn render_item(
         FeedItem::Start(title) => div()
             .px_3()
             .pb_2()
-            .text_color(cx.theme().muted_foreground)
+            .text_color(cx.colors().muted)
             .child(format!("This is the beginning of {title}"))
             .into_any_element(),
         FeedItem::Empty => div()
@@ -34,12 +35,12 @@ pub(super) fn render_item(
         FeedItem::Day(day) => div()
             .px_3()
             .pt_2()
-            .child(kit::labelled_rule(day.clone(), cx.theme().border, cx))
+            .child(kit::labelled_rule(day.clone(), None, cx))
             .into_any_element(),
         FeedItem::Unread => div()
             .px_3()
             .pt_2()
-            .child(kit::labelled_rule("New messages", cx.theme().danger, cx))
+            .child(kit::labelled_rule("New messages", Some(Tone::Danger), cx))
             .into_any_element(),
         FeedItem::System { key, lines } => message::system_block(key, lines, cx),
         FeedItem::Post {

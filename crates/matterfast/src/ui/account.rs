@@ -4,18 +4,16 @@
 //! [`crate::state`] — each function takes callbacks and hands back what the
 //! person chose, so the API calls stay in [`super`] with the client.
 
+use gpui_adaptive::{prim, ActiveColors as _, Avatar, Command};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use chrono::{DateTime, Datelike, Days, Local, NaiveTime, TimeZone};
-use gpui_kit::component::avatar::Avatar;
-use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Sizable, Size, WindowExt};
 use gpui_kit::prelude::*;
 use gpui_kit::{div, px, App, Context, Entity, FontWeight, RenderImage, SharedString, Window};
 
-use super::dialogs::{self, Field, Form};
+use super::dialogs::{Field, Form};
 use super::Ui;
 use crate::runtime;
 
@@ -100,28 +98,27 @@ impl ProfileEditor {
 
 impl Render for ProfileEditor {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let avatar = Avatar::new()
-            .name(self.name.clone())
-            .with_size(Size::Size(px(96.)));
-        v_flex()
+        let avatar = Avatar::new("profile-picture", super::kit::initials(&self.name))
+            .size(gpui_kit::rems(6.));
+        prim::column()
             .gap_4()
             .child(
-                v_flex()
+                prim::column()
                     .items_center()
                     .gap_3()
                     .child(match &self.picture {
-                        Some(picture) => avatar.src(picture.clone()),
+                        Some(picture) => avatar.picture(picture.clone()),
                         None => avatar,
                     })
                     // The picker can be opened again after a mis-click.
-                    .child(
-                        Button::new("change-picture")
-                            .label("Change picture…")
-                            .small()
-                            .on_click(cx.listener(|editor, _, window, cx| {
-                                editor.choose_picture(window, cx)
-                            })),
-                    ),
+                    .child({
+                        let editor = cx.entity().downgrade();
+                        Command::new("change-picture", "Change picture…")
+                            .on_trigger(move |window, cx| {
+                                let _ = editor.update(cx, |editor, cx| editor.choose_picture(window, cx));
+                            })
+                            .as_button()
+                    }),
             )
             .child(self.form.clone())
     }
@@ -163,33 +160,27 @@ pub fn edit_profile(
             picture,
             on_avatar,
         });
-        gpui_android_glue::back::open_dialog(window, cx, move |dialog, _, _| {
-            let form = form.clone();
-            let on_save = on_save.clone();
-            dialog
-                .title("Edit profile")
-                .child(editor.clone())
-                .footer(dialogs::footer("Save"))
-                .on_ok(move |_, _, cx| {
-                    let values: Vec<String> = form
-                        .read(cx)
-                        .values(cx)
-                        .iter()
-                        .map(|value| value.text().trim().to_string())
-                        .collect();
-                    let on_save = on_save.clone();
-                    cx.defer(move |cx| {
-                        on_save(
-                            values[0].clone(),
-                            values[1].clone(),
-                            values[2].clone(),
-                            values[3].clone(),
-                            cx,
-                        )
-                    });
-                    true
-                })
-        });
+        gpui_adaptive::Form::new("Edit profile", editor)
+            .commit("Save", move |_, cx| {
+                let values: Vec<String> = form
+                    .read(cx)
+                    .values(cx)
+                    .iter()
+                    .map(|value| value.text().trim().to_string())
+                    .collect();
+                let on_save = on_save.clone();
+                cx.defer(move |cx| {
+                    on_save(
+                        values[0].clone(),
+                        values[1].clone(),
+                        values[2].clone(),
+                        values[3].clone(),
+                        cx,
+                    )
+                });
+                true
+            })
+            .open(window, cx);
     });
 }
 
@@ -222,7 +213,7 @@ impl StatusEditor {
 
 impl Render for StatusEditor {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme().clone();
+        let colors = cx.colors();
         let heading = |text: &'static str| {
             div()
                 .text_sm()
@@ -230,7 +221,7 @@ impl Render for StatusEditor {
                 .child(text)
         };
         let row = |id: (&'static str, usize)| {
-            h_flex()
+            prim::row()
                 .id(id)
                 .gap_2()
                 .px_2()
@@ -238,13 +229,13 @@ impl Render for StatusEditor {
                 .items_center()
                 .rounded_md()
                 .cursor_pointer()
-                .hover(|style| style.bg(theme.list_hover))
+                .hover(|style| style.bg(colors.hover))
         };
 
-        let mut column = v_flex().gap_3().child(self.form.clone());
+        let mut column = prim::column().gap_3().child(self.form.clone());
 
         if !self.recents.is_empty() {
-            let mut recents = v_flex().child(heading("Recent"));
+            let mut recents = prim::column().child(heading("Recent"));
             for (index, (emoji, text)) in self.recents.iter().enumerate() {
                 let (fill_emoji, fill_text) = (emoji.clone(), text.clone());
                 recents = recents.child(
@@ -262,7 +253,7 @@ impl Render for StatusEditor {
         // The ones people actually pick, with the timeout each one implies —
         // "in a meeting" is an hour, "on holiday" is a week. Typing that out
         // every time is the reason nobody sets a status.
-        let mut suggestions = v_flex().child(heading("Suggestions"));
+        let mut suggestions = prim::column().child(heading("Suggestions"));
         for (index, (glyph, shortcode, label, duration)) in SUGGESTIONS.iter().enumerate() {
             suggestions = suggestions.child(
                 row(("suggestion", index))
@@ -271,7 +262,7 @@ impl Render for StatusEditor {
                     .child(
                         div()
                             .text_xs()
-                            .text_color(theme.muted_foreground)
+                            .text_color(colors.muted)
                             .child(DURATIONS[*duration].1),
                     )
                     .on_click(cx.listener(move |editor, _, window, cx| {
@@ -316,42 +307,33 @@ pub fn custom_status(
             form: form.clone(),
             recents,
         });
-        gpui_android_glue::back::open_dialog(window, cx, move |dialog, _, _| {
-            let form = form.clone();
-            let on_set = on_set.clone();
-            let on_clear = on_clear.clone();
-            let mut footer = dialogs::footer("Set status");
-            // Nothing to clear until there is a status, so the button is not
-            // offered.
-            if is_set {
-                footer = footer.child(
-                    Button::new("clear")
-                        .label("Clear status")
-                        .danger()
-                        .on_click(move |_, window, cx| {
-                            window.close_dialog(cx);
-                            let on_clear = on_clear.clone();
-                            cx.defer(move |cx| on_clear(cx));
-                        }),
-                );
-            }
-            dialog
-                .title("Set a status")
-                .child(editor.clone())
-                .footer(footer)
-                .on_ok(move |_, _, cx| {
-                    let (values, duration) = {
-                        let form = form.read(cx);
-                        (form.values(cx), form.choice(2))
-                    };
-                    let emoji = values[0].text().trim().trim_matches(':').to_string();
-                    let text = values[1].text().trim().to_string();
-                    let expires = expires_at(Local::now(), duration);
-                    let on_set = on_set.clone();
-                    cx.defer(move |cx| on_set(emoji, text, expires, cx));
-                    true
+        // Nothing to clear until there is a status, so the command is not
+        // offered.
+        let clear = is_set.then(|| {
+            gpui_adaptive::Command::new("clear", "Clear status")
+                .destructive()
+                .on_trigger(move |_, cx| {
+                    let on_clear = on_clear.clone();
+                    cx.defer(move |cx| on_clear(cx));
                 })
         });
+        let form_view = gpui_adaptive::Form::new("Set a status", editor).commit("Set status", move |_, cx| {
+            let (values, duration) = {
+                let form = form.read(cx);
+                (form.values(cx), form.choice(2))
+            };
+            let emoji = values[0].text().trim().trim_matches(':').to_string();
+            let text = values[1].text().trim().to_string();
+            let expires = expires_at(Local::now(), duration);
+            let on_set = on_set.clone();
+            cx.defer(move |cx| on_set(emoji, text, expires, cx));
+            true
+        });
+        match clear {
+            Some(clear) => form_view.also(clear),
+            None => form_view,
+        }
+        .open(window, cx);
     });
 }
 

@@ -13,7 +13,7 @@
 
 use std::borrow::Cow;
 
-use gpui_kit::component::Theme;
+use gpui_adaptive::theme::Theme;
 #[cfg(not(target_os = "android"))]
 use gpui_kit::font;
 use gpui_kit::App;

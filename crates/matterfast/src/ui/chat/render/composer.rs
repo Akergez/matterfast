@@ -1,9 +1,7 @@
 use std::rc::Rc;
 
-use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::input::Textarea;
-use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
-use gpui_kit::component::{h_flex, Sizable, Size};
+use gpui_adaptive::prim::row;
+use gpui_adaptive::{Command, Menu, TextField};
 use gpui_kit::prelude::*;
 use gpui_kit::{div, AnyElement, App};
 
@@ -20,9 +18,21 @@ pub(super) fn composer(ui: &Rc<Ui>, cx: &App) -> AnyElement {
         return div().into_any_element();
     };
     let priority = chat.priority(cx);
-    let priority_ui = ui.clone();
+    // The button carries the current choice: a priority you set and cannot
+    // see is one you will send by accident.
+    let button = Command::new("priority", "Message priority").icon(Lucide::CircleAlert);
+    let button = match priority.as_ref() {
+        "urgent" => button.destructive(),
+        "important" => button.primary(),
+        _ => button,
+    };
+    let priorities = [("Standard", ""), ("Important", "important"), ("Urgent", "urgent")].map(|(label, value)| {
+        Command::new(label, label)
+            .checked(*chat.priority.borrow() == value)
+            .on_trigger(ui.run(move |ui, cx| ui.chat.set_priority(value, cx)))
+    });
 
-    h_flex()
+    row()
         .flex_none()
         .w_full()
         .gap_2()
@@ -32,43 +42,18 @@ pub(super) fn composer(ui: &Rc<Ui>, cx: &App) -> AnyElement {
         .items_center()
         .child(
             kit::icon_button("attach", Lucide::Paperclip, "Attach a file")
-                .with_size(Size::Medium)
-                .on_click(ui.click(|ui, cx| ui.dispatch(Action::PickAttachment, cx))),
+                .on_trigger(ui.run(|ui, cx| ui.dispatch(Action::PickAttachment, cx)))
+                .as_icon_button(),
         )
-        .child(
-            // The button carries the current choice: a priority you set and
-            // cannot see is one you will send by accident.
-            Button::new("priority")
-                .icon(Lucide::CircleAlert)
-                .tooltip("Message priority")
-                .when(priority == "urgent", |button| button.danger())
-                .when(priority == "important", |button| button.primary())
-                .when(priority.is_empty(), |button| button.ghost())
-                .dropdown_menu(move |mut menu, _, _| {
-                    for (label, value) in [
-                        ("Standard", ""),
-                        ("Important", "important"),
-                        ("Urgent", "urgent"),
-                    ] {
-                        menu = menu.item(
-                            PopupMenuItem::new(label)
-                                .checked(*priority_ui.chat.priority.borrow() == value)
-                                .on_click(priority_ui.click(move |ui, cx| {
-                                    ui.chat.set_priority(value, cx)
-                                })),
-                        );
-                    }
-                    menu
-                }),
-        )
+        .child(Menu::new(button).title("Message priority").commands(priorities))
         .child(
             kit::icon_button("schedule", Lucide::AlarmClock, "Send later")
-                .with_size(Size::Medium)
-                .on_click(ui.click(|ui, cx| ui.dispatch(Action::ScheduleMessage, cx))),
+                .on_trigger(ui.run(|ui, cx| ui.dispatch(Action::ScheduleMessage, cx)))
+                .as_icon_button(),
         )
         .child(
-            completion_keys(ui, Composer::Channel, div().flex_1().min_w_0()).child(
-                Textarea::new(&state).on_paste({
+            div().flex_1().min_w_0().child(
+                TextField::new(&state).on_key(completion_keys(ui, Composer::Channel)).on_paste({
                     let ui = ui.clone();
                     move |item, window, cx| {
                         paste_image(&ui, item, cx)
@@ -84,11 +69,11 @@ pub(super) fn composer(ui: &Rc<Ui>, cx: &App) -> AnyElement {
             ),
         )
         .child(
-            Button::new("send")
+            Command::new("send", "Send  (Enter)")
                 .icon(Lucide::SendHorizontal)
                 .primary()
-                .tooltip("Send  (Enter)")
-                .on_click(ui.click(|ui, cx| ui.chat.submit(ui, cx))),
+                .on_trigger(ui.run(|ui, cx| ui.chat.submit(ui, cx)))
+                .as_icon_button(),
         )
         .into_any_element()
 }

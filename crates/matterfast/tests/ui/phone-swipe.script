@@ -13,14 +13,14 @@ wait:400
 # A touch that stops whatever is still gliding.
 swipe:300,22,0,0
 wait:300
-expect:tabs-scroll=202
+expect:tabs-scroll=206
 expect:folder=inbox
 swipe:300,22,0,300
 wait:400
 swipe:300,22,0,0
 wait:300
 shot:phone-swipe-tabs-vertical
-expect:tabs-scroll=202
+expect:tabs-scroll=206
 expect:folder=inbox
 expect:page=list
 quit

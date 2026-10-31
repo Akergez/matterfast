@@ -1,8 +1,7 @@
+use gpui_adaptive::prim::{column, row, spinner};
+use gpui_adaptive::{ActiveColors as _, Command};
 use std::rc::Rc;
 
-use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Sizable};
 use gpui_kit::prelude::*;
 use gpui_kit::{div, img, px, AnyElement, App, ObjectFit};
 use mattermost_api::models::FileInfo;
@@ -18,7 +17,7 @@ use crate::ui::Ui;
 pub fn player(ui: &Rc<Ui>, index: usize, file: &FileInfo, cx: &App) -> AnyElement {
     let player = ui.media_player(&file.id);
     let stage = player.stage.get();
-    let theme = cx.theme();
+    let colors = cx.colors();
     let label = format!("{}  ·  {}", file.name, file.human_size());
     let progress = player
         .playback
@@ -31,44 +30,42 @@ pub fn player(ui: &Rc<Ui>, index: usize, file: &FileInfo, cx: &App) -> AnyElemen
     // playing and in the controls under the picture after.
     let play = || {
         let play_file = file.clone();
-        Button::new("play")
+        Command::new("play", match stage {
+                Stage::Playing => "Pause",
+                Stage::Ended => "Play again",
+                _ => "Play",
+            })
             .icon(match stage {
                 Stage::Playing => Lucide::Pause,
                 Stage::Ended => Lucide::RotateCcw,
                 _ => Lucide::Play,
             })
-            .small()
-            .tooltip(match stage {
-                Stage::Playing => "Pause",
-                Stage::Ended => "Play again",
-                _ => "Play",
-            })
-            .on_click(ui.click(move |ui, cx| ui.play_media(&play_file, cx)))
+            .on_trigger(ui.run(move |ui, cx| ui.play_media(&play_file, cx)))
     };
 
     let error = player.error.borrow().clone();
     let note = error.map(|message| {
         div()
             .text_xs()
-            .text_color(theme.muted_foreground)
+            .text_color(colors.muted)
             .child(message)
     });
 
     // Audio has nothing to show: it gets controls and no poster.
     if is_audio(file) {
-        return v_flex()
+        return column()
             .id(("audio", index))
             .mt_1()
             .gap_1()
             .child(
-                h_flex()
+                row()
                     .gap_2()
                     .items_center()
-                    .text_color(theme.muted_foreground)
+                    .text_color(colors.muted)
                     .child(if stage == Stage::Loading {
-                        Spinner::new().small().into_any_element()
+                        spinner()
                     } else {
-                        play().ghost().into_any_element()
+                        play().as_icon_button().into_any_element()
                     })
                     .child(div().flex_1().min_w_0().truncate().child(label))
                     .when_some(progress, |row, progress| {
@@ -107,27 +104,27 @@ pub fn player(ui: &Rc<Ui>, index: usize, file: &FileInfo, cx: &App) -> AnyElemen
                 .items_center()
                 .justify_center()
                 .child(if stage == Stage::Loading {
-                    Spinner::new().large().into_any_element()
+                    gpui_adaptive::Busy::new("loading").into_any_element()
                 } else {
-                    play().primary().into_any_element()
+                    play().primary().as_icon_button().into_any_element()
                 }),
         );
     }
 
-    let mut controls = h_flex()
+    let mut controls = row()
         .gap_2()
         .items_center()
         .text_xs()
-        .text_color(theme.muted_foreground);
+        .text_color(colors.muted);
     if matches!(stage, Stage::Playing | Stage::Paused) {
         let expand_id = file.id.clone();
-        controls = controls.child(play().ghost()).child(
-            kit::icon_button("expand", Lucide::Maximize, "Fill the window").on_click(ui.click(
+        controls = controls.child(play().as_icon_button()).child(
+            kit::icon_button("expand", Lucide::Maximize, "Fill the window").on_trigger(ui.run(
                 move |ui, cx| {
                     ui.media_player(&expand_id).expanded.set(true);
                     crate::ui::refresh(cx);
                 },
-            )),
+            )).as_icon_button(),
         );
     }
     controls = controls
@@ -136,7 +133,7 @@ pub fn player(ui: &Rc<Ui>, index: usize, file: &FileInfo, cx: &App) -> AnyElemen
             row.child(div().flex_none().child(progress))
         });
 
-    v_flex()
+    column()
         .id(("video", index))
         .mt_1()
         .gap_1()

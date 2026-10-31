@@ -1,7 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use gpui_kit::component::input::TextareaState;
+use gpui_adaptive::TextFieldState;
 use gpui_kit::{px, Entity, FollowMode, ListAlignment, ListState};
 
 use crate::ui::autocomplete::Completions;
@@ -68,7 +68,7 @@ pub struct ChatView {
     /// The message something just navigated to, marked out for a moment.
     pub(crate) highlight: RefCell<Option<String>>,
     /// The composer, while there is a window to put it in.
-    pub(crate) composer: RefCell<Option<Entity<TextareaState>>>,
+    pub(crate) composer: RefCell<Option<Entity<TextFieldState>>>,
     /// Set while a draft is being put back, so the change it causes is not
     /// mistaken for the user typing.
     pub(crate) restoring: Cell<bool>,
@@ -156,7 +156,7 @@ impl ChatView {
     }
 
     /// Gives the pane its composer. Called when a window is built.
-    pub(crate) fn attach(&self, composer: Entity<TextareaState>) {
+    pub(crate) fn attach(&self, composer: Entity<TextFieldState>) {
         *self.composer.borrow_mut() = Some(composer);
     }
 

@@ -1,6 +1,7 @@
+use gpui_adaptive::prim;
+use gpui_adaptive::ActiveColors as _;
 use std::rc::Rc;
 
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme};
 use gpui_kit::prelude::*;
 use gpui_kit::{div, px, AnyElement, App, FontWeight};
 
@@ -15,15 +16,15 @@ use crate::ui::{channel_avatar, kit};
 use crate::ui::{message, Action, Ui};
 
 pub(super) fn inbox_row_view(ui: &Rc<Ui>, index: usize, row: &InboxRow, cx: &App) -> AnyElement {
-    let theme = cx.theme();
-    let muted = theme.muted_foreground;
+    let colors = cx.colors();
+    let muted = colors.muted;
 
     // The three lines are set tight, each to a height of its own, so that
     // together they are a little shorter than the face beside them: the face
     // is what the row is as tall as, and the text does not stand out past
     // it at the top or the bottom.
-    let mut body = v_flex().flex_1().min_w_0().child(
-        h_flex()
+    let mut body = prim::column().flex_1().min_w_0().child(
+        prim::row()
             .h(HEADING)
             .line_height(HEADING)
             .gap_1p5()
@@ -88,7 +89,7 @@ pub(super) fn inbox_row_view(ui: &Rc<Ui>, index: usize, row: &InboxRow, cx: &App
     };
     // A badge is taller than the line it is on, and hangs over it rather
     // than push the row apart.
-    let mut footer = h_flex()
+    let mut footer = prim::row()
         .h(ANSWERS)
         .line_height(ANSWERS)
         .gap_1p5()
@@ -115,7 +116,7 @@ pub(super) fn inbox_row_view(ui: &Rc<Ui>, index: usize, row: &InboxRow, cx: &App
         _ => false,
     };
     let target = row.target.clone();
-    h_flex()
+    prim::row()
         .id(("inbox-row", index))
         .w_full()
         .h(INBOX_ROW)
@@ -124,10 +125,10 @@ pub(super) fn inbox_row_view(ui: &Rc<Ui>, index: usize, row: &InboxRow, cx: &App
         .px_2()
         .rounded_md()
         .cursor_pointer()
-        .when(selected, |row| row.bg(theme.sidebar_accent))
-        .when(!selected, |row| row.hover(|style| style.bg(theme.list_hover)))
+        .when(selected, |row| row.bg(colors.nav_selected))
+        .when(!selected, |row| row.hover(|style| style.bg(colors.hover)))
         .child({
-            let size = f32::from(INBOX_FACE.to_pixels(theme.font_size));
+            let size = f32::from(INBOX_FACE.to_pixels(gpui_adaptive::prim::rem_size(cx)));
             let channel_id = match &row.target {
                 Target::Thread { channel_id, .. }
                 | Target::Message { channel_id, .. }
@@ -153,9 +154,9 @@ pub(super) fn inbox_row_view(ui: &Rc<Ui>, index: usize, row: &InboxRow, cx: &App
                         .p_0p5()
                         .rounded_full()
                         .bg(if selected {
-                            theme.sidebar_accent
+                            colors.nav_selected
                         } else {
-                            theme.sidebar
+                            colors.nav
                         })
                         .child(kit::avatar(ui, &row.user_id, &row.author, size * 0.48)),
                 )

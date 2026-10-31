@@ -9,12 +9,12 @@
 
 use std::rc::Rc;
 
-use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Placement, WindowExt};
+use gpui_adaptive::prim::{column, pressable, row, testable, Text};
+use gpui_adaptive::{ActiveScale as _, Handler, Sheet};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    canvas, div, rems, App, ClickEvent, DispatchPhase, HitboxBehavior, LongPressEvent,
-    TouchPhase, Window,
+    canvas, App, Context, DispatchPhase, HitboxBehavior, LongPressEvent, Render, TouchPhase,
+    Window,
 };
 use mattermost_api::models::Post;
 
@@ -68,8 +68,7 @@ pub(super) fn long_press_area(ui: &Rc<Ui>, post_id: &str, allow_thread: bool) ->
                 if phase != DispatchPhase::Capture
                     || event.phase != TouchPhase::Started
                     || !hitbox.bounds.contains(&event.start_position)
-                    || window.has_active_dialog(cx)
-                    || window.has_active_sheet(cx)
+                    || Sheet::is_open(window, cx)
                 {
                     return;
                 }
@@ -83,16 +82,13 @@ pub(super) fn long_press_area(ui: &Rc<Ui>, post_id: &str, allow_thread: bool) ->
     .size_full()
 }
 
-/// A click in the sheet: put it away, then do `f`.
-fn choose(
-    ui: &Rc<Ui>,
-    f: impl Fn(&Rc<Ui>, &mut App) + 'static,
-) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static {
-    let pick = ui.click(f);
-    move |event, window, cx| {
-        window.close_sheet(cx);
-        pick(event, window, cx);
-    }
+/// A press in the sheet: put it away, then do `f`.
+fn choose(ui: &Rc<Ui>, f: impl Fn(&Rc<Ui>, &mut App) + 'static) -> Handler {
+    let pick = ui.run(f);
+    Rc::new(move |window, cx| {
+        Sheet::close(window, cx);
+        pick(window, cx);
+    })
 }
 
 fn open(ui: &Rc<Ui>, post_id: &str, allow_thread: bool, window: &mut Window, cx: &mut App) {
@@ -105,62 +101,73 @@ fn open(ui: &Rc<Ui>, post_id: &str, allow_thread: bool, window: &mut Window, cx:
         let saved = st.saved_posts.contains(post_id);
         (sheet_entries(&post, mine, saved, allow_thread), st.quick_reactions())
     };
-    let ui = ui.clone();
-    let post_id = post_id.to_string();
-    // Tall enough for the reactions and every entry, each a line and its
-    // padding; a short screen scrolls the rest.
-    let height = rems(5.5 + 2.5 * entries.len() as f32);
-    window.open_sheet_at(Placement::Bottom, cx, move |sheet, _, cx| {
-        let hover = cx.theme().list_hover;
+    let sheet = PostSheet {
+        ui: ui.clone(),
+        post_id: post_id.to_string(),
+        entries,
+        quick_reactions,
+    };
+    Sheet::open(cx.new(|_| sheet), window, cx);
+}
 
-        let mut quick = h_flex().flex_wrap().gap_1();
-        for (index, name) in quick_reactions.iter().enumerate() {
-            let name = name.clone();
-            let post_id = post_id.clone();
-            quick = quick.child(
-                Button::new(("quick", index))
-                    .ghost()
-                    .label(emoji::label(&name))
-                    .on_click(choose(&ui, move |ui, cx| {
-                        ui.dispatch(Action::ToggleReaction(post_id.clone(), name.clone()), cx)
-                    })),
-            );
+/// The reactions most used, then every entry, in the sheet.
+struct PostSheet {
+    ui: Rc<Ui>,
+    post_id: String,
+    entries: Vec<(&'static str, Choice)>,
+    quick_reactions: Vec<String>,
+}
+
+impl Render for PostSheet {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let (ui, post_id) = (&self.ui, &self.post_id);
+        let scale = cx.scale();
+        let mut quick = row().flex_wrap().gap_1().px(scale.space_m);
+        for (index, name) in self.quick_reactions.iter().enumerate() {
+            let pick = choose(ui, {
+                let (post_id, name) = (post_id.clone(), name.clone());
+                move |ui, cx| ui.dispatch(Action::ToggleReaction(post_id.clone(), name.clone()), cx)
+            });
+            quick = quick.child(testable(
+                pressable(("quick", index), cx)
+                    .justify_center()
+                    .size(scale.target)
+                    .rounded(scale.radius_control)
+                    .text_size(scale.title)
+                    .child(emoji::label(name))
+                    .on_click(move |_, window, cx| pick(window, cx)),
+            ));
         }
         let more = post_id.clone();
         quick = quick.child(
             kit::icon_button("more", Lucide::Search, "Search every emoji")
-                .on_click(choose(&ui, move |ui, cx| ui.pick_reaction(more.clone(), cx))),
+                .on_trigger({
+                    let pick = choose(ui, move |ui, cx| ui.pick_reaction(more.clone(), cx));
+                    move |window, cx| pick(window, cx)
+                })
+                .as_icon_button(),
         );
 
-        let mut list = v_flex();
-        for (index, (label, choice)) in entries.iter().enumerate() {
-            let post_id = post_id.clone();
+        let mut list = column();
+        for (index, (label, choice)) in self.entries.iter().enumerate() {
             let choice = choice.clone();
-            list = list.child(
-                div()
-                    .id(("entry", index))
+            let post_id = post_id.clone();
+            let pick = choose(ui, move |ui, cx| match &choice {
+                Choice::Reply(root) => ui.dispatch(Action::OpenThread(root.clone()), cx),
+                Choice::Post(action) => ui.dispatch(Action::Post(post_id.clone(), *action), cx),
+            });
+            list = list.child(testable(
+                pressable(("entry", index), cx)
                     .w_full()
-                    .px_3()
-                    .py_2()
-                    .rounded_md()
-                    .cursor_pointer()
-                    .hover(|style| style.bg(hover))
-                    .active(|style| style.bg(hover))
-                    .child(*label)
-                    .on_click(choose(&ui, move |ui, cx| match &choice {
-                        Choice::Reply(root) => ui.dispatch(Action::OpenThread(root.clone()), cx),
-                        Choice::Post(action) => {
-                            ui.dispatch(Action::Post(post_id.clone(), *action), cx)
-                        }
-                    })),
-            );
+                    .min_h(scale.row)
+                    .px(scale.space_l)
+                    .child(Text::body(*label))
+                    .on_click(move |_, window, cx| pick(window, cx)),
+            ));
         }
 
-        sheet
-            .size(height)
-            .resizable(false)
-            .child(v_flex().gap_2().child(quick).child(list))
-    });
+        column().gap(scale.space_s).pb(scale.space_s).child(quick).child(list)
+    }
 }
 
 #[cfg(test)]

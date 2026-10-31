@@ -1,7 +1,7 @@
+use gpui_adaptive::prim::{column, row};
+use gpui_adaptive::{ActiveColors as _, Command};
 use std::rc::Rc;
 
-use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Sizable};
 use gpui_kit::prelude::*;
 use gpui_kit::{div, px, AnyElement, App, FontWeight};
 
@@ -21,17 +21,17 @@ pub fn render(ui: &Rc<Ui>, cx: &mut App) -> Option<AnyElement> {
         PanelMode::Search(terms) => ("Search", terms.clone()),
     };
 
-    let theme = cx.theme();
-    let mut header = h_flex()
+    let colors = cx.colors();
+    let mut header = row()
         .flex_none()
         .h(px(48.))
         .px_2()
         .gap_1()
         .items_center()
         .border_b_1()
-        .border_color(theme.border)
+        .border_color(colors.border)
         .child(
-            v_flex()
+            column()
                 .flex_1()
                 .min_w_0()
                 .px_1()
@@ -41,7 +41,7 @@ pub fn render(ui: &Rc<Ui>, cx: &mut App) -> Option<AnyElement> {
                         div()
                             .truncate()
                             .text_xs()
-                            .text_color(theme.muted_foreground)
+                            .text_color(colors.muted)
                             .child(subtitle),
                     )
                 }),
@@ -52,28 +52,27 @@ pub fn render(ui: &Rc<Ui>, cx: &mut App) -> Option<AnyElement> {
     if matches!(mode, PanelMode::Thread(_)) {
         let following = panel.following.get();
         header = header.child(
-            Button::new("follow")
+            Command::new("follow", if following {
+                    "Following this thread"
+                } else {
+                    "Follow this thread"
+                })
                 .icon(if following {
                     Lucide::BellRing
                 } else {
                     Lucide::Bell
                 })
-                .small()
-                .tooltip(if following {
-                    "Following this thread"
-                } else {
-                    "Follow this thread"
-                })
-                .when(following, |button| button.primary())
-                .when(!following, |button| button.ghost())
-                .on_click(ui.click(move |ui, cx| {
+                .checked(following)
+                .on_trigger(ui.run(move |ui, cx| {
                     ui.dispatch(Action::FollowThread(!following), cx)
-                })),
+                }))
+                .as_icon_button(),
         );
     }
     header = header.child(
         kit::icon_button("close-panel", Lucide::X, "Close panel")
-            .on_click(ui.click(|ui, cx| ui.dispatch(Action::CloseRightPanel, cx))),
+            .on_trigger(ui.run(|ui, cx| ui.dispatch(Action::CloseRightPanel, cx)))
+            .as_icon_button(),
     );
 
     let body = match mode {
@@ -83,12 +82,12 @@ pub fn render(ui: &Rc<Ui>, cx: &mut App) -> Option<AnyElement> {
     };
 
     Some(
-        v_flex()
+        column()
             .id("right-panel")
             .size_full()
-            .bg(cx.theme().background)
+            .bg(cx.colors().surface)
             .border_l_1()
-            .border_color(cx.theme().border)
+            .border_color(cx.colors().border)
             .child(header)
             .child(body)
             .into_any_element(),

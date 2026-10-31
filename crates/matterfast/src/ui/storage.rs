@@ -1,10 +1,8 @@
 //! Storage preferences for the bounded HTTP/media cache.
 
+use gpui_adaptive::{prim, ActiveColors as _, Command, FieldEvent, TextField, TextFieldState};
 use std::rc::Rc;
 
-use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Disableable, Sizable};
 use gpui_kit::prelude::*;
 use gpui_kit::{div, px, App, Context, Entity, Subscription, Window};
 
@@ -19,7 +17,7 @@ const MAX_GIB: f64 = 50.0;
 
 struct Storage {
     cache: ResourceCache,
-    limit: Entity<InputState>,
+    limit: Entity<TextFieldState>,
     /// What the cache holds right now, once it has been measured.
     used: Option<u64>,
     clearing: bool,
@@ -55,28 +53,28 @@ impl Storage {
 
 impl Render for Storage {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let muted = cx.theme().muted_foreground;
+        let muted = cx.colors().muted;
         let row = |title: &'static str, subtitle: String| {
-            v_flex()
+            prim::column()
                 .flex_1()
                 .min_w_0()
                 .child(div().child(title))
                 .child(div().text_xs().text_color(muted).child(subtitle))
         };
-        v_flex()
+        prim::column()
             .gap_3()
             .child(
-                h_flex()
+                prim::row()
                     .gap_3()
                     .items_center()
                     .child(row(
                         "Media cache limit, GiB",
                         "Avatars, previews and opened attachments; 0 disables caching".into(),
                     ))
-                    .child(div().w(px(96.)).child(Input::new(&self.limit))),
+                    .child(div().w(px(96.)).child(TextField::new(&self.limit))),
             )
             .child(
-                h_flex()
+                prim::row()
                     .gap_3()
                     .items_center()
                     .child(row(
@@ -86,14 +84,16 @@ impl Render for Storage {
                             None => "Calculating…".to_string(),
                         },
                     ))
-                    .child(
-                        Button::new("clear")
-                            .label("Clear")
-                            .small()
-                            .danger()
+                    .child({
+                        let view = cx.entity().downgrade();
+                        Command::new("clear", "Clear")
+                            .destructive()
                             .disabled(self.clearing)
-                            .on_click(cx.listener(|storage, _, _, cx| storage.clear(cx))),
-                    ),
+                            .on_trigger(move |_, cx| {
+                                let _ = view.update(cx, |storage, cx| storage.clear(cx));
+                            })
+                            .as_button()
+                    }),
             )
             .child(
                 div()
@@ -108,17 +108,20 @@ pub fn show(ui: &Rc<Ui>, cache: ResourceCache, cx: &mut App) {
     ui.with_window(cx, move |window, cx| {
         let view = cx.new(|cx| {
             let current = crate::background::cache_limit_bytes() as f64 / GIB as f64;
-            let limit =
-                cx.new(|cx| InputState::new(window, cx).default_value(format!("{current:.2}")));
+            let limit = cx.new(|cx| {
+                let mut limit = TextFieldState::amount(window, cx);
+                limit.set_value(format!("{current:.2}"), window, cx);
+                limit
+            });
             let subscription = cx.subscribe(
                 &limit,
-                |storage: &mut Storage, limit, event: &InputEvent, cx| {
-                    if !matches!(event, InputEvent::Change) {
+                |storage: &mut Storage, limit, event: &FieldEvent, cx| {
+                    if *event != FieldEvent::Change {
                         return;
                     }
                     // Only what reads as a number is a limit; a half-typed
                     // one changes nothing yet.
-                    if let Some(bytes) = parse_limit(&limit.read(cx).value()) {
+                    if let Some(bytes) = parse_limit(&limit.read(cx).value(cx)) {
                         crate::background::set_cache_limit_bytes(bytes);
                         storage.cache.set_limit(bytes);
                     }
@@ -134,9 +137,8 @@ pub fn show(ui: &Rc<Ui>, cache: ResourceCache, cx: &mut App) {
             storage.measure(cx);
             storage
         });
-        gpui_android_glue::back::open_dialog(window, cx, move |dialog, _, _| {
-            dialog.title("Storage").child(view.clone())
-        });
+        let options = gpui_adaptive::SheetOptions { title: Some("Storage".into()), ..Default::default() };
+        gpui_adaptive::Sheet::open_with(view, options, window, cx);
     });
 }
 

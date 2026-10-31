@@ -12,6 +12,8 @@
 #   # mode: demo | server     sample data, or a fresh matterfast-testserver
 #   # size: 1320x840          the window it was written against
 #   # server: MM_HISTORY=150  what that server is started with, if anything
+#   # input: touch            drawn for a finger (the phone's skin); a pointer
+#                             otherwise
 #
 # It passes when the application reaches the script's `quit` and exits with
 # status 0: an `expect:` step that does not hold exits with 1, a crash exits
@@ -95,6 +97,7 @@ for file in "${files[@]}"; do
   [[ -f $file ]] || { echo "no such scenario: $name" >&2; exit 2; }
   mode=$(header "$file" mode)
   size=$(header "$file" size)
+  input=$(header "$file" input)
   # The steps: every line that is not blank or a comment, joined by `;`.
   script=$(grep -v -E '^\s*(#|$)' "$file" | paste -sd ';')
 
@@ -103,6 +106,7 @@ for file in "${files[@]}"; do
   env=(
     XDG_CONFIG_HOME="$home/config" XDG_CACHE_HOME="$home/cache" XDG_DATA_HOME="$home/data"
     MATTERFAST_NON_UNIQUE=1 MATTERFAST_SIZE="${size:-1320x840}" MATTERFAST_SCRIPT="$script"
+    MATTERFAST_INPUT="${input:-pointer}"
   )
   case $mode in
     demo) env+=(MATTERFAST_DEMO=1) ;;

@@ -1,8 +1,9 @@
+use gpui_adaptive::prim::spinner;
+use gpui_adaptive::prim;
+use gpui_adaptive::ActiveColors as _;
 use std::rc::Rc;
 
-use gpui_kit::base::InteractiveElementExt as _;
-use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::{v_flex, ActiveTheme, Sizable};
+use gpui_adaptive::prim::Scrolls as _;
 use gpui_kit::prelude::*;
 use gpui_kit::{div, px, AnyElement, App, FontWeight};
 
@@ -21,7 +22,7 @@ pub(super) fn search_view(ui: &Rc<Ui>, cx: &mut App) -> AnyElement {
             .flex()
             .justify_center()
             .pt_6()
-            .child(Spinner::new())
+            .child(spinner())
             .into_any_element();
     }
     if rows.is_empty() {
@@ -49,7 +50,7 @@ pub(super) fn search_view(ui: &Rc<Ui>, cx: &mut App) -> AnyElement {
         ui.dispatch(Action::SearchMore, cx);
     }
 
-    let mut column = v_flex()
+    let mut column = prim::column()
         .id("search-rows")
         .flex_1()
         .min_h_0()
@@ -59,7 +60,7 @@ pub(super) fn search_view(ui: &Rc<Ui>, cx: &mut App) -> AnyElement {
         let channel_id = row.post.channel_id.clone();
         let post_id = row.post.id.clone();
         column = column.child(
-            v_flex()
+            prim::column()
                 .id(("hit", index))
                 .w_full()
                 .child(
@@ -71,7 +72,7 @@ pub(super) fn search_view(ui: &Rc<Ui>, cx: &mut App) -> AnyElement {
                         .mt_2()
                         .text_xs()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(cx.theme().muted_foreground)
+                        .text_color(cx.colors().muted)
                         .cursor_pointer()
                         .hover(|style| style.underline())
                         .child(format!("{}  ›", row.channel))
@@ -101,9 +102,8 @@ pub(super) fn search_view(ui: &Rc<Ui>, cx: &mut App) -> AnyElement {
                 .flex()
                 .justify_center()
                 .py_3()
-                .child(Spinner::new().small()),
+                .child(spinner()),
         );
     }
-    column.overflow_y_scroll()
-        .lock_scroll_axis().into_any_element()
+    column.scrolls_y().into_any_element()
 }

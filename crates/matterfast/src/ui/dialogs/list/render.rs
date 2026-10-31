@@ -1,7 +1,5 @@
-use gpui_kit::base::InteractiveElementExt as _;
-use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::input::Input;
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Disableable, Sizable};
+use gpui_adaptive::prim::{self, Scrolls as _};
+use gpui_adaptive::{ActiveColors as _, Command, TextField};
 use gpui_kit::prelude::*;
 use gpui_kit::{div, px, Context, ElementId, FontWeight, Window};
 
@@ -12,10 +10,10 @@ use crate::ui::kit::{self, Lucide};
 
 impl Render for List {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme().clone();
-        let mut column = v_flex().gap_4();
+        let colors = cx.colors();
+        let mut column = prim::column().gap_4();
         for (section_index, section) in self.sections.iter().enumerate() {
-            let mut block = v_flex().gap_1p5();
+            let mut block = prim::column().gap_1p5();
             if !section.title.is_empty() {
                 block = block.child(
                     div()
@@ -25,13 +23,13 @@ impl Render for List {
                 );
             }
             if let Some(search) = &section.search {
-                block = block.child(Input::new(search).prefix(Lucide::Search).cleanable(true));
+                block = block.child(TextField::new(search).icon(Lucide::Search).cleanable());
             }
 
-            let mut rows = v_flex()
+            let mut rows = prim::column()
                 .rounded_md()
                 .border_1()
-                .border_color(theme.border)
+                .border_color(colors.border)
                 .overflow_hidden();
             if section.rows.is_empty() {
                 rows = rows.child(match section.empty {
@@ -43,7 +41,7 @@ impl Render for List {
                 });
             }
             for (row_index, row) in section.rows.iter().enumerate() {
-                let mut line = h_flex()
+                let mut line = prim::row()
                     .id(ElementId::Name(
                         format!("row-{section_index}-{}", row.id).into(),
                     ))
@@ -53,10 +51,10 @@ impl Render for List {
                     .py_2()
                     .items_center()
                     .when(row_index > 0, |line| {
-                        line.border_t_1().border_color(theme.border)
+                        line.border_t_1().border_color(colors.border)
                     });
                 line = line.child(
-                    v_flex()
+                    prim::column()
                         .flex_1()
                         .min_w_0()
                         .child(div().truncate().child(row.title.clone()))
@@ -65,7 +63,7 @@ impl Render for List {
                                 div()
                                     .text_xs()
                                     .line_clamp(2)
-                                    .text_color(theme.muted_foreground)
+                                    .text_color(colors.muted)
                                     .child(row.subtitle.clone()),
                             )
                         })
@@ -78,7 +76,7 @@ impl Render for List {
                         Trailing::Label(text) => div()
                             .flex_none()
                             .text_sm()
-                            .text_color(theme.muted_foreground)
+                            .text_color(colors.muted)
                             .child(text.clone())
                             .into_any_element(),
                         Trailing::Button {
@@ -89,17 +87,23 @@ impl Render for List {
                             let key = (row.id.clone(), index);
                             let pressed = self.pressed.contains(&key);
                             let action = action.clone();
-                            Button::new(("button", index))
-                                .label(if pressed { done.clone() } else { label.clone() })
-                                .small()
-                                .primary()
-                                .disabled(pressed)
-                                .on_click(cx.listener(move |list, _, _, cx| {
+                            let list = cx.weak_entity();
+                            Command::new(
+                                ("button", index),
+                                if pressed { done.clone() } else { label.clone() },
+                            )
+                            .primary()
+                            .disabled(pressed)
+                            .on_trigger(move |_, cx| {
+                                list.update(cx, |list, cx| {
                                     list.pressed.insert(key.clone());
                                     cx.notify();
                                     run_later(&action, cx);
-                                }))
-                                .into_any_element()
+                                })
+                                .ok();
+                            })
+                            .as_button()
+                            .into_any_element()
                         }
                         Trailing::Icon {
                             icon,
@@ -108,16 +112,23 @@ impl Render for List {
                         } => {
                             let key = (row.id.clone(), index);
                             let action = action.clone();
-                            kit::icon_button(("icon", index), icon.clone(), tooltip.clone())
+                            kit::icon_button(("icon", index), *icon, tooltip.clone())
                                 // It only stops a second click on the way to
                                 // the server; the row stays until the caller
                                 // sends the list back.
                                 .disabled(self.pressed.contains(&key))
-                                .on_click(cx.listener(move |list, _, _, cx| {
-                                    list.pressed.insert(key.clone());
-                                    cx.notify();
-                                    run_later(&action, cx);
-                                }))
+                                .on_trigger({
+                                    let list = cx.weak_entity();
+                                    move |_, cx| {
+                                        list.update(cx, |list, cx| {
+                                            list.pressed.insert(key.clone());
+                                            cx.notify();
+                                            run_later(&action, cx);
+                                        })
+                                        .ok();
+                                    }
+                                })
+                                .as_icon_button()
                                 .into_any_element()
                         }
                     });
@@ -125,7 +136,7 @@ impl Render for List {
                 if let Some(action) = row.activate.clone() {
                     line = line
                         .cursor_pointer()
-                        .hover(|style| style.bg(theme.list_hover))
+                        .hover(|style| style.bg(colors.hover))
                         .on_click(move |_, _, cx| run_later(&action, cx));
                 }
                 rows = rows.child(line);
@@ -136,10 +147,10 @@ impl Render for List {
         if let (Some(form), Some(action)) = (self.form.clone(), self.form_action.clone()) {
             let submit = form.clone();
             column = column.child(
-                v_flex()
+                prim::column()
                     .gap_1p5()
                     .child(
-                        h_flex()
+                        prim::row()
                             .items_center()
                             .child(
                                 div()
@@ -148,15 +159,13 @@ impl Render for List {
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child(self.form_title.clone()),
                             )
-                            .child(Button::new("add").label("Add").small().primary().on_click(
-                                move |_, window, cx| {
+                            .child(Command::new("add", "Add").primary().on_trigger(move |window, cx| {
                                     let values = submit.read(cx).values(cx);
                                     // Ready for the next one.
                                     submit.update(cx, |form, cx| form.clear_texts(window, cx));
                                     let action = action.clone();
                                     cx.defer(move |cx| action(values, cx));
-                                },
-                            )),
+                                },).as_button()),
                     )
                     .child(form),
             );
@@ -165,8 +174,7 @@ impl Render for List {
         div()
             .id("list-dialog")
             .max_h(px(520.))
-            .overflow_y_scroll()
-            .lock_scroll_axis()
+            .scrolls_y()
             .child(column)
     }
 }

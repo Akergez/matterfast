@@ -12,7 +12,7 @@ impl ChatView {
         self.composer
             .borrow()
             .as_ref()
-            .map(|composer| composer.read(cx).value().to_string())
+            .map(|composer| composer.read(cx).value(cx).to_string())
             .unwrap_or_default()
     }
 
@@ -32,7 +32,7 @@ impl ChatView {
             composer.update(cx, |composer, cx| {
                 composer.set_value(text.clone(), window, cx);
                 // Put the cursor where they left off, not at the front.
-                composer.set_selected_range(text.len()..text.len(), cx);
+                composer.set_cursor(text.len(), cx);
             });
         });
         self.restoring.set(false);
@@ -57,7 +57,7 @@ impl ChatView {
         let Some(composer) = self.composer.borrow().clone() else {
             return;
         };
-        let empty = composer.read(cx).value().is_empty();
+        let empty = composer.read(cx).value(cx).is_empty();
         crate::ui::session::completion_asked(ui, Composer::Channel, &composer, cx);
         // Restoring a draft is not typing, and was returned from above.
         ui.dispatch(Action::ComposerChanged(!empty), cx);

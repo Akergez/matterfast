@@ -21,7 +21,7 @@ impl RightPanel {
         self.composer
             .borrow()
             .as_ref()
-            .map(|composer| composer.read(cx).value().to_string())
+            .map(|composer| composer.read(cx).value(cx).to_string())
             .unwrap_or_default()
     }
 
@@ -39,7 +39,7 @@ impl RightPanel {
         self.window.update(cx, move |window, cx| {
             composer.update(cx, |composer, cx| {
                 composer.set_value(text.clone(), window, cx);
-                composer.set_selected_range(text.len()..text.len(), cx);
+                composer.set_cursor(text.len(), cx);
             });
         });
         self.restoring.set(false);

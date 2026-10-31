@@ -1,6 +1,7 @@
+use gpui_adaptive::prim::{column, row};
+use gpui_adaptive::ActiveColors as _;
 use std::rc::Rc;
 
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme};
 use gpui_kit::prelude::*;
 use gpui_kit::{canvas, div, list, px, AnyElement, App, ElementId, Window};
 
@@ -21,10 +22,10 @@ pub fn render(
     cx: &mut App,
 ) -> AnyElement {
     let st = ui.state.borrow();
-    let theme = cx.theme().clone();
+    let colors = cx.colors();
     let collapsed = ui.split.collapsed.get();
     let searching = collapsed && ui.search_box.compact_expanded();
-    let header = h_flex()
+    let header = row()
         .id("sidebar-header")
         .flex_none()
         .h(px(48.))
@@ -32,7 +33,7 @@ pub fn render(
         .gap_1()
         .items_center()
         .border_b_1()
-        .border_color(theme.sidebar_border)
+        .border_color(colors.nav_border)
         .child(switcher(ui, cx))
         .child(if searching {
             div()
@@ -50,16 +51,19 @@ pub fn render(
         })
         .child(if searching {
             kit::icon_button("close-search", Lucide::X, "Close search")
-                .on_click(ui.click(|ui, cx| {
+                .on_trigger(ui.run(|ui, cx| {
                     ui.search_box.collapse_compact(cx);
                     ui.channels.refresh(cx);
                 }))
+                .as_icon_button()
         } else if collapsed {
             kit::icon_button("sidebar-search", Lucide::Search, "Search messages  (Ctrl+F)")
-                .on_click(ui.click(|ui, cx| ui.menu_action(MenuAction::FocusSearch, cx)))
+                .on_trigger(ui.run(|ui, cx| ui.menu_action(MenuAction::FocusSearch, cx)))
+                .as_icon_button()
         } else {
             kit::icon_button("find-channel", Lucide::ListFilter, "Find channel  (Ctrl+K)")
-                .on_click(ui.click(|ui, cx| ui.menu_action(MenuAction::QuickSwitch, cx)))
+                .on_trigger(ui.run(|ui, cx| ui.menu_action(MenuAction::QuickSwitch, cx)))
+                .as_icon_button()
         })
         .child(main_menu(ui));
 
@@ -80,14 +84,14 @@ pub fn render(
     ui.channels.set_tab_order(now, categories.len() + 2);
     drop(st);
 
-    let pane = v_flex()
+    let pane = column()
         .size_full()
         // Rows on their way in from a side are not drawn past the column.
         .overflow_hidden()
-        .bg(theme.sidebar)
-        .text_color(theme.sidebar_foreground)
+        .bg(colors.nav)
+        .text_color(colors.on_nav)
         .border_r_1()
-        .border_color(theme.sidebar_border)
+        .border_color(colors.nav_border)
         .child(header);
 
     let slide = ui.channels.advance(window);
@@ -115,7 +119,7 @@ pub fn render(
             .size_full(),
         )
         .child(
-            v_flex()
+            column()
                 .id(page_id(now, &categories))
                 .absolute()
                 .top_0()
@@ -127,7 +131,7 @@ pub fn render(
         .when_some(neighbor, |body, next| {
             let offset = slide + if slide < 0.0 { 1.0 } else { -1.0 };
             body.child(
-                v_flex()
+                column()
                     .id(page_id(next, &categories))
                     .absolute()
                     .top_0()
@@ -154,7 +158,7 @@ fn page(ui: &Rc<Ui>, index: usize, categories: &[String], cx: &mut App) -> AnyEl
     let (state, rows) = ui.channels.rows(
         folder.clone(),
         &st.chat_list(folder.as_deref()),
-        cx.theme().font_size,
+        gpui_adaptive::prim::rem_size(cx),
     );
     drop(st);
     let last = rows.len().saturating_sub(1);

@@ -85,7 +85,7 @@ dependencies = [
 [[package]]
 name = "adaptive-colors"
 version = "0.1.0"
-source = "git+https://github.com/Akergez/gpui-adaptive-colors?rev=55e9997f9bf9858f7a9242bcf75a92cf15732596#55e9997f9bf9858f7a9242bcf75a92cf15732596"
+source = "git+https://github.com/Akergez/gpui-adaptive-colors?branch=main#55e9997f9bf9858f7a9242bcf75a92cf15732596"
 dependencies = [
  "jni",
  "material-colors",
@@ -2938,9 +2938,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "gpui-adaptive"
+version = "0.2.0"
+source = "git+https://github.com/Akergez/gpui-mobile-components?tag=v0.2.0#f71c1ca07ae2f6330688b7646f4dceca0650d883"
+dependencies = [
+ "chrono",
+ "gpui-adaptive-colors",
+ "gpui-android-glue",
+ "gpui-kit",
+]
+
+[[package]]
 name = "gpui-adaptive-colors"
 version = "0.1.0"
-source = "git+https://github.com/Akergez/gpui-adaptive-colors?rev=55e9997f9bf9858f7a9242bcf75a92cf15732596#55e9997f9bf9858f7a9242bcf75a92cf15732596"
+source = "git+https://github.com/Akergez/gpui-adaptive-colors?branch=main#55e9997f9bf9858f7a9242bcf75a92cf15732596"
 dependencies = [
  "adaptive-colors",
  "futures",
@@ -3632,7 +3643,7 @@ checksum = "829258540ea51bb9ea4a71686beffe5c99586901ba9f39944d06e4a180ab63fe"
 [[package]]
 name = "gpui-zed-themes"
 version = "0.1.0"
-source = "git+https://github.com/Akergez/gpui-adaptive-colors?rev=55e9997f9bf9858f7a9242bcf75a92cf15732596#55e9997f9bf9858f7a9242bcf75a92cf15732596"
+source = "git+https://github.com/Akergez/gpui-adaptive-colors?branch=main#55e9997f9bf9858f7a9242bcf75a92cf15732596"
 dependencies = [
  "flate2",
  "gpui-kit",
@@ -4924,7 +4935,7 @@ dependencies = [
 
 [[package]]
 name = "matterfast"
-version = "2.4.0"
+version = "2.5.0"
 dependencies = [
  "ashpd",
  "async-channel",
@@ -4934,6 +4945,7 @@ dependencies = [
  "dirs 6.0.0",
  "embed-resource",
  "futures-util",
+ "gpui-adaptive",
  "gpui-adaptive-colors",
  "gpui-android-glue",
  "gpui-kit",
@@ -4968,14 +4980,14 @@ dependencies = [
 
 [[package]]
 name = "matterfast-emoji"
-version = "2.4.0"
+version = "2.5.0"
 dependencies = [
  "emojis",
 ]
 
 [[package]]
 name = "matterfast-markdown"
-version = "2.4.0"
+version = "2.5.0"
 dependencies = [
  "matterfast-emoji",
  "pulldown-cmark",
@@ -4983,14 +4995,14 @@ dependencies = [
 
 [[package]]
 name = "matterfast-paths"
-version = "2.4.0"
+version = "2.5.0"
 dependencies = [
  "dirs 6.0.0",
 ]
 
 [[package]]
 name = "matterfast-testserver"
-version = "2.4.0"
+version = "2.5.0"
 dependencies = [
  "axum",
  "flate2",
@@ -5004,7 +5016,7 @@ dependencies = [
 
 [[package]]
 name = "matterfast-timefmt"
-version = "2.4.0"
+version = "2.5.0"
 dependencies = [
  "chrono",
  "mattermost-api",
@@ -5012,7 +5024,7 @@ dependencies = [
 
 [[package]]
 name = "mattermost-api"
-version = "2.4.0"
+version = "2.5.0"
 dependencies = [
  "futures-util",
  "rand 0.9.5",
@@ -5030,7 +5042,7 @@ dependencies = [
 
 [[package]]
 name = "mattermost-calls"
-version = "2.4.0"
+version = "2.5.0"
 dependencies = [
  "flate2",
  "futures-util",

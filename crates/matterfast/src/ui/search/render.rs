@@ -1,9 +1,9 @@
+use gpui_adaptive::prim::column;
 use std::rc::Rc;
 
-use gpui_kit::component::input::{Enter, Escape, IndentInline, Input, MoveDown, MoveUp};
-use gpui_kit::component::{v_flex, Sizable};
+use gpui_adaptive::{FieldKey, TextField};
 use gpui_kit::prelude::*;
-use gpui_kit::{deferred, div, px, AnyElement, App, Focusable, MouseButton, Window};
+use gpui_kit::{deferred, div, px, AnyElement, App, MouseButton, Window};
 
 use super::hint_list::hint_list;
 use crate::ui::kit::Lucide;
@@ -17,11 +17,11 @@ pub fn render(ui: &Rc<Ui>, width: f32, window: &Window, cx: &mut App) -> AnyElem
     };
     // The cursor arriving in the box is what opens the list, before anything
     // is typed; leaving it closes the list by `is_open` alone.
-    let focused = input.read(cx).focus_handle(cx).is_focused(window);
+    let focused = input.read(cx).is_focused(window, cx);
     if search.focused.replace(focused) != focused && focused {
         ui.later(cx, |ui, cx| ui.search_box.changed(ui, cx));
     }
-    v_flex()
+    column()
         .id("title-search")
         .relative()
         .flex_none()
@@ -30,68 +30,41 @@ pub fn render(ui: &Rc<Ui>, width: f32, window: &Window, cx: &mut App) -> AnyElem
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         // The list has first refusal on these keys while a row of it is
         // chosen, and on the arrows whenever it is open.
-        .capture_action({
+        .child(TextField::new(&input).icon(Lucide::Search).cleanable().on_key({
             let ui = ui.clone();
-            move |_: &MoveUp, _, cx| {
-                if ui.search_box.is_open() {
-                    ui.search_box.step(-1);
-                    cx.stop_propagation();
-                    crate::ui::refresh(cx);
+            move |key, _, cx| {
+                let search = &ui.search_box;
+                match key {
+                    FieldKey::Up | FieldKey::Down if search.is_open() => {
+                        search.step(if key == FieldKey::Up { -1 } else { 1 });
+                        crate::ui::refresh(cx);
+                    }
+                    FieldKey::Enter => {
+                        let Some(index) = search.selected.get().filter(|_| search.is_open()) else {
+                            return false;
+                        };
+                        ui.later(cx, move |ui, cx| ui.search_box.pick(index, ui, cx));
+                    }
+                    // Tab takes the chosen row, or the first: it is the key
+                    // for "yes, that one" and has nothing else to do in a
+                    // one-line box.
+                    FieldKey::Tab if search.is_open() => {
+                        let index = search.selected.get().unwrap_or(0);
+                        ui.later(cx, move |ui, cx| ui.search_box.pick(index, ui, cx));
+                    }
+                    FieldKey::Escape if ui.split.collapsed.get() => {
+                        search.collapse_compact(cx);
+                        ui.channels.refresh(cx);
+                    }
+                    FieldKey::Escape if search.is_open() => {
+                        search.close();
+                        crate::ui::refresh(cx);
+                    }
+                    _ => return false,
                 }
+                true
             }
-        })
-        .capture_action({
-            let ui = ui.clone();
-            move |_: &MoveDown, _, cx| {
-                if ui.search_box.is_open() {
-                    ui.search_box.step(1);
-                    cx.stop_propagation();
-                    crate::ui::refresh(cx);
-                }
-            }
-        })
-        .capture_action({
-            let ui = ui.clone();
-            move |_: &Enter, _, cx| {
-                let chosen = ui.search_box.selected.get();
-                if let Some(index) = chosen.filter(|_| ui.search_box.is_open()) {
-                    cx.stop_propagation();
-                    ui.later(cx, move |ui, cx| ui.search_box.pick(index, ui, cx));
-                }
-            }
-        })
-        // Tab takes the chosen row, or the first: it is the key for "yes,
-        // that one" and has nothing else to do in a one-line box.
-        .capture_action({
-            let ui = ui.clone();
-            move |_: &IndentInline, _, cx| {
-                if ui.search_box.is_open() {
-                    let index = ui.search_box.selected.get().unwrap_or(0);
-                    cx.stop_propagation();
-                    ui.later(cx, move |ui, cx| ui.search_box.pick(index, ui, cx));
-                }
-            }
-        })
-        .capture_action({
-            let ui = ui.clone();
-            move |_: &Escape, _, cx| {
-                if ui.split.collapsed.get() {
-                    ui.search_box.collapse_compact(cx);
-                    cx.stop_propagation();
-                    ui.channels.refresh(cx);
-                } else if ui.search_box.is_open() {
-                    ui.search_box.close();
-                    cx.stop_propagation();
-                    crate::ui::refresh(cx);
-                }
-            }
-        })
-        .child(
-            Input::new(&input)
-                .small()
-                .prefix(Lucide::Search)
-                .cleanable(true),
-        )
+        }))
         .when(search.is_open(), |field| {
             // Deferred, so that it is drawn over the panes under the bar
             // rather than under them.

@@ -1,5 +1,5 @@
-use gpui_kit::component::button::Button;
-use gpui_kit::component::{v_flex, ActiveTheme};
+use gpui_adaptive::prim::column;
+use gpui_adaptive::{ActiveColors as _, Command};
 use gpui_kit::prelude::*;
 use gpui_kit::{div, px, AnyElement, Context, FontWeight};
 
@@ -9,8 +9,8 @@ use crate::ui::kit::Lucide;
 
 /// The list of stored servers to pick from.
 pub(super) fn choose_server(servers: &[(String, String)], cx: &mut Context<Shell>) -> AnyElement {
-    let theme = cx.theme().clone();
-    let mut list = v_flex().w(px(420.)).max_w_full().gap_1().child(
+    let colors = cx.colors();
+    let mut list = column().w(px(420.)).max_w_full().gap_1().child(
         div()
             .pb_2()
             .text_xl()
@@ -21,20 +21,20 @@ pub(super) fn choose_server(servers: &[(String, String)], cx: &mut Context<Shell
     for (index, (server, token)) in servers.iter().enumerate() {
         let (server_url, token) = (server.clone(), token.clone());
         list = list.child(
-            v_flex()
+            column()
                 .id(("server", index))
                 .px_3()
                 .py_2()
                 .rounded_md()
                 .border_1()
-                .border_color(theme.border)
+                .border_color(colors.border)
                 .cursor_pointer()
-                .hover(|style| style.bg(theme.list_hover))
+                .hover(|style| style.bg(colors.hover))
                 .child(div().font_weight(FontWeight::MEDIUM).child(pretty_server(server)))
                 .child(
                     div()
                         .text_xs()
-                        .text_color(theme.muted_foreground)
+                        .text_color(colors.muted)
                         .child(server.clone()),
                 )
                 .on_click(cx.listener(move |shell, _, window, cx| {
@@ -43,11 +43,17 @@ pub(super) fn choose_server(servers: &[(String, String)], cx: &mut Context<Shell
         );
     }
     list = list.child(
-        Button::new("add-server")
-            .icon(Lucide::Plus)
-            .label("Add Server…")
-            .mt_2()
-            .on_click(cx.listener(|shell, _, window, cx| shell.show_login(window, cx))),
+        div().mt_2().child(
+            Command::new("add-server", "Add Server…")
+                .icon(Lucide::Plus)
+                .on_trigger({
+                    let shell = cx.weak_entity();
+                    move |window, cx| {
+                        shell.update(cx, |shell, cx| shell.show_login(window, cx)).ok();
+                    }
+                })
+                .as_button(),
+        ),
     );
     div()
         .size_full()

@@ -5,22 +5,19 @@
 //! values to a callback; the caller POSTs them to
 //! `/api/v4/actions/dialogs/submit`.
 
+use gpui_adaptive::{
+    ActiveColors as _, Choice, ChoiceOption, ChoiceState, Command, FieldEvent, Menu, Purpose,
+    TextField, TextFieldState, Toggle, prim,
+};
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use gpui_kit::base::InteractiveElementExt as _;
-use gpui_kit::component::button::Button;
-use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
-use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
-use gpui_kit::component::radio::Radio;
-use gpui_kit::component::switch::Switch;
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Sizable};
+use gpui_adaptive::prim::Scrolls as _;
 use gpui_kit::prelude::*;
-use gpui_kit::{div, px, App, Context, Entity, FontWeight, Subscription, Window};
+use gpui_kit::{div, px, App, Context, Entity, Subscription, Window};
 use mattermost_api::models::dialog::{Dialog, DialogElement};
 use serde_json::Value;
 
-use super::dialogs;
 use super::Ui;
 
 /// What a field is drawn as, and what it currently holds.
@@ -29,15 +26,16 @@ enum Kind {
     /// `channels` lands: those carry no options in the payload, the client is
     /// expected to search the server for them, and this file has no client to
     /// search with.
-    Text(Entity<InputState>),
-    Area(Entity<TextareaState>),
+    Text(Entity<TextFieldState>),
+    Area(Entity<TextFieldState>),
     /// A `select` whose options came in the payload.
     Select(usize),
     /// A `bool`. The default arrives as the *string* `"true"`, and the answer
     /// goes back as a real JSON boolean — the server's `map[string]any` keeps
     /// the type.
     Bool(bool),
-    Radio(usize),
+    /// The chosen option's index is its key.
+    Radio(Entity<ChoiceState>),
 }
 
 struct Element {
@@ -68,8 +66,7 @@ fn default_option(element: &DialogElement) -> usize {
 /// The phone's keyboard that suits a text field, by the subtype the
 /// integration gave it: digits for a number, no capitals or corrections for
 /// an address or a secret.
-fn purpose(element: &DialogElement) -> gpui_android_glue::keyboard::Purpose {
-    use gpui_android_glue::keyboard::Purpose;
+fn purpose(element: &DialogElement) -> Purpose {
     match element.subtype.as_str() {
         "number" => Purpose::Number,
         "email" => Purpose::Login,
@@ -97,32 +94,35 @@ impl Interactive {
             .elements
             .iter()
             .map(|element| {
+                // The length bounds are checked as it is typed, so the form
+                // has to be drawn again to say so.
+                let mut text = |field: Entity<TextFieldState>, window: &mut Window, cx: &mut Context<Self>| {
+                    field.update(cx, |field, cx| {
+                        field.set_value(element.default.clone(), window, cx);
+                        field.set_placeholder(element.placeholder.clone(), window, cx);
+                    });
+                    subscriptions.push(cx.subscribe(&field, |_, _, event: &FieldEvent, cx| {
+                        if *event == FieldEvent::Change {
+                            cx.notify();
+                        }
+                    }));
+                    field
+                };
                 let kind = match element.element_type.as_str() {
                     "textarea" => {
-                        let area = cx.new(|cx| {
-                            TextareaState::new(window, cx)
-                                .rows(4)
-                                .default_value(element.default.clone())
-                                .placeholder(element.placeholder.clone())
-                        });
-                        // The length bounds are checked as it is typed, so
-                        // the form has to be drawn again to say so.
-                        subscriptions.push(cx.subscribe(
-                            &area,
-                            |_, area, event: &InputEvent, cx| {
-                                gpui_android_glue::keyboard::follow(
-                                    area.entity_id(),
-                                    event,
-                                    gpui_android_glue::keyboard::Purpose::Message,
-                                );
-                                if matches!(event, InputEvent::Change) {
-                                    cx.notify();
-                                }
-                            },
-                        ));
-                        Kind::Area(area)
+                        let field = cx.new(|cx| TextFieldState::multiline(Purpose::Message, 4, 8, window, cx));
+                        Kind::Area(text(field, window, cx))
                     }
-                    "radio" if !element.options.is_empty() => Kind::Radio(default_option(element)),
+                    "radio" if !element.options.is_empty() => {
+                        let options = element
+                            .options
+                            .iter()
+                            .enumerate()
+                            .map(|(index, option)| ChoiceOption::new(index.to_string(), option.text.clone()))
+                            .collect();
+                        let selected = Some(default_option(element).to_string().into());
+                        Kind::Radio(cx.new(|cx| ChoiceState::new(options, selected, window, cx)))
+                    }
                     "select" if !element.options.is_empty() => {
                         Kind::Select(default_option(element))
                     }
@@ -130,27 +130,11 @@ impl Interactive {
                     // Everything else — `text`, a `select` whose options live
                     // on the server, and any type this client does not know
                     // yet — is a text field. An unknown type degrading to text
-                    // is better than a form with a hole in it.
+                    // is better than a form with a hole in it. A password is
+                    // hidden even though the payload treats it as text.
                     _ => {
-                        let input = cx.new(|cx| {
-                            InputState::new(window, cx)
-                                .default_value(element.default.clone())
-                                .placeholder(element.placeholder.clone())
-                                // A password is worth hiding even though the
-                                // payload treats it as text.
-                                .masked(element.subtype == "password")
-                        });
-                        let purpose = purpose(element);
-                        subscriptions.push(cx.subscribe(
-                            &input,
-                            move |_, input, event: &InputEvent, cx| {
-                                gpui_android_glue::keyboard::follow(input.entity_id(), event, purpose);
-                                if matches!(event, InputEvent::Change) {
-                                    cx.notify();
-                                }
-                            },
-                        ));
-                        Kind::Text(input)
+                        let field = cx.new(|cx| TextFieldState::new(purpose(element), window, cx));
+                        Kind::Text(text(field, window, cx))
                     }
                 };
                 Element {
@@ -170,10 +154,9 @@ impl Interactive {
     /// Whether one field is currently fit to submit.
     fn field_ok(element: &Element, cx: &App) -> bool {
         match &element.kind {
-            Kind::Text(input) => {
-                length_ok(&element.spec, input.read(cx).value().chars().count())
+            Kind::Text(field) | Kind::Area(field) => {
+                length_ok(&element.spec, field.read(cx).value(cx).chars().count())
             }
-            Kind::Area(area) => length_ok(&element.spec, area.read(cx).value().chars().count()),
             // A select or a radio group always has something chosen, and a
             // switch is always one way or the other.
             Kind::Select(_) | Kind::Bool(_) | Kind::Radio(_) => true,
@@ -203,12 +186,17 @@ impl Interactive {
                     )
                 };
                 let value = match &element.kind {
-                    Kind::Text(input) => Value::String(input.read(cx).value().to_string()),
-                    Kind::Area(area) => Value::String(area.read(cx).value().to_string()),
+                    Kind::Text(field) | Kind::Area(field) => {
+                        Value::String(field.read(cx).value(cx).to_string())
+                    }
                     // ponytail: a `multiselect` select submits only the one
                     // option; swap in a check-list if an integration that
                     // uses it turns up.
-                    Kind::Select(index) | Kind::Radio(index) => option(index),
+                    Kind::Select(index) => option(index),
+                    Kind::Radio(choice) => {
+                        let index = choice.read(cx).selected().and_then(|key| key.parse().ok());
+                        option(&index.unwrap_or(0))
+                    }
                     Kind::Bool(on) => Value::Bool(*on),
                 };
                 (element.spec.name.clone(), value)
@@ -219,9 +207,9 @@ impl Interactive {
 
 impl Render for Interactive {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme().clone();
-        let muted = theme.muted_foreground;
-        let mut column = v_flex().gap_3();
+        let colors = cx.colors();
+        let muted = colors.muted;
+        let mut column = prim::column().gap_3();
         if !self.introduction.is_empty() {
             // Markdown on the wire, and drawn as such.
             column = column.child(super::message::markdown(
@@ -236,117 +224,68 @@ impl Render for Interactive {
 
         for (index, element) in self.elements.iter().enumerate() {
             let ok = Self::field_ok(element, cx);
-            let label = div()
-                .text_sm()
-                .font_weight(FontWeight::MEDIUM)
-                .child(element.spec.display_name.clone());
-            let help = (!element.spec.help_text.is_empty()).then(|| {
-                div()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(element.spec.help_text.clone())
-            });
+            let label = element.spec.display_name.clone();
+            let help = (!element.spec.help_text.is_empty())
+                .then(|| div().text_xs().text_color(muted).child(element.spec.help_text.clone()));
 
             let field = match &element.kind {
-                Kind::Text(input) => v_flex()
-                    .gap_1()
-                    .child(label)
-                    .child(Input::new(input))
-                    .into_any_element(),
-                Kind::Area(area) => v_flex()
-                    .gap_1()
-                    .child(label)
-                    .child(Textarea::new(area))
-                    .into_any_element(),
-                Kind::Bool(on) => h_flex()
-                    .gap_3()
-                    .items_center()
-                    .child(div().flex_1().min_w_0().child(label))
-                    .child(Switch::new(("bool", index)).checked(*on).on_click(
-                        cx.listener(move |form, on: &bool, _, cx| {
-                            if let Some(Element {
-                                kind: Kind::Bool(held),
-                                ..
-                            }) = form.elements.get_mut(index)
-                            {
-                                *held = *on;
-                            }
-                            cx.notify();
-                        }),
-                    ))
-                    .into_any_element(),
+                Kind::Text(field) | Kind::Area(field) => {
+                    TextField::new(field).label(label).into_any_element()
+                }
+                Kind::Bool(on) => {
+                    let entity = cx.entity().downgrade();
+                    Toggle::new(("bool", index), label, *on)
+                        .on_change(move |on, _, cx| {
+                            let _ = entity.update(cx, |form, cx| {
+                                if let Some(Element { kind: Kind::Bool(held), .. }) =
+                                    form.elements.get_mut(index)
+                                {
+                                    *held = on;
+                                }
+                                cx.notify();
+                            });
+                        })
+                        .into_any_element()
+                }
                 Kind::Select(selected) => {
                     let entity = cx.entity();
                     let options = element.spec.options.clone();
                     let current = *selected;
-                    h_flex()
+                    prim::row()
                         .gap_3()
                         .items_center()
-                        .child(div().flex_1().min_w_0().child(label))
+                        .child(div().flex_1().min_w_0().text_sm().child(label))
                         .child(
-                            Button::new(("select", index))
-                                .label(
-                                    options
-                                        .get(current)
-                                        .map(|option| option.text.clone())
-                                        .unwrap_or_default(),
-                                )
-                                .small()
-                                .dropdown_caret(true)
-                                .dropdown_menu(move |mut menu, _, _| {
-                                    for (choice, option) in options.iter().enumerate() {
-                                        let entity = entity.clone();
-                                        menu = menu.item(
-                                            PopupMenuItem::new(option.text.clone())
-                                                .checked(choice == current)
-                                                .on_click(move |_, _, cx| {
-                                                    entity.update(cx, |form, cx| {
-                                                        if let Some(Element {
-                                                            kind: Kind::Select(selected),
-                                                            ..
-                                                        }) = form.elements.get_mut(index)
-                                                        {
-                                                            *selected = choice;
-                                                        }
-                                                        cx.notify();
-                                                    });
-                                                }),
-                                        );
-                                    }
-                                    menu
-                                }),
+                            Menu::new(Command::new(
+                                ("select", index),
+                                options.get(current).map(|option| option.text.clone()).unwrap_or_default(),
+                            ))
+                            .choice()
+                            .commands(options.iter().enumerate().map(|(choice, option)| {
+                                let entity = entity.clone();
+                                Command::new(("option", choice), option.text.clone())
+                                    .checked(choice == current)
+                                    .on_trigger(move |_, cx| {
+                                        entity.update(cx, |form, cx| {
+                                            if let Some(Element { kind: Kind::Select(selected), .. }) =
+                                                form.elements.get_mut(index)
+                                            {
+                                                *selected = choice;
+                                            }
+                                            cx.notify();
+                                        });
+                                    })
+                            })),
                         )
                         .into_any_element()
                 }
-                Kind::Radio(selected) => {
-                    let mut group = v_flex().gap_1p5().child(label);
-                    for (choice, option) in element.spec.options.iter().enumerate() {
-                        group = group.child(
-                            Radio::new(gpui_kit::ElementId::Name(
-                                format!("radio-{index}-{choice}").into(),
-                            ))
-                            .label(option.text.clone())
-                            .checked(choice == *selected)
-                            .on_click(cx.listener(
-                                move |form, _: &bool, _, cx| {
-                                    if let Some(Element {
-                                        kind: Kind::Radio(selected),
-                                        ..
-                                    }) = form.elements.get_mut(index)
-                                    {
-                                        *selected = choice;
-                                    }
-                                    cx.notify();
-                                },
-                            )),
-                        );
-                    }
-                    group.into_any_element()
+                Kind::Radio(choice) => {
+                    Choice::new(choice).id(("radio", index)).label(label).into_any_element()
                 }
             };
 
             column = column.child(
-                v_flex()
+                prim::column()
                     .gap_1()
                     .child(field)
                     .when_some(help, |column, help| column.child(help))
@@ -357,7 +296,7 @@ impl Render for Interactive {
                         column.child(
                             div()
                                 .text_xs()
-                                .text_color(theme.danger)
+                                .text_color(colors.danger)
                                 .child(requirement(&element.spec)),
                         )
                     }),
@@ -367,8 +306,7 @@ impl Render for Interactive {
         div()
             .id("interactive")
             .max_h(px(520.))
-            .overflow_y_scroll()
-            .lock_scroll_axis()
+            .scrolls_y()
             .child(column)
     }
 }
@@ -405,38 +343,31 @@ pub fn present(
         } else {
             dialog.submit_label.clone()
         });
-        gpui_android_glue::back::open_dialog(window, cx, move |dialog, _, _| {
-            let submit = view.clone();
-            let closed = view.clone();
-            let on_submit = on_submit.clone();
-            let on_cancel = on_cancel.clone();
-            dialog
-                .title(title.clone())
-                .w(px(480.))
-                .child(view.clone())
-                .footer(dialogs::footer(submit_label.clone()))
-                .on_ok(move |_, _, cx| {
-                    // The fields say what is wrong with them; an unfit form
-                    // simply stays up.
-                    if !submit.read(cx).valid(cx) {
-                        return false;
-                    }
-                    let submission = submit.read(cx).submission(cx);
-                    submit.update(cx, |form, _| form.submitted = true);
-                    let on_submit = on_submit.clone();
-                    cx.defer(move |cx| on_submit(submission, cx));
-                    true
-                })
-                // Submitting and dismissing both close the dialog, so the
-                // callbacks hang off the one close handler and the flag says
-                // which of the two it was.
-                .on_close(move |_, _, cx| {
-                    if !closed.read(cx).submitted {
-                        let on_cancel = on_cancel.clone();
-                        cx.defer(move |cx| on_cancel(cx));
-                    }
-                })
-        });
+        // Submitting and dismissing both put the form away; what is left of
+        // it says which of the two it was.
+        cx.observe_release(&view, move |form, cx| {
+            if !form.submitted {
+                let on_cancel = on_cancel.clone();
+                cx.defer(move |cx| on_cancel(cx));
+            }
+        })
+        .detach();
+        let submit = view.clone();
+        gpui_adaptive::Form::new(title, view)
+            .width(gpui_kit::rems(30.))
+            .commit(submit_label, move |_, cx| {
+                // The fields say what is wrong with them; an unfit form
+                // simply stays up.
+                if !submit.read(cx).valid(cx) {
+                    return false;
+                }
+                let submission = submit.read(cx).submission(cx);
+                submit.update(cx, |form, _| form.submitted = true);
+                let on_submit = on_submit.clone();
+                cx.defer(move |cx| on_submit(submission, cx));
+                true
+            })
+            .open(window, cx);
     });
 }
 

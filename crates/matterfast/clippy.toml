@@ -1,0 +1,40 @@
+# The window is drawn with the design system (gpui-adaptive): its intents,
+# its primitives (`gpui_adaptive::prim`), its colours (`cx.colors()`) and
+# scale (`cx.scale()`). gpui-kit's components are what the system is made
+# of, not what the application calls.
+disallowed-methods = [
+    { path = "gpui_kit::component::h_flex", reason = "use gpui_adaptive::prim::row" },
+    { path = "gpui_kit::component::v_flex", reason = "use gpui_adaptive::prim::column" },
+    { path = "gpui_kit::component::ActiveTheme::theme", reason = "use cx.colors() (gpui_adaptive::ActiveColors)" },
+    { path = "gpui_kit::component::WindowExt::open_dialog", reason = "use gpui_adaptive::Sheet, Confirm or Ask" },
+    { path = "gpui_kit::component::WindowExt::push_notification", reason = "use gpui_adaptive::Notice" },
+    { path = "gpui_kit::component::WindowExt::open_sheet_at", reason = "use gpui_adaptive::Sheet" },
+    { path = "gpui_android_glue::back::open_dialog", reason = "use gpui_adaptive::Sheet, Confirm or Ask" },
+    { path = "gpui_kit::component::menu::ContextMenuExt::context_menu", reason = "use gpui_adaptive::ItemActions" },
+]
+disallowed-types = [
+    { path = "gpui_kit::component::button::Button", reason = "use a gpui_adaptive::Command" },
+    { path = "gpui_kit::component::button::ButtonGroup", reason = "use gpui_adaptive::Segments" },
+    { path = "gpui_kit::component::spinner::Spinner", reason = "use gpui_adaptive::Busy or prim::spinner" },
+    { path = "gpui_kit::component::text::TextView", reason = "use gpui_adaptive::Markdown or Message" },
+    { path = "gpui_kit::component::tooltip::Tooltip", reason = "use gpui_adaptive::prim::tooltip" },
+    { path = "gpui_kit::component::TitleBar", reason = "use gpui_adaptive::AppFrame" },
+    { path = "gpui_kit::component::input::Input", reason = "use gpui_adaptive::TextField" },
+    { path = "gpui_kit::component::select::Select", reason = "use gpui_adaptive::Choice" },
+    { path = "gpui_kit::component::list::ListItem", reason = "use gpui_adaptive::ListRow" },
+    { path = "gpui_kit::component::avatar::Avatar", reason = "use gpui_adaptive::Avatar" },
+    { path = "gpui_kit::component::switch::Switch", reason = "use gpui_adaptive::Toggle" },
+    { path = "gpui_kit::component::checkbox::Checkbox", reason = "use gpui_adaptive::Toggle" },
+    { path = "gpui_kit::component::radio::Radio", reason = "use gpui_adaptive::Choice" },
+    { path = "gpui_kit::component::radio::RadioGroup", reason = "use gpui_adaptive::Choice" },
+    { path = "gpui_kit::component::popover::Popover", reason = "use gpui_adaptive::Popup" },
+    { path = "gpui_kit::component::menu::DropdownMenu", reason = "use gpui_adaptive::Menu" },
+    { path = "gpui_kit::component::menu::PopupMenu", reason = "use gpui_adaptive::Menu or ItemActions" },
+    { path = "gpui_kit::component::menu::PopupMenuItem", reason = "use a gpui_adaptive::Command in a Menu or ItemActions" },
+    { path = "gpui_kit::component::notification::Notification", reason = "use gpui_adaptive::Notice" },
+    { path = "gpui_kit::component::label::Label", reason = "use gpui_adaptive::Text" },
+    { path = "gpui_kit::component::tag::Tag", reason = "use gpui_adaptive::Count or Text" },
+    { path = "gpui_kit::component::tab::TabBar", reason = "use gpui_adaptive::Segments" },
+    { path = "gpui_kit::component::tab::Tab", reason = "use gpui_adaptive::Segments" },
+    { path = "gpui_kit::component::dialog::Dialog", reason = "use gpui_adaptive::Sheet" },
+]

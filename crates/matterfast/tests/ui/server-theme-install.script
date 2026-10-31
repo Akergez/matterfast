@@ -16,17 +16,17 @@ click:877,152
 wait:800
 expect:theme-name=Adaptive Dark
 # Browse: the list is asked for, and the search box has the keyboard.
-click:862,334
+click:862,305
 wait:2000
 type:dusk
 wait:800
 # Install, on the only row.
-click:865,452
+click:865,415
 wait:2500
 # Done, then the dark theme list, where the new theme now is.
-click:876,334
+click:876,305
 wait:600
-click:780,273
+click:780,253
 wait:800
 type:dusk
 wait:600
@@ -35,9 +35,9 @@ wait:900
 expect:theme-name=Testserver Dusk
 # Removing the extension takes the theme off the window with it. The row is
 # a line lower than it was: what the install had to say is above the list.
-click:862,334
+click:862,305
 wait:800
-click:857,479
+click:857,442
 wait:2500
 expect:theme-name=Adaptive Dark
 key:escape
