@@ -10,15 +10,21 @@
 //!
 //! So the application carries static faces of Inter for its own text, and a
 //! COLRv0 emoji font it can actually draw.
+//!
+//! On Android the text is the phone's own: gpui-mobile draws the system's
+//! (variable) font at every weight, so Inter is only one of the fonts to
+//! choose from there, not the interface's.
 
 use std::borrow::Cow;
 
+#[cfg(not(target_os = "android"))]
 use gpui_adaptive::theme::Theme;
 #[cfg(not(target_os = "android"))]
 use gpui_kit::font;
 use gpui_kit::App;
 
 /// The family the bundled UI faces belong to.
+#[cfg(not(target_os = "android"))]
 const UI_FAMILY: &str = "Inter";
 
 /// The family the renderer's fallback list looks for when a character turns
@@ -55,11 +61,13 @@ pub fn install(cx: &mut App) {
         Cow::Borrowed(include_bytes!("../assets/fonts/Inter-Bold.ttf")),
         Cow::Borrowed(include_bytes!("../assets/fonts/Inter-BoldItalic.ttf")),
     ];
-    if let Err(error) = cx.text_system().add_fonts(fonts) {
+    match cx.text_system().add_fonts(fonts) {
         // Text still draws, in whatever the desktop has; it is bold and emoji
         // that will be missing, which is worth saying once.
-        tracing::warn!(%error, "could not load the bundled fonts");
-        return;
+        Err(error) => tracing::warn!(%error, "could not load the bundled fonts"),
+        #[cfg(not(target_os = "android"))]
+        Ok(()) => Theme::global_mut(cx).font_family = UI_FAMILY.into(),
+        #[cfg(target_os = "android")]
+        Ok(()) => {}
     }
-    Theme::global_mut(cx).font_family = UI_FAMILY.into();
 }

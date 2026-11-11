@@ -37,7 +37,7 @@ gpui-zed-themes = { git = "https://github.com/Akergez/gpui-adaptive-colors", bra
 # The design system the whole UI is drawn with: intents that draw themselves
 # for a pointer or a finger, and the primitives for what is matterfast's own.
 # To work on it beside the application, swap this for the path variant.
-gpui-adaptive = { git = "https://github.com/Akergez/gpui-mobile-components", tag = "v0.4.7" }
+gpui-adaptive = { git = "https://github.com/Akergez/gpui-mobile-components", tag = "v0.4.9" }
 # gpui-adaptive = { path = "../../../gpui-mobile-components/crates/gpui-adaptive" }
 gpui-kit = "0.7.0"
 # The Android side shared with money-manager-ng and aiddiction: android_main,
@@ -47,7 +47,7 @@ gpui-kit = "0.7.0"
 # hands the activity to rustls-platform-verifier, which reqwest checks
 # certificates with. To work on it beside the application, swap this for the
 # path variant and build the package with -PglueLocal.
-gpui-android-glue = { git = "https://github.com/Akergez/gpui-android-glue", tag = "v0.4.5", features = ["platform-verifier"] }
+gpui-android-glue = { git = "https://github.com/Akergez/gpui-android-glue", tag = "v0.4.6", features = ["platform-verifier"] }
 # gpui-android-glue = { path = "../../../gpui-android-glue", features = ["platform-verifier"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
 mattermost-api = { path = "../mattermost-api" }
@@ -92,7 +92,7 @@ windows-registry = "0.6"
 # which tracks the same `gpui-pre` and is not on crates.io at this version.
 [target.'cfg(target_os = "android")'.dependencies]
 # At the revision gpui-android-glue names: one copy of the platform.
-gpui-mobile = { package = "gpui-pre-mobile", git = "https://github.com/Akergez/gpui-mobile", rev = "dda3bf3635142249a5384ba603929bf4a3db284f" }
+gpui-mobile = { package = "gpui-pre-mobile", git = "https://github.com/Akergez/gpui-mobile", rev = "d924245f173b80ebc8bcc4da5568fc97d3c64c43" }
 # To call the Java that raises notifications; the version the fork uses.
 jni = "0.22"
 # With no subscriber, events go to `log`, and from there to logcat.
