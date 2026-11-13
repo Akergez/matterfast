@@ -92,7 +92,7 @@ windows-registry = "0.6"
 # which tracks the same `gpui-pre` and is not on crates.io at this version.
 [target.'cfg(target_os = "android")'.dependencies]
 # At the revision gpui-android-glue names: one copy of the platform.
-gpui-mobile = { package = "gpui-pre-mobile", git = "https://github.com/Akergez/gpui-mobile", rev = "d924245f173b80ebc8bcc4da5568fc97d3c64c43" }
+gpui-mobile = { package = "gpui-pre-mobile", git = "https://github.com/Akergez/gpui-mobile", rev = "d69470c6f6de0cc005797f8db0553082066eb857" }
 # To call the Java that raises notifications; the version the fork uses.
 jni = "0.22"
 # With no subscriber, events go to `log`, and from there to logcat.
