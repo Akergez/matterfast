@@ -2939,8 +2939,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-adaptive"
-version = "0.5.0"
-source = "git+https://github.com/Akergez/gpui-mobile-components?tag=v0.5.0#a4cd021aef7c7c196c5ee4238089a165cf1bf248"
+version = "0.5.1"
+source = "git+https://github.com/Akergez/gpui-mobile-components?tag=v0.5.1#0fa504a91f3d8e36245144a98a81ae347a660942"
 dependencies = [
  "chrono",
  "gpui-adaptive-colors",
@@ -2961,8 +2961,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-android-glue"
-version = "0.4.6"
-source = "git+https://github.com/Akergez/gpui-android-glue?tag=v0.4.6#21caa8360df21c8621458e6115efac9e5d74818b"
+version = "0.4.7"
+source = "git+https://github.com/Akergez/gpui-android-glue?tag=v0.4.7#0b811fcb4530509334a767e9fb9abe34e6511b9c"
 dependencies = [
  "android-activity",
  "android_logger",
@@ -4951,7 +4951,7 @@ dependencies = [
 
 [[package]]
 name = "matterfast"
-version = "2.6.6"
+version = "2.6.7"
 dependencies = [
  "ashpd",
  "async-channel",
@@ -4996,14 +4996,14 @@ dependencies = [
 
 [[package]]
 name = "matterfast-emoji"
-version = "2.6.6"
+version = "2.6.7"
 dependencies = [
  "emojis",
 ]
 
 [[package]]
 name = "matterfast-markdown"
-version = "2.6.6"
+version = "2.6.7"
 dependencies = [
  "matterfast-emoji",
  "pulldown-cmark",
@@ -5011,14 +5011,14 @@ dependencies = [
 
 [[package]]
 name = "matterfast-paths"
-version = "2.6.6"
+version = "2.6.7"
 dependencies = [
  "dirs 6.0.0",
 ]
 
 [[package]]
 name = "matterfast-testserver"
-version = "2.6.6"
+version = "2.6.7"
 dependencies = [
  "axum",
  "flate2",
@@ -5032,7 +5032,7 @@ dependencies = [
 
 [[package]]
 name = "matterfast-timefmt"
-version = "2.6.6"
+version = "2.6.7"
 dependencies = [
  "chrono",
  "mattermost-api",
@@ -5040,7 +5040,7 @@ dependencies = [
 
 [[package]]
 name = "mattermost-api"
-version = "2.6.6"
+version = "2.6.7"
 dependencies = [
  "futures-util",
  "rand 0.9.5",
@@ -5058,7 +5058,7 @@ dependencies = [
 
 [[package]]
 name = "mattermost-calls"
-version = "2.6.6"
+version = "2.6.7"
 dependencies = [
  "flate2",
  "futures-util",

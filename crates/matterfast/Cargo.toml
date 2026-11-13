@@ -37,7 +37,7 @@ gpui-zed-themes = { git = "https://github.com/Akergez/gpui-adaptive-colors", bra
 # The design system the whole UI is drawn with: intents that draw themselves
 # for a pointer or a finger, and the primitives for what is matterfast's own.
 # To work on it beside the application, swap this for the path variant.
-gpui-adaptive = { git = "https://github.com/Akergez/gpui-mobile-components", tag = "v0.5.0" }
+gpui-adaptive = { git = "https://github.com/Akergez/gpui-mobile-components", tag = "v0.5.1" }
 # gpui-adaptive = { path = "../../../gpui-mobile-components/crates/gpui-adaptive" }
 gpui-kit = "0.7.0"
 # The Android side shared with money-manager-ng and aiddiction: android_main,
@@ -47,7 +47,7 @@ gpui-kit = "0.7.0"
 # hands the activity to rustls-platform-verifier, which reqwest checks
 # certificates with. To work on it beside the application, swap this for the
 # path variant and build the package with -PglueLocal.
-gpui-android-glue = { git = "https://github.com/Akergez/gpui-android-glue", tag = "v0.4.6", features = ["platform-verifier"] }
+gpui-android-glue = { git = "https://github.com/Akergez/gpui-android-glue", tag = "v0.4.7", features = ["platform-verifier"] }
 # gpui-android-glue = { path = "../../../gpui-android-glue", features = ["platform-verifier"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
 mattermost-api = { path = "../mattermost-api" }
