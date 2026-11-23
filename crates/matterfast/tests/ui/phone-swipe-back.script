@@ -9,7 +9,7 @@
 # back is, then closes a dialog over the list and leaves the list in front.
 wait:2500
 expect:page=list
-click:155,22
+click:175,22
 wait:600
 expect:folder=all
 move:200,145
