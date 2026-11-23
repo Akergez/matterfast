@@ -61,7 +61,12 @@ impl Render for Shell {
         }
         let phone_chat = phone_session
             && self.session().is_some_and(|ui| ui.pages.showing_chat(cx));
-        if self.phone_chat_shown && phone_session && !phone_chat && !phone_panel
+        let search_open = self.session().is_some_and(|ui| ui.search_box.compact_expanded());
+        if self.phone_chat_shown
+            && phone_session
+            && !phone_chat
+            && !phone_panel
+            && !search_open
             && !Sheet::is_open(window, cx)
         {
             // The chat and its input left the focus tree. Restore the window's
