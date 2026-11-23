@@ -1,7 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use gpui_adaptive::TextFieldState;
+use gpui_adaptive::{prim::VerticalListState, TextFieldState};
 use gpui_kit::{point, px, App, Entity, FollowMode, ListAlignment, ListState, ScrollHandle};
 
 use super::inbox::Inbox;
@@ -26,7 +26,7 @@ pub struct RightPanel {
     /// far were. A reader who follows every channel has hundreds of rows in
     /// it, and building all of them for every frame of a scroll is what made
     /// scrolling it crawl: only the few in view are built.
-    pub(super) inbox_list: ListState,
+    pub(super) inbox_list: VerticalListState,
     pub(super) search: RefCell<Vec<SearchRow>>,
     pub(super) searching: Cell<bool>,
     /// Whether the server may have hits past the ones listed.
@@ -49,7 +49,12 @@ pub struct RightPanel {
 impl RightPanel {
     /// The inbox's retained row order, for scripted UI assertions.
     pub(crate) fn inbox_keys(&self) -> Vec<String> {
-        self.inbox.borrow().entries.iter().map(|entry| entry.key()).collect()
+        self.inbox
+            .borrow()
+            .entries
+            .iter()
+            .map(|entry| entry.key())
+            .collect()
     }
 
     pub fn new(window: Rc<WindowSlot>) -> Self {
@@ -72,15 +77,7 @@ impl RightPanel {
             list,
             following: Cell::new(false),
             inbox: RefCell::new(Inbox::default()),
-            inbox_list: ListState::new(
-                0,
-                ListAlignment::Top,
-                px(if cfg!(target_os = "android") {
-                    120.
-                } else {
-                    320.
-                }),
-            ),
+            inbox_list: VerticalListState::default(),
             search: RefCell::new(Vec::new()),
             searching: Cell::new(false),
             search_more: Cell::new(false),

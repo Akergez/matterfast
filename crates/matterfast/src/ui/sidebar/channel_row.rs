@@ -1,9 +1,9 @@
-use gpui_adaptive::prim::{column, row};
+use gpui_adaptive::prim::{column, row, SelectableSurface, Text};
 use gpui_adaptive::{ActiveColors as _, Command, ItemActions};
 use std::rc::Rc;
 
 use gpui_kit::prelude::*;
-use gpui_kit::{div, rems, AnyElement, App, ElementId, FontWeight, Rems};
+use gpui_kit::{rems, AnyElement, App, ElementId, Rems};
 use mattermost_api::models::Channel;
 
 use super::call_badge::call_badge;
@@ -106,15 +106,12 @@ pub(crate) fn channel_row(
         .gap_1p5()
         .items_center()
         .child(
-        div()
-            .flex_1()
-            .min_w_0()
-            .truncate()
-            .when(fit.among_threads || unread.is_unread(), |label| {
-                label.font_weight(FontWeight::SEMIBOLD)
-            })
-            .child(title),
-    );
+            if fit.among_threads || (unread.is_unread() && !unread.muted) {
+                Text::title(title).truncate().grow()
+            } else {
+                Text::body(title).truncate().grow()
+            },
+        );
     // A DM is a person, and their status says whether writing to them is
     // worth doing now.
     if let Some(status) = teammate
@@ -128,13 +125,7 @@ pub(crate) fn channel_row(
             custom_status_tooltip(&status),
         ));
     }
-    heading = heading.child(
-        div()
-            .flex_none()
-            .text_xs()
-            .text_color(colors.muted)
-            .child(format_chat_time(channel.last_post_at)),
-    );
+    heading = heading.child(Text::small(format_chat_time(channel.last_post_at)).muted());
 
     // The second: what was said last, and what is waiting.
     let quiet = colors.muted;
@@ -142,11 +133,14 @@ pub(crate) fn channel_row(
         Some(author) => format!("{author}: {text}"),
         None => text,
     };
-    let line = div().flex_1().min_w_0().truncate().text_sm();
+    let line = row().flex_1().min_w_0().truncate().text_sm();
     let line = match preview(channel, st) {
-        Preview::Draft(text) => line
-            .text_color(quiet)
-            .child(row().gap_1().child(div().text_color(colors.danger).child("Draft:")).child(text)),
+        Preview::Draft(text) => line.text_color(quiet).child(
+            row()
+                .gap_1()
+                .child(Text::small("Draft:").tone(gpui_adaptive::Tone::Danger))
+                .child(text),
+        ),
         Preview::Last { author, text } => line.text_color(quiet).child(said(author, text)),
         // Greyer than a line that is the news, and marked: the dot says
         // there is something newer that is not here to be read yet.
@@ -173,20 +167,12 @@ pub(crate) fn channel_row(
         detail = detail.child(kit::unread_dot(cx));
     }
 
-    let row = row()
-        .id(ElementId::Name(format!("channel-{}", channel.id).into()))
+    let content = row()
         .w_full()
-        .h(fit.height)
+        .h(fit.height - rems(0.125))
         .px_2()
         .gap_2p5()
         .items_center()
-        .rounded_md()
-        .cursor_pointer()
-        .when(selected, |row| row.bg(colors.nav_selected))
-        .when(!selected, |row| row.hover(|style| style.bg(colors.hover)))
-        // Muted channels still show mentions, but not bold-for-messages: that
-        // is exactly the rule the official clients use.
-        .when(unread.muted, |row| row.opacity(0.6))
         .child(face)
         .child(
             column()
@@ -194,7 +180,7 @@ pub(crate) fn channel_row(
                 .min_w_0()
                 .child(heading)
                 .child(detail)
-                .when_some(fit.spare, |lines, spare| lines.child(div().h(spare))),
+                .when_some(fit.spare, |lines, spare| lines.child(column().h(spare))),
         );
 
     let entries = row_menu(&channel.id, st);
@@ -204,12 +190,12 @@ pub(crate) fn channel_row(
     // Choosing a conversation is choosing all of it: a thread that was open
     // beside the last thing looked at is put away, and this row is the one
     // that is lit.
-    let row = row.on_click(ui.click(move |ui, cx| {
+    let activate = ui.run(move |ui, cx| {
         if matches!(ui.right.mode(cx), PanelMode::Thread(_)) {
             ui.dispatch(Action::CloseRightPanel, cx);
         }
         ui.dispatch(Action::SelectChannel(select.clone()), cx)
-    }));
+    });
     // Mute it, mark it, or file it under a different category: all things
     // people expect to reach from the row itself rather than from a settings
     // screen.
@@ -217,10 +203,20 @@ pub(crate) fn channel_row(
         ItemActions::new().title(channel.display_name.clone()),
         |actions, (index, (label, action))| {
             let channel_id = channel_id.clone();
-            actions.command(Command::new(("row-action", index), label).on_trigger(
-                menu_ui.run(move |ui, cx| ui.dispatch(Action::Row(channel_id.clone(), action.clone()), cx)),
-            ))
+            actions.command(
+                Command::new(("row-action", index), label).on_trigger(menu_ui.run(
+                    move |ui, cx| ui.dispatch(Action::Row(channel_id.clone(), action.clone()), cx),
+                )),
+            )
         },
     );
-    actions.wrap(row, cx)
+    SelectableSurface::new(
+        ElementId::Name(format!("channel-{}", channel.id).into()),
+        content,
+        activate,
+    )
+    .selected(selected)
+    .muted(unread.muted)
+    .actions(actions)
+    .into_any_element()
 }

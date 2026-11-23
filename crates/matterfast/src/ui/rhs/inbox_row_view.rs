@@ -1,17 +1,17 @@
-use gpui_adaptive::prim;
+use gpui_adaptive::prim::{self, column};
 use gpui_adaptive::ActiveColors as _;
 use std::rc::Rc;
 
 use gpui_kit::prelude::*;
-use gpui_kit::{div, px, AnyElement, App, FontWeight};
+use gpui_kit::{px, AnyElement, App, FontWeight};
 
 use super::inbox_row::InboxRow;
 use super::panel_mode::PanelMode;
 use super::target::Target;
+use crate::timefmt::format_relative;
 use crate::ui::sidebar::{
     INBOX_ANSWERS as ANSWERS, INBOX_FACE, INBOX_HEADING as HEADING, INBOX_ROW, INBOX_SAID as SAID,
 };
-use crate::timefmt::format_relative;
 use crate::ui::{channel_avatar, kit};
 use crate::ui::{message, Action, Ui};
 
@@ -30,14 +30,14 @@ pub(super) fn inbox_row_view(ui: &Rc<Ui>, index: usize, row: &InboxRow, cx: &App
             .gap_1p5()
             .items_center()
             .child(
-                div()
+                column()
                     .min_w_0()
                     .truncate()
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(row.channel.clone()),
             )
             .child(
-                div()
+                column()
                     .flex_1()
                     .min_w_0()
                     .truncate()
@@ -48,7 +48,7 @@ pub(super) fn inbox_row_view(ui: &Rc<Ui>, index: usize, row: &InboxRow, cx: &App
             // Why an old message is in a list of new things.
             .when(row.saved, |heading| {
                 heading.child(
-                    div()
+                    column()
                         .flex_none()
                         .text_xs()
                         .text_color(muted)
@@ -56,7 +56,7 @@ pub(super) fn inbox_row_view(ui: &Rc<Ui>, index: usize, row: &InboxRow, cx: &App
                 )
             })
             .child(
-                div()
+                column()
                     .flex_none()
                     .text_xs()
                     .text_color(muted)
@@ -66,7 +66,7 @@ pub(super) fn inbox_row_view(ui: &Rc<Ui>, index: usize, row: &InboxRow, cx: &App
     // One line of what was said: the row is something to recognise a thread
     // by, and the thread is a press away.
     body = body.child(
-        div()
+        column()
             .h(SAID)
             .line_height(SAID)
             .truncate()
@@ -94,7 +94,7 @@ pub(super) fn inbox_row_view(ui: &Rc<Ui>, index: usize, row: &InboxRow, cx: &App
         .line_height(ANSWERS)
         .gap_1p5()
         .items_center()
-        .child(div().text_xs().text_color(muted).child(answers));
+        .child(column().text_xs().text_color(muted).child(answers));
     if unread_mentions > 0 {
         footer = footer.child(kit::mention_badge(unread_mentions, false, cx));
     } else if unread_replies > 0 {
@@ -141,13 +141,13 @@ pub(super) fn inbox_row_view(ui: &Rc<Ui>, index: usize, row: &InboxRow, cx: &App
             };
             // Both faces fit inside the existing column: channel at the top
             // left, author overlapping its lower right corner.
-            div()
+            column()
                 .relative()
                 .size(px(size))
                 .flex_none()
                 .child(face)
                 .child(
-                    div()
+                    column()
                         .absolute()
                         .right_0()
                         .bottom_0()
@@ -176,12 +176,14 @@ pub(super) fn inbox_row_view(ui: &Rc<Ui>, index: usize, row: &InboxRow, cx: &App
                     } => Action::JumpToPost(channel_id, post_id),
                     // A thread whose channel is not known — the server left
                     // it out — still opens, beside what is on screen.
-                    Target::Followed { channel_id, root_id } if channel_id.is_empty() => {
-                        Action::OpenThread(root_id)
-                    }
-                    Target::Followed { channel_id, root_id } => {
-                        Action::OpenPost(channel_id, root_id)
-                    }
+                    Target::Followed {
+                        channel_id,
+                        root_id,
+                    } if channel_id.is_empty() => Action::OpenThread(root_id),
+                    Target::Followed {
+                        channel_id,
+                        root_id,
+                    } => Action::OpenPost(channel_id, root_id),
                 },
                 cx,
             )

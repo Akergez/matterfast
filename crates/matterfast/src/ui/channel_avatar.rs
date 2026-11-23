@@ -2,8 +2,9 @@
 
 use std::rc::Rc;
 
+use gpui_adaptive::prim::row;
 use gpui_kit::prelude::*;
-use gpui_kit::{div, hsla, px, AnyElement, App, Div, FontWeight, Hsla};
+use gpui_kit::{hsla, px, AnyElement, App, Div, FontWeight, Hsla};
 use mattermost_api::models::Channel;
 
 use super::{kit, Ui};
@@ -34,10 +35,9 @@ fn color(name: &str) -> Hsla {
 }
 
 pub(super) fn named(name: &str, size: f32) -> Div {
-    div()
+    row()
         .size(px(size))
         .flex_none()
-        .flex()
         .items_center()
         .justify_center()
         .rounded_full()

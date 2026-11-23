@@ -24,14 +24,23 @@ impl TabSwipe {
         }
     }
 
-    pub(super) fn release(self, cancelled: bool) -> (Self, Option<i32>) {
+    #[cfg(test)]
+    fn release(self, cancelled: bool) -> (Self, Option<i32>) {
+        self.release_with_velocity(cancelled, 0.0)
+    }
+
+    pub(super) fn release_with_velocity(
+        self,
+        cancelled: bool,
+        velocity: f32,
+    ) -> (Self, Option<i32>) {
         match self {
             Self::Tracking(offset) => {
-                let turn = (!cancelled && offset.abs() >= 0.3).then_some(if offset < 0.0 {
-                    1
-                } else {
-                    -1
-                });
+                let flick = offset.abs() >= 0.08
+                    && velocity.abs() >= 1.5
+                    && offset.signum() == velocity.signum();
+                let turn = (!cancelled && (offset.abs() >= 0.3 || flick))
+                    .then_some(if offset < 0.0 { 1 } else { -1 });
                 (Self::Done, turn)
             }
             other => (other, None),
@@ -72,6 +81,14 @@ mod tests {
             TabSwipe::Tracking(0.4).release(false),
             (TabSwipe::Done, Some(-1))
         );
+    }
+
+    #[test]
+    fn short_flick_turns_only_when_the_release_keeps_its_direction() {
+        let swipe = TabSwipe::Tracking(-0.12);
+        assert_eq!(swipe.release_with_velocity(false, -2.0).1, Some(1));
+        assert_eq!(swipe.release_with_velocity(false, 2.0).1, None);
+        assert_eq!(swipe.release_with_velocity(true, -2.0).1, None);
     }
 
     #[test]

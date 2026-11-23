@@ -1,8 +1,9 @@
 use std::rc::Rc;
 
+use gpui_adaptive::prim::{column, touch_pan};
 use gpui_adaptive::{Env, Navigator, Sheet, WidthClass};
 use gpui_kit::prelude::*;
-use gpui_kit::{canvas, div, px, AnyElement, App, DispatchPhase, ScrollWheelEvent, Window};
+use gpui_kit::{px, AnyElement, App, Window};
 
 use super::column_width::{column_width, dragged_width};
 use super::constants::{DRAGGED_MIN, DRAGGED_SHARE};
@@ -15,7 +16,12 @@ use crate::ui::{Divider, Ui};
 /// The session's places, laid out by the design system's navigator for
 /// however wide the window is right now: side by side where there is room,
 /// a stack of pages on a phone (see [`Place`]).
-pub(super) fn session(ui: &Rc<Ui>, columns: &Panes, window: &mut Window, cx: &mut App) -> AnyElement {
+pub(super) fn session(
+    ui: &Rc<Ui>,
+    columns: &Panes,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
     ui.learn_unknown_mentions();
     ui.scale.set(window.scale_factor());
     let collapsed = Env::of(window, cx).width() == WidthClass::Compact;
@@ -49,7 +55,7 @@ pub(super) fn session(ui: &Rc<Ui>, columns: &Panes, window: &mut Window, cx: &mu
         )
     };
 
-    let mut panes = div().relative().size_full().min_h_0().child(resizable);
+    let mut panes = column().relative().size_full().min_h_0().child(resizable);
 
     // On a phone a swipe sideways over the list goes to the tab beside the
     // one in front; over a page above it the navigator takes the swipe to
@@ -59,35 +65,20 @@ pub(super) fn session(ui: &Rc<Ui>, columns: &Panes, window: &mut Window, cx: &mu
     let list_in_front = navigator.read(cx).stack() == [Place::List];
     if collapsed && swipes && list_in_front && !Sheet::is_open(window, cx) {
         let ui = ui.clone();
-        panes = panes.child(
-            canvas(
-                |_, _, _| (),
-                move |_, _, window, _| {
-                    window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
-                        if phase != DispatchPhase::Capture {
-                            return;
-                        }
-                        let delta = event.delta.pixel_delta(px(1.));
-                        let (dx, dy) = (f32::from(delta.x), f32::from(delta.y));
-                        let (taken, turn) = ui.channels.swiped(dx, dy, event.touch_phase, event.position);
-                        if let Some(step) = turn {
-                            crate::ui::sidebar::turn(&ui, step, cx);
-                        }
-                        if taken {
-                            window.refresh();
-                            cx.stop_propagation();
-                        }
-                    });
-                },
-            )
-            .absolute()
-            .size_0(),
-        );
+        panes = panes.child(touch_pan(ui.channels.body.clone(), move |sample, cx| {
+            let (taken, turn) = ui.channels.swiped(sample);
+            if let Some(step) = turn {
+                crate::ui::sidebar::turn(&ui, step, cx);
+            }
+            taken
+        }));
     }
 
     panes
         .when_some(videos(ui, cx), |panes, videos| panes.child(videos))
-        .when_some(crate::ui::lightbox::render(ui, cx), |panes, lightbox| panes.child(lightbox))
+        .when_some(crate::ui::lightbox::render(ui, cx), |panes, lightbox| {
+            panes.child(lightbox)
+        })
         .into_any_element()
 }
 
@@ -96,8 +87,18 @@ pub(super) fn session(ui: &Rc<Ui>, columns: &Panes, window: &mut Window, cx: &mu
 fn side_width(ui: &Ui, place: Place, width: f32) -> f32 {
     let most = (width * DRAGGED_SHARE).max(DRAGGED_MIN);
     match place {
-        Place::List => dragged_width(ui.widths.get(Divider::Sidebar), column_width(width, 0.24, 220.0, 360.0), DRAGGED_MIN, most),
-        _ => dragged_width(ui.widths.get(Divider::Panel), column_width(width, 0.30, 320.0, 460.0), DRAGGED_MIN, most),
+        Place::List => dragged_width(
+            ui.widths.get(Divider::Sidebar),
+            column_width(width, 0.24, 220.0, 360.0),
+            DRAGGED_MIN,
+            most,
+        ),
+        _ => dragged_width(
+            ui.widths.get(Divider::Panel),
+            column_width(width, 0.30, 320.0, 460.0),
+            DRAGGED_MIN,
+            most,
+        ),
     }
 }
 

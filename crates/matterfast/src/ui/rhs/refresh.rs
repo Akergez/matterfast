@@ -24,15 +24,15 @@ impl RightPanel {
         let same = {
             let held = self.inbox.borrow();
             held.more == fresh.more
-                && held.entries.iter().map(|entry| entry.key()).eq(fresh
+                && held
                     .entries
                     .iter()
-                    .map(|entry| entry.key()))
+                    .map(|entry| entry.key())
+                    .eq(fresh.entries.iter().map(|entry| entry.key()))
         };
         if !same {
-            let top = self.inbox_list.logical_scroll_top();
-            self.inbox_list.reset(fresh.rows());
-            self.inbox_list.scroll_to(top);
+            self.inbox_list
+                .reset(fresh.rows(), None, gpui_adaptive::prim::rem_size(cx));
         }
         *self.inbox.borrow_mut() = fresh;
         match self.mode(cx) {

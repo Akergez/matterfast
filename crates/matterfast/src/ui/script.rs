@@ -349,7 +349,7 @@ fn observe(what: &str, window: &mut Window, cx: &mut App) -> Option<String> {
             ((offset * width).round() as i32).to_string()
         }
         "tabs-scroll" => ui
-            .map(|ui| (-f32::from(ui.channels.tabs_scroll.offset().x)).round() as i32)
+            .map(|ui| (f32::from(ui.channels.tabs_scroll.scrolled())).round() as i32)
             .unwrap_or(0)
             .to_string(),
         "link-menu" =>if super::shell::link_menu_open(window, cx) { "open" } else { "closed" }.to_string(),

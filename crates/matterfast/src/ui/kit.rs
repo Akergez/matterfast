@@ -67,8 +67,11 @@ pub fn initials(name: &str) -> SharedString {
 /// arrived, their initials until then. Asking for the picture is what
 /// starts it downloading.
 fn face(ui: &Rc<Ui>, user_id: &str, name: &str, size: f32) -> gpui_adaptive::Avatar {
-    let face = gpui_adaptive::Avatar::new(SharedString::from(format!("avatar-{user_id}")), initials(name))
-        .size(rems(size / 16.));
+    let face = gpui_adaptive::Avatar::new(
+        SharedString::from(format!("avatar-{user_id}")),
+        initials(name),
+    )
+    .size(rems(size / 16.));
     match ui.avatars.texture(user_id) {
         Some(picture) => face.picture(picture),
         None => face,
@@ -77,7 +80,7 @@ fn face(ui: &Rc<Ui>, user_id: &str, name: &str, size: f32) -> gpui_adaptive::Ava
 
 /// Somebody's face at a given size.
 pub fn avatar(ui: &Rc<Ui>, user_id: &str, name: &str, size: f32) -> Div {
-    div().flex_none().child(face(ui, user_id, name, size))
+    row().flex_none().child(face(ui, user_id, name, size))
 }
 
 /// A face with the status dot on its corner.
@@ -96,21 +99,15 @@ pub fn avatar_with_presence(
 
 /// The count of things that named you: a pill, red when it is urgent.
 pub fn mention_badge(count: i64, urgent: bool, _: &App) -> AnyElement {
-    div()
+    row()
         .flex_none()
         .child(Count::new(count.max(0) as usize).urgent(urgent))
         .into_any_element()
 }
 
-/// Unread without a mention is a dot: enough to notice, not enough to demand
-/// a number be read.
+/// Unread without a mention is a dot.
 pub fn unread_dot(cx: &App) -> AnyElement {
-    div()
-        .flex_none()
-        .size(px(8.))
-        .rounded_full()
-        .bg(cx.colors().accent)
-        .into_any_element()
+    gpui_adaptive::prim::unread_mark(cx)
 }
 
 /// A small tag such as URGENT, in the colour of what it warns about.
@@ -175,7 +172,7 @@ pub fn with_tooltip(
     child: impl IntoElement,
     text: impl Into<SharedString>,
 ) -> AnyElement {
-    div()
+    row()
         .id(id)
         .flex_none()
         .child(child)

@@ -1,10 +1,9 @@
-use gpui_adaptive::prim::row;
-use gpui_adaptive::{ActiveColors as _, Command, ItemActions};
+use gpui_adaptive::prim::{row, SelectableSurface, Text};
+use gpui_adaptive::{Command, ItemActions};
 use std::rc::Rc;
 
-use gpui_adaptive::prim::Scrolls as _;
 use gpui_kit::prelude::*;
-use gpui_kit::{px, AnyElement, App, ElementId, FontWeight, SharedString};
+use gpui_kit::{rems, AnyElement, App, ElementId, SharedString, Window};
 use mattermost_api::models::CategoryType;
 
 use super::row_action::RowAction;
@@ -44,7 +43,10 @@ pub(super) fn waiting<'a>(
 pub(crate) fn turn(ui: &Rc<Ui>, step: i32, cx: &mut App) {
     let folders: Vec<String> = {
         let st = ui.state.borrow();
-        st.folders().into_iter().map(|folder| folder.id.clone()).collect()
+        st.folders()
+            .into_iter()
+            .map(|folder| folder.id.clone())
+            .collect()
     };
     let open = ui
         .channels
@@ -75,68 +77,72 @@ pub(crate) fn turn(ui: &Rc<Ui>, step: i32, cx: &mut App) {
 /// are.
 pub(super) fn folders(ui: &Rc<Ui>, st: &AppState, cx: &App) -> AnyElement {
     let categories = st.folders();
-    let colors = cx.colors();
     let inbox = ui.channels.showing_inbox();
     let open = ui.channels.folder();
     // A folder that is gone shows everything, and so "all" is what is open.
     let open = open.filter(|id| categories.iter().any(|category| category.id == *id));
 
-    let tab = |id: ElementId, name: SharedString, selected: bool, waiting: Waiting| {
-        row()
-            .id(id)
-            .flex_none()
-            .h(px(28.))
+    let tab = |id: ElementId,
+               name: SharedString,
+               selected: bool,
+               waiting: Waiting,
+               activate: Box<dyn Fn(&mut Window, &mut App)>| {
+        let label = if selected {
+            Text::small(name).strong()
+        } else {
+            Text::small(name).muted()
+        };
+        let content = row()
+            .h(rems(1.625))
             .px_2p5()
             .gap_1p5()
-            .items_center()
-            .rounded_full()
-            .cursor_pointer()
-            .text_sm()
-            .when(selected, |tab| {
-                tab.bg(colors.nav_selected).font_weight(FontWeight::SEMIBOLD)
-            })
-            .when(!selected, |tab| {
-                tab.text_color(colors.muted)
-                    .hover(|style| style.bg(colors.hover))
-            })
-            .child(name)
+            .child(label)
             .when(waiting.mentions > 0, |tab| {
                 tab.child(kit::mention_badge(waiting.mentions, false, cx))
             })
             .when(waiting.mentions == 0 && waiting.unread, |tab| {
                 tab.child(kit::unread_dot(cx))
-            })
+            });
+        SelectableSurface::new(id, content, activate)
+            .selected(selected)
+            .inline()
     };
     let folder = |id: ElementId, name: SharedString, folder: Option<String>, waiting: Waiting| {
         let selected = !inbox && open == folder;
-        tab(id, name, selected, waiting)
-            .on_click(ui.click(move |ui, cx| ui.channels.set_folder(folder.clone(), cx)))
+        tab(
+            id,
+            name,
+            selected,
+            waiting,
+            Box::new(ui.run(move |ui, cx| ui.channels.set_folder(folder.clone(), cx))),
+        )
     };
 
-    let mut row = row()
-        .id("folders")
-        .flex_1()
-        .min_w_0()
-        .gap_1()
-        .scrolls_x()
-        .track_scroll(&ui.channels.tabs_scroll)
-        .child(
-            // What is waiting in it is a count of its own: mentions and
-            // threads, not conversations. Pressed while it is in front it
-            // stays there: a tab is not a switch.
-            tab(
-                "folder-inbox".into(),
-                "Inbox".into(),
-                inbox,
-                Waiting { mentions: st.inbox_waiting(), unread: false },
-            )
-            .on_click(ui.click(|ui, cx| {
+    // Pressing the active Inbox tab leaves it open.
+    let mut tabs = vec![
+        tab(
+            "folder-inbox".into(),
+            "Inbox".into(),
+            inbox,
+            Waiting {
+                mentions: st.inbox_waiting(),
+                unread: false,
+            },
+            Box::new(ui.run(|ui, cx| {
                 if !ui.channels.showing_inbox() {
                     ui.dispatch(Action::OpenInbox, cx);
                 }
             })),
         )
-        .child(folder("folder-all".into(), "All".into(), None, waiting(st, st.chats())));
+        .into_any_element(),
+        folder(
+            "folder-all".into(),
+            "All".into(),
+            None,
+            waiting(st, st.chats()),
+        )
+        .into_any_element(),
+    ];
 
     for category in categories {
         let id = ElementId::Name(format!("folder-{}", category.id).into());
@@ -150,7 +156,7 @@ pub(super) fn folders(ui: &Rc<Ui>, st: &AppState, cx: &App) -> AnyElement {
         // (Favourites, Channels, Direct Messages) cannot, and offering it
         // would only produce a server error.
         if category.r#type != CategoryType::Custom {
-            row = row.child(tab);
+            tabs.push(tab.into_any_element());
             continue;
         }
         let ui = ui.clone();
@@ -159,13 +165,19 @@ pub(super) fn folders(ui: &Rc<Ui>, st: &AppState, cx: &App) -> AnyElement {
         let actions = ItemActions::new()
             .title(category.display_name.clone())
             .inline()
-            .command(Command::new("rename-folder", "Rename…").on_trigger(ui.run(move |ui, cx| {
-                ui.dispatch(Action::Row(rename.clone(), RowAction::RenameCategory), cx)
-            })))
-            .command(Command::new("delete-folder", "Delete").destructive().on_trigger(ui.run(move |ui, cx| {
-                ui.dispatch(Action::Row(delete.clone(), RowAction::DeleteCategory), cx)
-            })));
-        row = row.child(actions.wrap(tab, cx));
+            .command(
+                Command::new("rename-folder", "Rename…").on_trigger(ui.run(move |ui, cx| {
+                    ui.dispatch(Action::Row(rename.clone(), RowAction::RenameCategory), cx)
+                })),
+            )
+            .command(
+                Command::new("delete-folder", "Delete")
+                    .destructive()
+                    .on_trigger(ui.run(move |ui, cx| {
+                        ui.dispatch(Action::Row(delete.clone(), RowAction::DeleteCategory), cx)
+                    })),
+            );
+        tabs.push(tab.actions(actions).into_any_element());
     }
-    row.into_any_element()
+    ui.channels.tabs_scroll.view("folders", tabs)
 }

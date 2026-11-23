@@ -1,9 +1,9 @@
+use gpui_adaptive::prim::{column, row};
 use gpui_adaptive::Command;
-use gpui_adaptive::prim::row;
 use std::rc::Rc;
 
 use gpui_kit::prelude::*;
-use gpui_kit::{div, list, AnyElement, App};
+use gpui_kit::{AnyElement, App};
 
 use super::inbox::Entry;
 use super::inbox_row_view::inbox_row_view;
@@ -19,8 +19,8 @@ use crate::ui::{Action, Ui};
 /// Only the rows in view are built: see `RightPanel::inbox_list`.
 pub(crate) fn inbox_view(ui: &Rc<Ui>, cx: &App) -> AnyElement {
     if ui.right.inbox.borrow().entries.is_empty() {
-        return div()
-            .flex_1()
+        return column()
+            .size_full()
             .min_h_0()
             .child(kit::empty_state(
                 Lucide::Inbox,
@@ -32,19 +32,17 @@ pub(crate) fn inbox_view(ui: &Rc<Ui>, cx: &App) -> AnyElement {
     }
 
     let row_ui = ui.clone();
-    let rows = list(ui.right.inbox_list.clone(), move |index, _, cx| {
+    let rows = ui.right.inbox_list.view(move |index, _, cx| {
         let began = std::time::Instant::now();
         let inbox = row_ui.right.inbox.borrow();
         let row = match inbox.entries.get(index) {
             Some(Entry::Post(row)) => Some(inbox_row_view(&row_ui, index, row, cx)),
             Some(Entry::Chat(id)) => {
                 let st = row_ui.state.borrow();
-                st.channels
-                    .get(id)
-                    .map(|channel| {
-                        let fit = crate::ui::sidebar::Fit::INBOX;
-                        crate::ui::sidebar::channel_row(&row_ui, channel, &st, fit, cx)
-                    })
+                st.channels.get(id).map(|channel| {
+                    let fit = crate::ui::sidebar::Fit::INBOX;
+                    crate::ui::sidebar::channel_row(&row_ui, channel, &st, fit, cx)
+                })
             }
             // Past the entries is the one row that asks for more of them:
             // the server keeps the followed threads and hands them over a
@@ -56,7 +54,7 @@ pub(crate) fn inbox_view(ui: &Rc<Ui>, cx: &App) -> AnyElement {
                     .py_2()
                     .child(
                         Command::new("older-threads", "Older threads")
-                            .on_trigger(row_ui.run(|ui, cx| ui.dispatch(Action::OlderThreads, cx)),)
+                            .on_trigger(row_ui.run(|ui, cx| ui.dispatch(Action::OlderThreads, cx)))
                             .as_button()
                             .ghost(),
                     )
@@ -67,16 +65,12 @@ pub(crate) fn inbox_view(ui: &Rc<Ui>, cx: &App) -> AnyElement {
         crate::ui::frame_log::row(crate::ui::Part::Sidebar, began);
         // A row the inbox no longer has is gone from the list one frame
         // later.
-        div()
-            .w_full()
-            .children(row)
-            .into_any_element()
-    })
-    .size_full();
+        column().w_full().children(row).into_any_element()
+    });
 
-    div()
+    column()
         .id("inbox-rows")
-        .flex_1()
+        .size_full()
         .min_h_0()
         .px_1p5()
         .pt_1()

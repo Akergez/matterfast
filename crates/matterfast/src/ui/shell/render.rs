@@ -59,6 +59,16 @@ impl Render for Shell {
                 }
             }
         }
+        let phone_chat = phone_session
+            && self.session().is_some_and(|ui| ui.pages.showing_chat(cx));
+        if self.phone_chat_shown && phone_session && !phone_chat && !phone_panel
+            && !Sheet::is_open(window, cx)
+        {
+            // The chat and its input left the focus tree. Restore the window's
+            // shortcuts on the list, even when a click didn't focus a row.
+            window.focus(&self.focus, cx);
+        }
+        self.phone_chat_shown = phone_chat;
         // Escape is handled below, as it always was; the system's back is
         // Escape too. Pages are the navigator's: it holds the layer of back
         // and shows the page under while the gesture moves the one in front.

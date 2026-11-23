@@ -1,9 +1,9 @@
-use gpui_adaptive::prim::{column, row};
+use gpui_adaptive::prim::{column, row, translated_layer};
 use gpui_adaptive::ActiveColors as _;
 use std::rc::Rc;
 
 use gpui_kit::prelude::*;
-use gpui_kit::{canvas, div, list, px, AnyElement, App, ElementId, Window};
+use gpui_kit::{px, AnyElement, App, ElementId, Window};
 
 use super::channel_row::{channel_row, Fit};
 use super::channel_sidebar::ROW_HEIGHT;
@@ -36,7 +36,7 @@ pub fn render(
         .border_color(colors.nav_border)
         .child(switcher(ui, cx))
         .child(if searching {
-            div()
+            column()
                 .flex_1()
                 .min_w_0()
                 .child(crate::ui::search::render(
@@ -57,9 +57,13 @@ pub fn render(
                 }))
                 .as_icon_button()
         } else if collapsed {
-            kit::icon_button("sidebar-search", Lucide::Search, "Search messages  (Ctrl+F)")
-                .on_trigger(ui.run(|ui, cx| ui.menu_action(MenuAction::FocusSearch, cx)))
-                .as_icon_button()
+            kit::icon_button(
+                "sidebar-search",
+                Lucide::Search,
+                "Search messages  (Ctrl+F)",
+            )
+            .on_trigger(ui.run(|ui, cx| ui.menu_action(MenuAction::FocusSearch, cx)))
+            .as_icon_button()
         } else {
             kit::icon_button("find-channel", Lucide::ListFilter, "Find channel  (Ctrl+K)")
                 .on_trigger(ui.run(|ui, cx| ui.menu_action(MenuAction::QuickSwitch, cx)))
@@ -95,8 +99,6 @@ pub fn render(
         .child(header);
 
     let slide = ui.channels.advance(window);
-    let across = ui.channels.body.get().size.width;
-    let seen = ui.clone();
     let current = page(ui, now, &categories, cx);
     let neighbor = if slide < 0.0 {
         now.checked_add(1)
@@ -104,42 +106,27 @@ pub fn render(
         now.checked_sub(1)
     }
     .filter(|next| *next < categories.len() + 2 && slide != 0.0);
-    let body = div()
+    let body = column()
         .relative()
         .flex_1()
         .min_h_0()
         .w_full()
         .overflow_hidden()
-        .child(
-            canvas(
-                move |bounds, _, _| seen.channels.body.set(bounds),
-                |_, _, _, _| (),
-            )
-            .absolute()
-            .size_full(),
-        )
-        .child(
-            column()
-                .id(page_id(now, &categories))
-                .absolute()
-                .top_0()
-                .bottom_0()
-                .left(across * slide)
-                .w_full()
-                .child(current),
-        )
+        .child(ui.channels.body.measure())
+        .child(translated_layer(
+            page_id(now, &categories),
+            &ui.channels.body,
+            slide,
+            current,
+        ))
         .when_some(neighbor, |body, next| {
             let offset = slide + if slide < 0.0 { 1.0 } else { -1.0 };
-            body.child(
-                column()
-                    .id(page_id(next, &categories))
-                    .absolute()
-                    .top_0()
-                    .bottom_0()
-                    .left(across * offset)
-                    .w_full()
-                    .child(page(ui, next, &categories, cx)),
-            )
+            body.child(translated_layer(
+                page_id(next, &categories),
+                &ui.channels.body,
+                offset,
+                page(ui, next, &categories, cx),
+            ))
         });
     pane.child(body)
         .when_some(dock, |pane, dock| pane.child(dock))
@@ -163,23 +150,22 @@ fn page(ui: &Rc<Ui>, index: usize, categories: &[String], cx: &mut App) -> AnyEl
     drop(st);
     let last = rows.len().saturating_sub(1);
     let row_ui = ui.clone();
-    let channels = list(state, move |index, _, cx| {
+    let channels = state.view(move |index, _, cx| {
         let began = std::time::Instant::now();
         let st = row_ui.state.borrow();
         let row = rows
             .get(index)
             .and_then(|id| st.channels.get(id))
             .map(|channel| channel_row(&row_ui, channel, &st, Fit::LIST, cx))
-            .unwrap_or_else(|| div().h(ROW_HEIGHT).into_any_element());
+            .unwrap_or_else(|| column().h(ROW_HEIGHT).into_any_element());
         crate::ui::frame_log::row(crate::ui::Part::Sidebar, began);
-        div()
+        column()
             .w_full()
             .when(index == last, |row| row.pb_2())
             .child(row)
             .into_any_element()
-    })
-    .size_full();
-    div()
+    });
+    column()
         .id("channels")
         .size_full()
         .min_h_0()
